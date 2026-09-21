@@ -16,7 +16,13 @@ import { createSearch, SEARCH_RESULT } from '../backend/routing/astar.js';
 import { createGraph } from '../backend/routing/graph.js';
 import { createRoutingEngine, ROUTING_ERROR } from '../backend/routing/engine.js';
 import { ACCESS, decodeGraph, encodeGraph, PROFILES } from '../backend/routing/format.js';
-import { buildOverpassQuery, osmToGraph, parseMaxSpeed, wayAccess } from '../backend/routing/osm.js';
+import {
+  buildOverpassQuery,
+  osmToGraph,
+  parseMaxSpeed,
+  ROUTABLE_HIGHWAY_TYPES,
+  wayAccess,
+} from '../backend/routing/osm.js';
 import { buildGridGraph, GRID, nodeIndex, referenceDijkstra } from './fixtures/roadGraph.js';
 
 const materialize = (raw) => createGraph(decodeGraph(encodeGraph(raw)));
@@ -464,5 +470,30 @@ describe('Запрос к Overpass', () => {
     assert.equal(stats.osmWays, 1);
     assert.equal(stats.acceptedWays, 0, 'путь без тегов не должен приниматься');
     assert.equal(stats.nodeCount, 0);
+  });
+});
+
+describe('Белый список типов дорог', () => {
+  it('запрос и разбор не расходятся', () => {
+    const query = buildOverpassQuery([55, 49, 56, 50]);
+
+    // Если запрос просит тип, который разбор не принимает, мы качаем данные
+    // и молча их выбрасываем. Если наоборот — теряем дороги. Поэтому список
+    // в запросе выводится из той же таблицы, что и права проезда.
+    for (const type of ROUTABLE_HIGHWAY_TYPES) {
+      assert.ok(query.includes(type), `тип ${type} принимается разбором, но не запрашивается`);
+      assert.ok(
+        wayAccess({ highway: type }) !== null,
+        `тип ${type} запрашивается, но разбором отвергается`,
+      );
+    }
+  });
+
+  it('не запрашивает то, что заведомо не нужно', () => {
+    const query = buildOverpassQuery([55, 49, 56, 50]);
+    for (const junk of ['proposed', 'construction', 'raceway', 'platform', 'corridor']) {
+      assert.ok(!query.includes(junk), `в запрос попал бесполезный тип ${junk}`);
+      assert.equal(wayAccess({ highway: junk }), null);
+    }
   });
 });

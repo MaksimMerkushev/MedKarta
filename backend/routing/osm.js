@@ -239,6 +239,17 @@ export const osmToGraph = (elements) => {
 };
 
 /**
+ * Типы дорог, которые сборщик вообще умеет принимать.
+ *
+ * Список выводится из BASE_ACCESS, а не пишется отдельно: иначе запрос и
+ * разбор разъедутся, и мы будем выкачивать то, что потом молча отбрасываем.
+ * Белый список в запросе заметно сокращает объём ответа — в городской
+ * выгрузке хватает путей, к маршрутизации отношения не имеющих
+ * (платформы, коридоры, строящиеся дороги, трассы для гонок).
+ */
+export const ROUTABLE_HIGHWAY_TYPES = Object.freeze(Object.keys(BASE_ACCESS));
+
+/**
  * Запрос к Overpass за дорожной сетью в рамке.
  *
  * ВАЖНО ПРО ФОРМУ ВЫВОДА. Здесь два оператора вывода, и это не избыточность:
@@ -256,7 +267,7 @@ export const osmToGraph = (elements) => {
  * @param {[number, number, number, number]} bbox [south, west, north, east]
  */
 export const buildOverpassQuery = ([south, west, north, east]) => `[out:json][timeout:180];
-way["highway"](${south},${west},${north},${east});
+way["highway"~"^(${ROUTABLE_HIGHWAY_TYPES.join('|')})$"](${south},${west},${north},${east});
 out body;
 >;
 out skel qt;`;
