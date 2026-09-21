@@ -22,6 +22,17 @@ import { looksLikePatronymic, looksLikeSurname } from './morphology.js';
  * Для врачей и клиник это список id из справочника — две разные формы
  * («Петрову», «Петров») дают один ключ. Для остальных — нормализованный текст.
  */
+/**
+ * Значащие символы: буквы и цифры, без пробелов и пунктуации.
+ *
+ * Доля редактуры должна отражать, какую часть СОДЕРЖАНИЯ составляли
+ * персональные данные. Если считать сырую длину, «Г.а.л.я.в.и.ч.у» весит
+ * впятеро больше самой фамилии, доля пробивает порог и запрос уходит
+ * в fail-closed из-за манеры набора, хотя утечки нет — фамилия уже заменена.
+ */
+export const countContentChars = (value) =>
+  (String(value || '').match(/[\p{L}\p{N}]/gu) || []).length;
+
 const identityOf = (entity, text) => {
   if (Array.isArray(entity.ids) && entity.ids.length > 0) {
     return `${entity.kind}:${[...entity.ids].sort().join(',')}`;
@@ -112,7 +123,13 @@ export const redactText = async ({ text, entities, allocate }) => {
   for (let index = ordered.length - 1; index >= 0; index -= 1) {
     const entity = ordered[index];
     const token = identities.get(identityOf(entity, text));
-    redactedChars += entity.end - entity.start;
+    /*
+     * Считаются ЗНАЧАЩИЕ символы, без пробелов. Иначе «Г а л я в и ч у»
+     * весит пятнадцать символов вместо восьми, доля редактуры вырастает
+     * вдвое и запрос уходит в fail-closed только из-за манеры набора —
+     * при том что фамилия уже заменена токеном и утечки нет.
+     */
+    redactedChars += countContentChars(text.slice(entity.start, entity.end));
     redacted = `${redacted.slice(0, entity.start)}${token}${redacted.slice(entity.end)}`;
   }
 

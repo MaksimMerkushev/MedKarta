@@ -189,13 +189,34 @@ const PATTERNS = [
     detector: 'coords.pair',
     kind: ENTITY_KIND.COORDS,
     confidence: 1,
-    source: String.raw`-?\d{1,3}[.,]\d{3,}\s*[,;]\s*-?\d{1,3}[.,]\d{3,}`,
+    // Разделитель пары — любой пробельный символ, запятая или точка с запятой.
+    // В русской локали координаты пишутся «55,753381 49,173867»: запятая занята
+    // под десятичный разделитель, и пара разделяется пробелом. Раньше такая
+    // запись детектором не ловилась и координаты уходили наружу.
+    source: String.raw`-?\d{1,3}[.,]\d{3,}[\s,;]+-?\d{1,3}[.,]\d{3,}`,
   },
   {
     detector: 'coords.single',
     kind: ENTITY_KIND.COORDS,
     confidence: 0.8,
     source: String.raw`(?<![\d.])\d{1,3}\.\d{4,}(?![\d.])`,
+  },
+  {
+    // Телефон, записанный с разрядкой: «8 9 6 5 1 2 3 4 5 6 7».
+    detector: 'phone.spaced',
+    kind: ENTITY_KIND.PHONE,
+    confidence: 0.9,
+    source: String.raw`(?<![\d\p{L}])(?:\+\s*7|8|7)(?:[\s\-.()]{1,3}\d){9,10}(?![\d])`,
+  },
+  {
+    // «ivan (собака) mail точка ru», «ivan [at] mail [dot] ru».
+    detector: 'email.obfuscated',
+    kind: ENTITY_KIND.EMAIL,
+    confidence: 0.9,
+    // Локальная часть и домен — латиница: иначе «врач at клиника точка рядом»
+    // опознавалось как почта и редактировалось зря.
+    source: String.raw`[a-z0-9._%+-]{2,}\s*[([{]?\s*(?:собака|at|dog)\s*[)\]}]?\s*[a-z0-9.-]{2,}\s*[([{]?\s*(?:точка|dot)\s*[)\]}]?\s*[a-z]{2,6}`,
+    flags: 'giu',
   },
   {
     detector: 'uuid',
@@ -370,6 +391,53 @@ export const detectEntities = (original) => {
   const scan = buildScanView(original);
   const spans = mergeSpans([...runPatternDetectors(scan), ...detectPersons(scan)]);
   return { scan, spans };
+};
+
+/** Числительные, которыми записывают цифры словами. */
+const NUMBER_WORDS = new Set([
+  'ноль', 'один', 'два', 'три', 'четыре', 'пять', 'шесть', 'семь', 'восемь',
+  'девять', 'десять', 'одиннадцать', 'двенадцать', 'ноля', 'нуль',
+]);
+
+/**
+ * Признаки НАРОЧИТОГО разрыва текста.
+ *
+ * Отвечает на вопрос, которого не задаёт ни один другой детектор: «похоже ли,
+ * что здесь что-то разложили по буквам». Ответ нужен для fail-closed: если
+ * такая форма есть, а склейка ничего не нашла в справочнике, мы не можем
+ * отличить неизвестную фамилию от бессмыслицы — и наружу текст не отправляем.
+ *
+ * Считаются ТОЛЬКО буквенные односимвольные токены подряд. Цифры рвут цепочку
+ * намеренно: «с 9 до 18 в пн ср пт» иначе давало бы ложное срабатывание.
+ *
+ * @param {string} text
+ * @returns {{longestLetterRun: number, numberWordRun: number, suspicious: boolean}}
+ */
+export const detectObfuscation = (text) => {
+  const tokens = String(text || '').match(/[\p{L}\p{N}]+/gu) || [];
+
+  let longestLetterRun = 0;
+  let currentLetters = 0;
+  let numberWordRun = 0;
+  let currentNumbers = 0;
+
+  for (const token of tokens) {
+    const isSingleLetter = token.length === 1 && /\p{L}/u.test(token);
+    currentLetters = isSingleLetter ? currentLetters + 1 : 0;
+    if (currentLetters > longestLetterRun) longestLetterRun = currentLetters;
+
+    const isNumberWord = NUMBER_WORDS.has(token.toLowerCase());
+    currentNumbers = isNumberWord ? currentNumbers + 1 : 0;
+    if (currentNumbers > numberWordRun) numberWordRun = currentNumbers;
+  }
+
+  return {
+    longestLetterRun,
+    numberWordRun,
+    // Четыре односимвольных слова подряд в живом русском тексте практически
+    // не встречаются: «я к ней» — это три, и то с предлогом.
+    suspicious: longestLetterRun >= 4 || numberWordRun >= 5,
+  };
 };
 
 /**

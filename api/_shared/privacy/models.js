@@ -112,4 +112,5 @@ export const FAIL_CLOSED_REASON = Object.freeze({
   EMERGENCY: 'emergency_red_flag',
   VAULT_UNAVAILABLE: 'token_vault_unavailable',
   OUTBOUND_ASSERTION: 'outbound_assertion_failed',
+  OBFUSCATION: 'obfuscation_unresolved',
 });

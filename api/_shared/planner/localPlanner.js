@@ -32,6 +32,8 @@ const toPlanConstraints = (constraints = {}, isChild = false) => {
   if (constraints.onlineBooking) result.online_booking = true;
   if (constraints.wheelchair) result.wheelchair = true;
   if (constraints.ownership) result.ownership = constraints.ownership;
+  if (typeof constraints.minRating === 'number') result.min_rating = constraints.minRating;
+  if (typeof constraints.minExperience === 'number') result.min_experience_years = constraints.minExperience;
   if (isChild) result.children = true;
   return result;
 };

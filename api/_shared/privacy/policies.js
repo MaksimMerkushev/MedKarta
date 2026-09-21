@@ -60,6 +60,8 @@ export const POLICY = Object.freeze({
  * @param {object} input.classification результат classifySymptoms
  * @param {number} input.redactionRatio доля отредактированных символов
  * @param {number} input.placeholderCount
+ * @param {{suspicious: boolean, resolved: boolean}} input.obfuscation признаки
+ *        нарочитого разрыва текста и удалось ли что-то по ним связать
  * @param {number} input.residualNameLike сколько «имён» осталось после редактуры
  * @param {number} input.sanitizedChars длина безопасного текста
  * @returns {{decision: string, reason: string|null}}
@@ -71,6 +73,7 @@ export const decideGatewayPolicy = ({
   placeholderCount = 0,
   residualNameLike = 0,
   sanitizedChars = 0,
+  obfuscation = { suspicious: false, resolved: false },
 }) => {
   if (classification.emergency) {
     return { decision: GATEWAY_DECISION.EMERGENCY, reason: FAIL_CLOSED_REASON.EMERGENCY };
@@ -81,6 +84,17 @@ export const decideGatewayPolicy = ({
     // после редактуры — сам факт их появления означает, что пользователь
     // делится документами, и правильная реакция — попросить этого не делать.
     return { decision: GATEWAY_DECISION.LOCAL_ONLY, reason: FAIL_CLOSED_REASON.HARD_IDENTIFIER };
+  }
+
+  if (obfuscation.suspicious && !obfuscation.resolved) {
+    /*
+     * Текст выглядит нарочито разорванным («Г а л я в и ч»), но склейка
+     * ничего не нашла в справочнике. Отличить неизвестную фамилию, записанную
+     * по буквам, от бессмыслицы мы не можем, поэтому наружу не отправляем.
+     * Если бы склейка нашла врача, сущность была бы уже токенизирована и
+     * запрос считался бы обычным.
+     */
+    return { decision: GATEWAY_DECISION.LOCAL_ONLY, reason: FAIL_CLOSED_REASON.OBFUSCATION };
   }
 
   if (placeholderCount > POLICY.maxPlaceholders) {

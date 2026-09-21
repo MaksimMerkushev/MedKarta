@@ -27,10 +27,16 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { ruStem } from './normalize.js';
-import { detectEntities, ENTITY_KIND } from './detectors.js';
+import { findTrigger, ruStem } from './normalize.js';
+import { detectEntities, detectObfuscation, ENTITY_KIND } from './detectors.js';
 import { classifySymptoms } from './symptoms.js';
-import { countResidualNameLike, reconcileEntities, redactText, tokenizeLocations } from './redaction.js';
+import {
+  countContentChars,
+  countResidualNameLike,
+  reconcileEntities,
+  redactText,
+  tokenizeLocations,
+} from './redaction.js';
 import { decideGatewayPolicy, POLICY, POLICY_VERSION } from './policies.js';
 import { FAIL_CLOSED_REASON, GATEWAY_DECISION, mintSanitizedPlannerRequest } from './models.js';
 import { SPECIALTY_CANON } from './catalog.js';
@@ -75,17 +81,45 @@ export const extractConstraints = (text) => {
     }
   }
 
-  if (ruStem('вечер').test(lower)) constraints.evening = true;
-  if (ruStem('выходн', 'суббот', 'воскресен').test(lower)) constraints.weekend = true;
+  /*
+   * Каждое условие проверяется через findTrigger: он отличает «в выходные»
+   * от «не в выходные». Для булевых признаков отрицание означает «не ставить»,
+   * для формы собственности — выбрать противоположную: она бинарна, и «не
+   * государственную» однозначно означает частную.
+   */
+  if (findTrigger(lower, 'вечер') === 'affirmed') constraints.evening = true;
+  if (findTrigger(lower, 'выходн', 'суббот', 'воскресен') === 'affirmed') constraints.weekend = true;
   if (/сейчас\s+открыт|открыт\p{L}*\s+сейчас|работает\s+сейчас/u.test(lower)) constraints.openNow = true;
-  if (ruStem('онлайн', 'дистанцион', 'удал[её]нн').test(lower)) constraints.onlineBooking = true;
-  if (ruStem('коляск', 'инвалид', 'пандус').test(lower)) constraints.wheelchair = true;
-  if (ruStem('бесплатн', 'государствен', 'муниципальн').test(lower) || /по\s+омс/u.test(lower)) {
+  if (findTrigger(lower, 'онлайн', 'дистанцион', 'удал[её]нн') === 'affirmed') constraints.onlineBooking = true;
+  if (findTrigger(lower, 'коляск', 'инвалид', 'пандус') === 'affirmed') constraints.wheelchair = true;
+
+  const state = findTrigger(lower, 'бесплатн', 'государствен', 'муниципальн');
+  const commercial = findTrigger(lower, 'платн', 'частн', 'коммерческ');
+  if (state === 'affirmed' || /по\s+омс/u.test(lower) || commercial === 'negated') {
     constraints.ownership = 'Государственная';
   }
-  if (ruStem('платн', 'частн', 'коммерческ').test(lower)) constraints.ownership = 'Частная';
-  if (ruStem('ближайш', 'рядом', 'недалеко', 'поблизости').test(lower)) constraints.selection = 'nearest';
-  if (ruStem('лучш').test(lower) && ruStem('рейтинг', 'врач').test(lower)) constraints.selection = 'best_rated';
+  if (commercial === 'affirmed' || state === 'negated') {
+    constraints.ownership = 'Частная';
+  }
+
+  if (findTrigger(lower, 'ближайш', 'рядом', 'недалеко', 'поблизости') === 'affirmed') {
+    constraints.selection = 'nearest';
+  }
+  if (ruStem('лучш').test(lower) && ruStem('рейтинг', 'врач').test(lower)) {
+    constraints.selection = 'best_rated';
+  }
+
+  const minRating = lower.match(/рейтинг\p{L}*\s*(?:от|выше|больше)?\s*(\d(?:[.,]\d)?)/u);
+  if (minRating) {
+    const value = Number(minRating[1].replace(',', '.'));
+    if (value >= 0 && value <= 5) constraints.minRating = value;
+  }
+
+  const minExperience = lower.match(/стаж\p{L}*\s*(?:от|более|больше)?\s*(\d{1,2})/u);
+  if (minExperience) {
+    const value = Number(minExperience[1]);
+    if (value >= 0 && value <= 60) constraints.minExperience = value;
+  }
 
   return constraints;
 };
@@ -267,7 +301,7 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
         const withLocations = tokenizeLocations(redacted);
         locationTokens = [...new Set([...locationTokens, ...withLocations.tokens])];
         totalRedacted += redactedChars;
-        totalChars += analysis.message.content.length;
+        totalChars += countContentChars(analysis.message.content);
         redactedTurns.push({ role: analysis.message.role, text: withLocations.text });
       }
     } catch {
@@ -280,6 +314,20 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
         context: emptyContext(session, requestId),
       };
     }
+
+    /*
+     * Признаки нарочитого разрыва считаются по ИСХОДНОМУ тексту всех реплик
+     * пользователя, а «разрешено» — по тому, сработала ли склейка. Если
+     * сработала, фамилия уже заменена токеном и запрос обычный.
+     */
+    const obfuscation = {
+      suspicious: messages.some(
+        (message) => message.role === 'user' && detectObfuscation(message.content).suspicious,
+      ),
+      resolved: analyses.some((analysis) =>
+        analysis.entities.some((entity) => entity.matcher === 'doctor.glued' || entity.matcher === 'doctor.joined'),
+      ),
+    };
 
     const lastRedacted = redactedTurns[redactedTurns.length - 1]?.text || '';
 
@@ -298,6 +346,7 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
       redactionRatio: totalChars > 0 ? totalRedacted / totalChars : 0,
       placeholderCount: placeholders.length,
       residualNameLike: countResidualNameLike(lastRedacted),
+      obfuscation,
       sanitizedChars: lastRedacted.replace(/@[A-Z_]+/g, '').trim().length,
     });
 
@@ -324,6 +373,7 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
         entitiesDetected: allEntities.length,
         placeholders: placeholders.length,
         redactionRatio: totalChars > 0 ? Number((totalRedacted / totalChars).toFixed(3)) : 0,
+        obfuscation: obfuscation.suspicious,
         medicalText: Boolean(classification.hasMedicalText),
         emergency: Boolean(classification.emergency),
       },
@@ -401,6 +451,7 @@ export const buildOutline = (redactedText, placeholders, locationTokens, analyse
 
   const lastAnalysis = analyses[analyses.length - 1];
   for (const hit of lastAnalysis?.specialtyHits || []) {
+    if (hit.negated) continue;
     items.push({ position: hit.start, kind: 'SPECIALTY', specialty: hit.key });
   }
 

@@ -100,10 +100,19 @@ describe('3. Опечатки', () => {
   const resolver = createEntityResolver(fixtureCatalog());
 
   it('находит врача при разумной опечатке', () => {
+    // Проверяется результат, а не способ: «Петровву» ловится схлопыванием
+    // повторов как точное совпадение, «Птерову» — нечётким сравнением.
+    // Требовать конкретный matcher значит запрещать улучшать распознавание.
+    const KNOWN = new Set(['doctor.exact', 'doctor.fuzzy', 'doctor.glued', 'doctor.joined']);
+
     for (const typo of ['к Петову', 'к Птерову', 'к Петровву']) {
       const links = resolver.resolve(typo).links.filter((link) => link.kind === ENTITY_KIND.DOCTOR);
       assert.ok(links.length > 0, `опечатка не распознана: ${typo}`);
-      assert.equal(links[0].matcher, 'doctor.fuzzy');
+      assert.ok(KNOWN.has(links[0].matcher), `неожиданный способ совпадения: ${links[0].matcher}`);
+      assert.ok(
+        links[0].ids.includes('fx-doc-petrov-therapist') || links[0].ids.includes('fx-doc-petrova-dentist'),
+        `опечатка привела не к тому врачу: ${JSON.stringify(links[0].ids)}`,
+      );
     }
   });
 
