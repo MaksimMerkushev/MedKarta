@@ -22,10 +22,13 @@
 /**
  * Content-Security-Policy.
  *
- * connect-src перечисляет ровно то, к чему браузеру разрешено обращаться:
- * собственный origin и публичный сервер маршрутизации OSRM. Последний —
- * осознанная уступка: именно туда уходят координаты пользователя при
- * построении маршрута (см. docs/privacy-architecture.md, остаточный риск 6).
+ * connect-src разрешает только собственный origin. Раньше сюда входил
+ * публичный сервер маршрутизации OSRM — именно туда браузер отправлял
+ * координаты пользователя. Теперь маршрут считает backend/routing, обращение
+ * к третьей стороне убрано, и вместе с ним убрано разрешение.
+ *
+ * img-src по-прежнему допускает тайлы OpenStreetMap: это картинки подложки,
+ * и по запросу тайла видно лишь то, какой участок карты открыт.
  *
  * 'unsafe-inline' в style-src требуется инлайновыми стилями Leaflet и React.
  * Убрать можно только вместе с переходом на nonce-стили.
@@ -40,7 +43,10 @@ const CONTENT_SECURITY_POLICY = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https://*.tile.openstreetmap.org",
   "font-src 'self' data:",
-  "connect-src 'self' https://routing.openstreetmap.de",
+  // connect-src — только собственный origin. Сторонний сервер маршрутизации
+  // убран вместе с обращением к нему: геометрию считает backend/routing,
+  // и координаты пользователя больше никуда не уходят.
+  "connect-src 'self'",
   "worker-src 'self' blob:",
   "manifest-src 'self'",
   'upgrade-insecure-requests',

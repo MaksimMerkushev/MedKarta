@@ -7,7 +7,6 @@ import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import MarkerClusterGroup from 'react-leaflet-cluster';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import 'leaflet-routing-machine';
 import 'leaflet.markercluster/dist/MarkerCluster.css';
 import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
 import {
@@ -280,87 +279,103 @@ const InvalidateMapSize = () => {
 
 const RoutingMachine = ({ originLocation, routeTargets, travelMode, setRouteData }) => {
   const map = useMap();
-  const routingControlRef = useRef(null);
+  const layerRef = useRef(null);
 
-  // Стабилизация: округляем координаты до 4 знаков (~11 метров)
+  // Стабилизация: округляем координаты до 4 знаков (~11 метров), чтобы
+  // дрожание геолокации не перестраивало маршрут на каждом обновлении.
   const roundCoord = (val) => Number(Number(val).toFixed(4));
   const routeKey = JSON.stringify({
     o: originLocation ? [roundCoord(originLocation[0]), roundCoord(originLocation[1])] : null,
-    t: (routeTargets || []).map(r => [roundCoord(r.lat), roundCoord(r.lng)]),
-    m: travelMode
+    t: (routeTargets || []).map((r) => [roundCoord(r.lat), roundCoord(r.lng)]),
+    m: travelMode,
   });
 
   useEffect(() => {
-    // Ветка «маршрута нет»: раньше здесь обращались к map даже когда map === null.
-    if (!map || !originLocation || !routeTargets || routeTargets.length === 0) {
-      if (map && routingControlRef.current) {
-        map.removeControl(routingControlRef.current);
+    const clear = () => {
+      if (layerRef.current && map) {
+        map.removeLayer(layerRef.current);
       }
-      routingControlRef.current = null;
-      return;
-    }
+      layerRef.current = null;
+    };
 
-    if (routingControlRef.current) {
-      map.removeControl(routingControlRef.current);
-      routingControlRef.current = null;
+    if (!map || !originLocation || !routeTargets || routeTargets.length === 0) {
+      clear();
+      return undefined;
     }
 
     const lineColors = { driving: '#3b82f6', foot: '#10b981', bike: '#a855f7' };
-    const serviceUrls = {
-      driving: 'https://routing.openstreetmap.de/routed-car/route/v1',
-      foot: 'https://routing.openstreetmap.de/routed-foot/route/v1',
-      bike: 'https://routing.openstreetmap.de/routed-bike/route/v1',
-    };
-    // Раньше профиль всегда был 'driving' независимо от выбранного транспорта:
-    // сервер пешего/велосипедного маршрута получал запрос с чужим профилем.
-    const profiles = { driving: 'driving', foot: 'foot', bike: 'bike' };
-    const mode = serviceUrls[travelMode] ? travelMode : 'driving';
+    const mode = lineColors[travelMode] ? travelMode : 'driving';
 
-    try {
-      const router = L.Routing.osrmv1({
-        serviceUrl: serviceUrls[mode],
-        profile: profiles[mode],
-      });
+    const waypoints = [
+      { lat: originLocation[0], lng: originLocation[1] },
+      ...routeTargets.map((t) => ({ lat: t.lat, lng: t.lng })),
+    ];
 
-      const waypoints = [
-        L.latLng(originLocation[0], originLocation[1]),
-        ...routeTargets.map(t => L.latLng(t.lat, t.lng))
-      ];
+    const controller = new AbortController();
+    let cancelled = false;
 
-      routingControlRef.current = L.Routing.control({
-        waypoints,
-        router,
-        lineOptions: { styles: [{ color: lineColors[mode], weight: 6, opacity: 0.9 }] },
-        show: false,
-        addWaypoints: false,
-        routeWhileDragging: false,
-        createMarker: function () {
-          return null;
-        },
-      }).addTo(map);
+    /*
+     * Маршрут строит НАШ сервер (backend/routing), а не сторонний сервис.
+     * Раньше координаты пользователя и всех точек уходили на публичный
+     * демо-сервер OSRM — при том что языковой модели мы отдаём @HOME вместо
+     * адреса. Теперь координаты дальше нашего бекенда не идут.
+     */
+    const draw = async () => {
+      try {
+        const response = await fetch('/api/route', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          signal: controller.signal,
+          body: JSON.stringify({ waypoints, profile: mode }),
+        });
 
-      routingControlRef.current.on('routesfound', function (event) {
-        if (event.routes && event.routes.length > 0) {
-          const summary = event.routes[0].summary;
-          setRouteData({ distance: summary.totalDistance, time: summary.totalTime, error: false });
+        if (cancelled) return;
+
+        if (!response.ok) {
+          // Граф не собран или маршрут не построился: рисуем прямые линии
+          // между точками и честно помечаем оценку приблизительной, вместо
+          // того чтобы оставить пользователя без всякой подсказки.
+          clear();
+          layerRef.current = L.polyline(
+            waypoints.map((point) => [point.lat, point.lng]),
+            { color: lineColors[mode], weight: 4, opacity: 0.55, dashArray: '8 10' },
+          ).addTo(map);
+          setRouteData({ distance: 0, time: 0, error: true });
+          return;
         }
-      });
 
-      routingControlRef.current.on('routingerror', function () {
+        const payload = await response.json();
+        if (cancelled || !Array.isArray(payload.geometry) || payload.geometry.length < 2) {
+          setRouteData({ distance: 0, time: 0, error: true });
+          return;
+        }
+
+        clear();
+        layerRef.current = L.polyline(payload.geometry, {
+          color: lineColors[mode],
+          weight: 6,
+          opacity: 0.9,
+        }).addTo(map);
+
+        setRouteData({ distance: payload.distance, time: payload.time, error: false });
+      } catch (error) {
+        if (cancelled || error?.name === 'AbortError') return;
         setRouteData({ distance: 0, time: 0, error: true });
-      });
-    } catch (error) {
-      console.error('Ошибка маршрута:', error);
-    }
-
-    return () => {
-      if (routingControlRef.current && map) {
-        map.removeControl(routingControlRef.current);
-        routingControlRef.current = null;
       }
     };
+
+    draw();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+      clear();
+    };
+    // routeKey намеренно заменяет собой список зависимостей: он и есть
+    // огрублённый снимок входных данных.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [map, routeKey, setRouteData]);
+  }, [map, routeKey]);
 
   return null;
 };

@@ -17,7 +17,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import handler from './api/chat.js';
+import chatHandler from './api/chat.js';
+import routeHandler from './api/route.js';
 import { applySecurityHeaders } from './http/securityHeaders.js';
 import { logger } from './observability/safeLogger.js';
 
@@ -83,9 +84,15 @@ const sendFile = (res, filePath, status = 200) => {
 const server = http.createServer(async (req, res) => {
   applySecurityHeaders(res, { api: req.url?.startsWith('/api/') });
 
-  if (req.url?.startsWith('/api/chat')) {
+  const apiHandler = req.url?.startsWith('/api/chat')
+    ? chatHandler
+    : req.url?.startsWith('/api/route')
+      ? routeHandler
+      : null;
+
+  if (apiHandler) {
     try {
-      await handler(req, res);
+      await apiHandler(req, res);
     } catch (error) {
       // Ни текст ошибки, ни стек наружу и в логи не идут: и то, и другое
       // может содержать фрагменты пользовательского ввода.

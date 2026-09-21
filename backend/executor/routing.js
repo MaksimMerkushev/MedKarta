@@ -119,10 +119,39 @@ export const createOsrmRoutingProvider = ({
     },
   });
 
-export const createRoutingProviderFromEnv = (env = process.env) =>
-  (env.ROUTING_PROVIDER || 'haversine').toLowerCase() === 'osrm'
-    ? createOsrmRoutingProvider()
-    : createHaversineRoutingProvider();
+/**
+ * Провайдер поверх собственного движка (backend/routing).
+ *
+ * Координаты не покидают доверенный контур. Если граф не собран, функция
+ * возвращает null и вызывающая сторона переходит на оценку по прямой —
+ * приложение работает, просто ETA становится приблизительным.
+ */
+export const createLocalRoutingProvider = async () => {
+  const { getDefaultRoutingEngine } = await import('../routing/engine.js');
+  const engine = await getDefaultRoutingEngine();
+  return engine;
+};
+
+/**
+ * Выбор провайдера.
+ *
+ * По умолчанию — собственный движок, если граф собран; иначе гаверсинус.
+ * OSRM остаётся доступен явным флагом, но включать его значит отправлять
+ * координаты пользователя третьей стороне, и это нужно отражать в политике
+ * конфиденциальности.
+ */
+export const createRoutingProviderFromEnv = async (env = process.env) => {
+  const requested = (env.ROUTING_PROVIDER || 'local').toLowerCase();
+
+  if (requested === 'osrm') {
+    return createOsrmRoutingProvider();
+  }
+  if (requested === 'haversine') {
+    return createHaversineRoutingProvider();
+  }
+
+  return (await createLocalRoutingProvider()) || createHaversineRoutingProvider();
+};
 
 /**
  * Двухступенчатый выбор кандидата.

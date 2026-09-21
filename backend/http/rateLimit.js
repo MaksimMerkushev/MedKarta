@@ -13,10 +13,59 @@ const MAX_PER_IP = 20;
 const MAX_PER_INSTANCE = 300;
 const MAX_TRACKED_IPS = 5000;
 
-const hits = new Map();
-let instanceHits = [];
+const prune = (list, now, windowMs) => list.filter((timestamp) => now - timestamp < windowMs);
 
-const prune = (list, now) => list.filter((timestamp) => now - timestamp < WINDOW_MS);
+/**
+ * Независимый ограничитель со своим счётчиком.
+ *
+ * Разным эндпоинтам нужны разные бюджеты: обращение к языковой модели стоит
+ * денег и времени, а построение маршрута считается локально и вызывается
+ * при каждом изменении точек на карте. Общий счётчик заставил бы выбирать
+ * между «дорого» и «неудобно».
+ */
+export const createRateLimiter = ({
+  windowMs = WINDOW_MS,
+  maxPerIp = MAX_PER_IP,
+  maxPerInstance = MAX_PER_INSTANCE,
+  maxTrackedIps = MAX_TRACKED_IPS,
+} = {}) => {
+  const hits = new Map();
+  let instanceHits = [];
+
+  return (ip, now = Date.now()) => {
+    instanceHits = prune(instanceHits, now, windowMs);
+    if (instanceHits.length >= maxPerInstance) {
+      return { allowed: false, retryAfterSeconds: 60, remaining: 0 };
+    }
+
+    // Аварийный сброс, чтобы карта не росла бесконечно при разбросе адресов.
+    if (hits.size > maxTrackedIps) {
+      hits.clear();
+    }
+
+    const previous = prune(hits.get(ip) || [], now, windowMs);
+    if (previous.length >= maxPerIp) {
+      const retryAfterSeconds = Math.max(1, Math.ceil((windowMs - (now - previous[0])) / 1000));
+      hits.set(ip, previous);
+      return { allowed: false, retryAfterSeconds, remaining: 0 };
+    }
+
+    previous.push(now);
+    hits.set(ip, previous);
+    instanceHits.push(now);
+
+    return { allowed: true, retryAfterSeconds: 0, remaining: maxPerIp - previous.length };
+  };
+};
+
+/**
+ * Бюджет маршрутизации отдельный и заметно шире: расчёт идёт локально,
+ * денег не стоит, но вызывается при каждом изменении набора точек.
+ */
+export const checkRouteRateLimit = createRateLimiter({
+  maxPerIp: 120,
+  maxPerInstance: 1500,
+});
 
 export const getClientIp = (req) => {
   const forwarded = req.headers['x-forwarded-for'];
@@ -34,36 +83,6 @@ export const getClientIp = (req) => {
 /**
  * @returns {{ allowed: boolean, retryAfterSeconds: number, remaining: number }}
  */
-export const checkRateLimit = (ip, now = Date.now()) => {
-  instanceHits = prune(instanceHits, now);
-  if (instanceHits.length >= MAX_PER_INSTANCE) {
-    return { allowed: false, retryAfterSeconds: 60, remaining: 0 };
-  }
-
-  // Аварийный сброс, чтобы карта не росла бесконечно при разбросе адресов.
-  if (hits.size > MAX_TRACKED_IPS) {
-    hits.clear();
-  }
-
-  const previous = prune(hits.get(ip) || [], now);
-  if (previous.length >= MAX_PER_IP) {
-    const retryAfterSeconds = Math.max(
-      1,
-      Math.ceil((WINDOW_MS - (now - previous[0])) / 1000),
-    );
-    hits.set(ip, previous);
-    return { allowed: false, retryAfterSeconds, remaining: 0 };
-  }
-
-  previous.push(now);
-  hits.set(ip, previous);
-  instanceHits.push(now);
-
-  return {
-    allowed: true,
-    retryAfterSeconds: 0,
-    remaining: MAX_PER_IP - previous.length,
-  };
-};
+export const checkRateLimit = createRateLimiter();
 
 export const RATE_LIMIT_CONFIG = { WINDOW_MS, MAX_PER_IP, MAX_PER_INSTANCE };

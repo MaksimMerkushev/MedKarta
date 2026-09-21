@@ -72,7 +72,7 @@ server {
     listen 443 ssl http2;
     server_name medkarta.example;
 
-    add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.tile.openstreetmap.org; font-src 'self' data:; connect-src 'self' https://routing.openstreetmap.de; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests" always;
+    add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.tile.openstreetmap.org; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests" always;
     add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "DENY" always;
@@ -108,13 +108,27 @@ server {
 заголовки безопасности придётся перечислить повторно либо вынести их
 в подключаемый файл и `include` его в каждом блоке.
 
+## Дорожный граф
+
+Маршрутизация работает на собственном движке и требует собранного графа.
+Сборка делается один раз и не на боевом сервере:
+
+```bash
+node scripts/build-road-graph.mjs
+```
+
+Файл `data/graph/kazan.graph` (~20 МБ) копируется на сервер рядом
+с приложением. Без него приложение работает, но маршруты рисуются
+прямыми линиями — подробности в `docs/routing.md`.
+
 ## Что проверить перед выкладкой
 
-1. `npm test` — 129 тестов, включая проверки границы доверия.
+1. `npm test` — 161 тест, включая проверки границы доверия.
 2. `npm run lint`.
 3. `PRIVACY_TOKEN_SECRET` задан в окружении.
 4. В сборке нет секретов: `grep -R "sk-\|ghp_" dist/ || echo чисто`.
 5. `data/doctors.full.js` не попал в git: `git check-ignore data/doctors.full.js`.
-6. Обратный прокси **не пишет тела запросов** в логи. Privacy Gateway
+6. Граф скопирован: `ls -lh data/graph/kazan.graph`.
+7. Обратный прокси **не пишет тела запросов** в логи. Privacy Gateway
    бессмыслен, если исходный текст оседает в логах nginx.
-7. Sentry или APM не подключён с автоматическим захватом тела запроса.
+8. Sentry или APM не подключён с автоматическим захватом тела запроса.

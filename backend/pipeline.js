@@ -263,7 +263,7 @@ export const getDefaultPipeline = async () => {
     catalog,
     vault,
     planner,
-    routing: createRoutingProviderFromEnv(),
+    routing: await createRoutingProviderFromEnv(),
   });
 
   return cached;

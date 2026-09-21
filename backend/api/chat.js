@@ -13,87 +13,12 @@
  * лимит размера тела, разбор входных данных и безопасное логирование.
  */
 
-import { LIMITS, validateChatMessages } from '../../shared/contract.js';
+import { validateChatMessages } from '../../shared/contract.js';
+import { readBody, respondJson, verifyOrigin } from '../http/request.js';
 import { checkRateLimit, getClientIp } from '../http/rateLimit.js';
 import { getDefaultPipeline } from '../pipeline.js';
 import { logger } from '../observability/safeLogger.js';
 import { metrics } from '../observability/metrics.js';
-
-const sendJson = (res, status, payload) => {
-  res.statusCode = status;
-  res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-store');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.end(JSON.stringify(payload));
-};
-
-const readBody = (req) =>
-  new Promise((resolve, reject) => {
-    if (req.body !== undefined && req.body !== null) {
-      resolve(req.body);
-      return;
-    }
-
-    let size = 0;
-    const chunks = [];
-
-    req.on('data', (chunk) => {
-      size += chunk.length;
-      if (size > LIMITS.MAX_BODY_BYTES) {
-        const error = new Error('Тело запроса слишком большое.');
-        error.status = 413;
-        req.destroy();
-        reject(error);
-        return;
-      }
-      chunks.push(chunk);
-    });
-
-    req.on('end', () => {
-      if (chunks.length === 0) {
-        resolve({});
-        return;
-      }
-
-      try {
-        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
-      } catch {
-        const error = new Error('Некорректный JSON в теле запроса.');
-        error.status = 400;
-        reject(error);
-      }
-    });
-
-    req.on('error', reject);
-  });
-
-/**
- * Запрос должен приходить с нашей же страницы. Заголовок Origin подделывается
- * только не-браузерным клиентом, поэтому это не «защита», а отсечение
- * тривиального встраивания виджета на чужой сайт за наш счёт.
- */
-const isAllowedOrigin = (req) => {
-  const origin = req.headers.origin;
-  if (!origin) {
-    return true;
-  }
-
-  const allowList = (process.env.ALLOWED_ORIGINS || '')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean);
-
-  if (allowList.includes(origin)) {
-    return true;
-  }
-
-  try {
-    const host = req.headers['x-forwarded-host'] || req.headers.host;
-    return Boolean(host) && new URL(origin).host === host;
-  } catch {
-    return false;
-  }
-};
 
 /**
  * Точка отправления.
@@ -130,19 +55,19 @@ export default async function handler(req, res) {
 
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST, OPTIONS');
-    sendJson(res, 405, { error: 'Метод не поддерживается.' });
+    respondJson(res, 405, { error: 'Метод не поддерживается.' });
     return;
   }
 
-  if (!isAllowedOrigin(req)) {
-    sendJson(res, 403, { error: 'Запрос отклонён.' });
+  if (!verifyOrigin(req)) {
+    respondJson(res, 403, { error: 'Запрос отклонён.' });
     return;
   }
 
   const limit = checkRateLimit(getClientIp(req));
   if (!limit.allowed) {
     res.setHeader('Retry-After', String(limit.retryAfterSeconds));
-    sendJson(res, 429, {
+    respondJson(res, 429, {
       error: 'Слишком много запросов. Попробуйте через минуту.',
       retryAfter: limit.retryAfterSeconds,
     });
@@ -159,7 +84,7 @@ export default async function handler(req, res) {
     origin = readCoarseOrigin(body?.origin);
   } catch (error) {
     // Наружу уходит только формулировка валидатора — она не содержит ввода.
-    sendJson(res, error.status || 400, { error: error.message || 'Некорректный запрос.' });
+    respondJson(res, error.status || 400, { error: error.message || 'Некорректный запрос.' });
     return;
   }
 
@@ -168,7 +93,7 @@ export default async function handler(req, res) {
     const { action } = await pipeline.handle({ messages, sessionId, origin });
 
     res.setHeader('X-RateLimit-Remaining', String(limit.remaining));
-    sendJson(res, 200, action);
+    respondJson(res, 200, action);
   } catch (error) {
     /*
      * Ни error.message, ни стек в лог не попадают: и то, и другое регулярно
@@ -177,7 +102,7 @@ export default async function handler(req, res) {
      */
     metrics.increment('api.chat.error', { code: error?.code || 'unknown' });
     logger.error('api.chat.failed', error);
-    sendJson(res, 502, { error: 'Не удалось обработать запрос. Попробуйте ещё раз.' });
+    respondJson(res, 502, { error: 'Не удалось обработать запрос. Попробуйте ещё раз.' });
   }
 }
 

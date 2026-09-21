@@ -36,11 +36,8 @@ html.dark .leaflet-control-attribution {
 }
 
 /* Скрываем стандартный маршрутный контейнер Leaflet */
-.leaflet-routing-container.leaflet-bar,
-.leaflet-routing-error.leaflet-bar {
-  display: none !important;
-  visibility: hidden !important;
-}
+/* Стили панели leaflet-routing-machine удалены вместе с зависимостью:
+   маршрут строит собственный бекенд, панель больше не создаётся. */
 
 /* Мобильные popup'ы Leaflet */
 @media (max-width: 767px) {
