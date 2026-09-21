@@ -240,7 +240,12 @@ export const buildUiAction = (execution, context = {}) => {
     draft.searchQuery = execution.services[0];
   }
 
-  draft.replyText = buildReplyText(execution, context);
+  /*
+   * Предупреждение fail-closed показывается ДАЖЕ когда локальный план
+   * отработал успешно. Иначе пользователь, приславший номер СНИЛС, получал бы
+   * обычный результат поиска и не узнал бы, что документы присылать не нужно.
+   */
+  draft.replyText = [context.notice, buildReplyText(execution, context)].filter(Boolean).join(' ');
 
   /*
    * Финальная нормализация тем же санитайзером, что использует клиент.

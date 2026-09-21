@@ -66,6 +66,14 @@ export const createExecutor = ({ repository, routing }) => ({
     const stops = [];
     const notes = { relaxed: new Set(), missingSpecialties: [], ambiguous: [], approximate: false };
 
+    /*
+     * Одна и та же запись не может быть двумя остановками маршрута.
+     * Дубликат возникает штатно: «к Петрову, потом к стоматологу» — если
+     * Петров и есть ближайший стоматолог, шаг по специальности обязан выбрать
+     * следующего кандидата, а не повторить уже добавленного.
+     */
+    const usedIds = new Set();
+
     for (const step of plan.steps) {
       if (step.type === 'location') {
         stops.push({ kind: 'location', token: step.token, resolvedBy: 'client' });
@@ -78,6 +86,7 @@ export const createExecutor = ({ repository, routing }) => ({
         if (ambiguous) {
           notes.ambiguous.push({ token: step.token, count: step.entities.length });
         }
+        usedIds.add(chosen.id);
         stops.push({
           kind: 'doctor',
           token: step.token,
@@ -94,6 +103,7 @@ export const createExecutor = ({ repository, routing }) => ({
 
       if (step.type === 'specific_clinic') {
         const clinic = step.entities[0];
+        usedIds.add(clinic.id);
         stops.push({
           kind: 'clinic',
           token: step.token,
@@ -120,21 +130,25 @@ export const createExecutor = ({ repository, routing }) => ({
           continue;
         }
 
+        const available = found.records.filter((record) => !usedIds.has(record.id));
+        if (available.length === 0) continue;
+
         let chosen = null;
         if (step.selection === 'nearest' && origin) {
           const selected = await selectByTravelTime({
             origin,
-            candidates: found.records,
+            candidates: available,
             routing,
             mode: plan.travelMode || 'driving',
           });
           chosen = selected.best;
           notes.approximate = notes.approximate || selected.approximate;
         } else {
-          chosen = [...found.records].sort(byQuality)[0];
+          chosen = [...available].sort(byQuality)[0];
         }
 
         if (!chosen) continue;
+        usedIds.add(chosen.id);
 
         stops.push({
           kind: 'doctor',
@@ -148,7 +162,7 @@ export const createExecutor = ({ repository, routing }) => ({
           lng: chosen.lng,
           distanceKm: chosen.distanceKm ?? null,
           durationSeconds: chosen.durationSeconds ?? null,
-          candidateCount: found.records.length,
+          candidateCount: available.length,
           /*
            * Когда точки отправления нет, «ближайший» на сервере не определён.
            * Клиент, у которого координаты есть, доуточнит выбор сам.

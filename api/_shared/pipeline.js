@@ -179,7 +179,10 @@ export const createPipeline = ({
       }
 
       const execution = await executor.run({ plan: authorized.value, origin });
-      const action = buildUiAction(execution, { clarifyPrompt: clarifyTextFor(gate.reason) });
+      const action = buildUiAction(execution, {
+        clarifyPrompt: clarifyTextFor(gate.reason),
+        notice: noticeFor(gate.reason),
+      });
 
       metrics.observe('pipeline.latency_ms', Date.now() - started, { plan_source: planSource });
       logger.event('pipeline.done', {
@@ -211,6 +214,11 @@ export const createPipeline = ({
  * Пользователю не сообщается техническая причина, но формулировка направляет
  * его к безопасному переформулированию.
  */
+const noticeFor = (reason) =>
+  reason === 'hard_identifier_present'
+    ? 'Пожалуйста, не присылайте номера документов — СНИЛС, полис ОМС, паспорт: для поиска врача они не нужны.'
+    : null;
+
 const clarifyTextFor = (reason) => {
   switch (reason) {
     case 'hard_identifier_present':

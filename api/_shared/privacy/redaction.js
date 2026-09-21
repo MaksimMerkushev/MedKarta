@@ -48,9 +48,21 @@ export const reconcileEntities = (detectorSpans, catalogLinks) => {
   for (const entity of all) {
     const previous = result[result.length - 1];
     if (previous && entity.start < previous.end) {
-      // Ссылка на каталог вытесняет более слабое пересекающееся совпадение.
-      if (entity.priority > previous.priority && entity.end >= previous.end) {
-        result[result.length - 1] = entity;
+      /*
+       * Ссылка на каталог точнее эвристики ФИО и забирает вид и id, НО
+       * границы берутся объединением. Без объединения «Меня зовут Иван
+       * Петров» редактировалось только по фамилии — она совпала со
+       * справочником и вытеснила более широкий спан ФИО, — и имя «Иван»
+       * уходило во внешнюю модель открытым текстом.
+       */
+      if (entity.priority > previous.priority) {
+        result[result.length - 1] = {
+          ...entity,
+          start: Math.min(entity.start, previous.start),
+          end: Math.max(entity.end, previous.end),
+        };
+      } else if (entity.end > previous.end && entity.priority === previous.priority) {
+        result[result.length - 1] = { ...previous, end: entity.end };
       }
       continue;
     }

@@ -206,7 +206,29 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
     let classification;
     try {
       analyses = messages.map((message) => ({ message, ...analyzeTurn(message.content) }));
-      classification = classifier(rawLastUser);
+
+      /*
+       * Жалоба классифицируется по ВСЕЙ истории, а не только по последней
+       * реплике. Иначе диалог «болит зуб и опухла десна» → «а есть кто-то
+       * после 18:00?» отправлял бы наружу первую реплику целиком: на
+       * последнем ходу медицинского текста уже нет, и политика его не видела.
+       *
+       * Исключение — красные флаги: они берутся только с последнего хода.
+       * Неотложное состояние, на которое уже отреагировали, не должно
+       * повторно перехватывать каждый следующий вопрос.
+       */
+      const userTurns = messages.filter((message) => message.role === 'user');
+      const perTurn = userTurns.map((message) => classifier(message.content));
+      const lastTurn = classifier(rawLastUser);
+
+      classification = {
+        emergency: lastTurn.emergency,
+        hasMedicalText: perTurn.some((item) => item.hasMedicalText),
+        isChild: perTurn.some((item) => item.isChild),
+        confidence: Math.max(...perTurn.map((item) => item.confidence), 0),
+        specialties: [...new Set(perTurn.flatMap((item) => item.specialties))],
+        matchedRules: [...new Set(perTurn.flatMap((item) => item.matchedRules))],
+      };
     } catch {
       // Сбой анализа — это НЕ повод отправить текст как есть.
       return {

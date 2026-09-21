@@ -346,6 +346,37 @@ export const createEntityResolver = (catalog) => {
       index = last;
     }
 
+    /*
+     * Уточнение врача по стоящей рядом специальности.
+     *
+     * «к терапевту Петрову» и «к стоматологу Петровой» — разные люди с общей
+     * основой фамилии. Без этого сужения выбор между однофамильцами делался бы
+     * по специальностям всего плана, и маршрут «сначала к терапевту Петрову,
+     * потом к стоматологу» уводил бы к стоматологу дважды. Специальность
+     * засчитывается, только если стоит непосредственно перед фамилией.
+     */
+    const ADJACENCY_CHARS = 30;
+    for (const link of links) {
+      if (link.kind !== ENTITY_KIND.DOCTOR || link.ids.length < 2) continue;
+
+      const hint = specialtyHits
+        .filter((hit) => hit.end <= link.start && link.start - hit.end <= ADJACENCY_CHARS)
+        .sort((left, right) => right.end - left.end)[0];
+      if (!hint) continue;
+
+      const label = normalizeRu(SPECIALTY_CANON[hint.key] || '');
+      if (!label) continue;
+
+      const narrowed = link.ids.filter((id) =>
+        normalizeRu(doctorById.get(id)?.specialty || '').includes(label),
+      );
+      if (narrowed.length > 0 && narrowed.length < link.ids.length) {
+        link.ids = narrowed;
+        link.ambiguous = narrowed.length > 1;
+        link.narrowedBySpecialty = hint.key;
+      }
+    }
+
     return {
       links: links.sort((left, right) => left.start - right.start),
       specialties: [...specialties],
