@@ -25,6 +25,8 @@ export const SORT_MODES = ['recommendation', 'rating', 'experience', 'distance',
 
 // Управляющие символы, невидимые разделители и bidi-оверрайды: ими маскируют
 // инъекции в тексте и ломают отображение. Оставляем только печатаемое.
+// Управляющие символы здесь и есть предмет проверки: ими маскируют инъекции.
+// eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g;
 
 export const cleanText = (value, maxLength) => {

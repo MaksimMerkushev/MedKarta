@@ -384,7 +384,7 @@ export const buildOutline = (redactedText, placeholders, locationTokens, analyse
 
   return items
     .sort((left, right) => left.position - right.position)
-    .map(({ position, ...rest }) => rest);
+    .map(({ position: _position, ...rest }) => rest);
 };
 
 const emptyContext = (sessionId, requestId) => ({
