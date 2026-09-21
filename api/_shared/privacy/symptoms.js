@@ -1,0 +1,191 @@
+/*
+ * © 2026 MedКарта Казань. Все права защищены.
+ *
+ * Локальный детерминированный классификатор жалоб.
+ *
+ * ЗАЧЕМ. «Меня зовут Иван, неделю болит живот и тошнит» не должно уходить
+ * внешней модели целиком: это сведения о состоянии здоровья. Классификатор
+ * превращает описание в набор специальностей, и наружу уходит уже
+ * «пользователь ищет therapist или gastroenterologist» — без текста жалобы.
+ *
+ * ЭТО НЕ ДИАГНОСТИКА. Модуль не ставит диагноз, не оценивает тяжесть и не
+ * назначает лечение. Он выбирает профиль специалиста для поиска по справочнику
+ * и ничего больше. Любой вывод, представленный пользователю, обязан
+ * сопровождаться этой оговоркой (см. executor/resultBuilder.js).
+ *
+ * Слой намеренно отделён интерфейсом classifySymptoms(text): замена его
+ * локальной LLM не затрагивает ни Planner, ни Executor.
+ */
+
+import { normalizeRu } from './normalize.js';
+import { stemWord } from './morphology.js';
+
+/**
+ * Красные флаги. При совпадении запрос НЕ уходит ни во внешнюю модель,
+ * ни в обычный поиск: пользователю немедленно показывается указание
+ * вызвать экстренную помощь.
+ */
+const RED_FLAGS = [
+  { id: 'chest_pain', words: ['боль груд', 'болит груд', 'давит груд', 'жжет груд', 'сжимает груд'] },
+  { id: 'breathing', words: ['не могу дышать', 'нечем дышать', 'задыхаюсь', 'удушье', 'остановка дыхания'] },
+  { id: 'consciousness', words: ['потерял сознание', 'потеря сознания', 'без сознания', 'обморок', 'не приходит в себя'] },
+  { id: 'bleeding', words: ['сильное кровотечение', 'кровотечение не останавливается', 'рвота кровью', 'кровь изо рта'] },
+  { id: 'stroke', words: ['перекосило лицо', 'онемела половина', 'не могу говорить', 'речь пропала', 'инсульт'] },
+  { id: 'seizure', words: ['судороги', 'припадок', 'конвульсии'] },
+  { id: 'anaphylaxis', words: ['отек горла', 'отек гортани', 'анафилакт', 'отек квинке'] },
+  { id: 'trauma', words: ['открытый перелом', 'сильное отравление', 'ожог большой'] },
+  { id: 'self_harm', words: ['покончить с собой', 'не хочу жить', 'причинить себе вред'] },
+];
+
+/**
+ * Правила «жалоба → профиль специалиста».
+ * Порядок специальностей в каждом правиле — порядок предпочтения.
+ * weight отражает специфичность: «зуб» указывает на стоматолога надёжнее,
+ * чем «слабость» — на терапевта.
+ */
+const RULES = [
+  { id: 'dental', weight: 3, stems: ['зуб', 'десн', 'челюст', 'карие', 'пломб', 'коронк', 'прикус'], specialties: ['dentist'] },
+  { id: 'gastro', weight: 2, stems: ['живот', 'желудок', 'тошнот', 'тошнит', 'рвот', 'изжог', 'диаре', 'понос', 'запор', 'кишечник', 'печен', 'вздути', 'отрыжк', 'стул'], specialties: ['gastroenterologist', 'therapist'] },
+  { id: 'cardio', weight: 3, stems: ['сердц', 'аритми', 'давлени', 'пульс', 'сердцебиени', 'одышк', 'тахикарди'], specialties: ['cardiologist', 'therapist'] },
+  { id: 'neuro', weight: 2, stems: ['голов', 'мигрен', 'головокружени', 'спин', 'поясниц', 'онемени', 'шея', 'шеи', 'шее', 'невралги', 'бессонниц', 'памят', 'защемлени'], specialties: ['neurologist', 'therapist'] },
+  { id: 'derma', weight: 3, stems: ['кож', 'сып', 'зуд', 'прыщ', 'родинк', 'экзем', 'псориаз', 'волос', 'ногт', 'шелушени'], specialties: ['dermatologist'] },
+  { id: 'ophthalmo', weight: 3, stems: ['глаз', 'зрени', 'век', 'слезит', 'близорук', 'дальнозорк', 'ячмен'], specialties: ['ophthalmologist'] },
+  { id: 'lor', weight: 3, stems: ['ухо', 'уши', 'ушн', 'горл', 'нос', 'насморк', 'гайморит', 'ангин', 'слух', 'миндалин', 'осиплост', 'храп'], specialties: ['lor', 'therapist'] },
+  { id: 'endo', weight: 3, stems: ['щитовидн', 'сахар', 'гормон', 'диабет', 'похудени'], specialties: ['endocrinologist', 'therapist'] },
+  { id: 'gyneco', weight: 3, stems: ['беременн', 'менструа', 'цикл', 'гинеколог'], specialties: ['gynecologist'] },
+  { id: 'uro', weight: 3, stems: ['почк', 'мочев', 'простат', 'мочеиспускани'], specialties: ['urologist', 'therapist'] },
+  { id: 'ortho', weight: 2, stems: ['перелом', 'вывих', 'ушиб', 'сустав', 'колен', 'травм', 'связк', 'плеч'], specialties: ['traumatologist', 'orthopedist'] },
+  { id: 'surgery', weight: 2, stems: ['грыж', 'аппендиц', 'операци', 'шов', 'нарыв', 'фурункул'], specialties: ['surgeon'] },
+  { id: 'mental', weight: 2, stems: ['тревог', 'депресс', 'паническ', 'апати', 'выгорани'], specialties: ['psychiatrist', 'therapist'] },
+  { id: 'general', weight: 2, stems: ['температур', 'слабост', 'простуд', 'орви', 'грипп', 'кашел', 'недомогани', 'озноб', 'лихорадк', 'усталост'], specialties: ['therapist'] },
+];
+
+/** Указатели на то, что речь идёт о ребёнке. */
+const CHILD_STEMS = ['ребенок', 'ребенк', 'дет', 'малыш', 'грудничк', 'сын', 'доч', 'подростк', 'младенц'];
+
+/** Лексика, выдающая описание состояния здоровья независимо от специальности. */
+const MEDICAL_MARKERS = [
+  'болит', 'больно', 'боль', 'беспокоит', 'мучает', 'чувствую', 'самочувств',
+  'симптом', 'жалоб', 'болею', 'заболел', 'ноет', 'колет', 'тянет', 'ломит',
+  'приступ', 'обострени', 'хроническ', 'диагноз', 'анализ', 'узи', 'мрт',
+  'нехорошо', 'дурно', 'тошно', 'кружится', 'знобит', 'температур', 'давлени',
+  'мне плохо', 'стало плохо', 'плохо себя', 'у меня', 'недомогани',
+];
+
+/** Убирает односимвольные служебные слова: «боль в груди» → «боль груди». */
+const compactPhrase = (value) =>
+  value
+    .split(' ')
+    .filter((word) => word.length > 1)
+    .join(' ');
+
+const PRECOMPILED = RULES.map((rule) => ({ ...rule, stems: rule.stems.map((stem) => normalizeRu(stem)) }));
+const CHILD_NORMALIZED = CHILD_STEMS.map((stem) => normalizeRu(stem));
+const MARKERS_NORMALIZED = MEDICAL_MARKERS.map((marker) => normalizeRu(marker));
+const RED_FLAGS_NORMALIZED = RED_FLAGS.map((flag) => ({
+  id: flag.id,
+  words: flag.words.map((word) => normalizeRu(word)),
+}));
+
+/**
+ * Проверка «основа слова из текста начинается с основы из правила».
+ * Сравнение по префиксу, а не по равенству: «живота», «животе», «животом»
+ * сводятся к «живот», но «тошнит» и «тошнота» дают разные основы.
+ */
+const matchesStem = (tokenStems, ruleStem) =>
+  tokenStems.some((token) => {
+    if (token.startsWith(ruleStem)) {
+      return true;
+    }
+    /*
+     * Обратное направление — на случай, когда stemWord срезал больше, чем
+     * основа в правиле. Допуск жёсткий: не более двух символов и не короче
+     * пяти. Без этого ограничения «груди» совпадало с «грудничк» и любой
+     * запрос про боль в груди помечался как детский.
+     */
+    return ruleStem.startsWith(token) && token.length >= 5 && ruleStem.length - token.length <= 2;
+  });
+
+/**
+ * Классифицирует жалобу.
+ *
+ * @param {string} text исходный (или уже редактированный) текст пользователя
+ * @returns {{
+ *   emergency: null | {id: string},
+ *   hasMedicalText: boolean,
+ *   specialties: string[],
+ *   confidence: number,
+ *   isChild: boolean,
+ *   matchedRules: string[]
+ * }}
+ */
+export const classifySymptoms = (text) => {
+  const normalized = normalizeRu(text);
+  const tokens = normalized.split(' ').filter(Boolean);
+  const tokenStems = tokens.map((token) => stemWord(token));
+
+  /*
+   * Красные флаги сверяются и с исходной нормализованной строкой, и с
+   * «сжатой» — без односимвольных предлогов. Иначе «давит в груди» не
+   * совпадало бы с флагом «давит груд» из-за одного предлога, а это ровно
+   * тот случай, где цена пропуска максимальна.
+   */
+  const compact = compactPhrase(normalized);
+  const emergency = RED_FLAGS_NORMALIZED.find((flag) =>
+    flag.words.some((word) => normalized.includes(word) || compact.includes(compactPhrase(word))),
+  );
+
+  const scores = new Map();
+  const matchedRules = [];
+
+  for (const rule of PRECOMPILED) {
+    const hits = rule.stems.filter((stem) => matchesStem(tokenStems, stem)).length;
+    if (hits === 0) continue;
+
+    matchedRules.push(rule.id);
+    rule.specialties.forEach((specialty, position) => {
+      const contribution = rule.weight * hits * (position === 0 ? 1 : 0.5);
+      scores.set(specialty, (scores.get(specialty) || 0) + contribution);
+    });
+  }
+
+  const isChild = CHILD_NORMALIZED.some((stem) => matchesStem(tokenStems, stem));
+
+  // Ребёнку профильный приём — у педиатра; терапевт остаётся запасным вариантом.
+  if (isChild && scores.has('therapist')) {
+    scores.set('pediatrician', (scores.get('therapist') || 0) + 0.5);
+  }
+
+  const ranked = [...scores.entries()].sort((left, right) => right[1] - left[1]);
+  const total = ranked.reduce((sum, [, score]) => sum + score, 0);
+  const top = ranked[0]?.[1] || 0;
+
+  const hasMedicalText =
+    matchedRules.length > 0 ||
+    MARKERS_NORMALIZED.some((marker) => normalized.includes(marker)) ||
+    Boolean(emergency);
+
+  /*
+   * Уверенность складывается из двух независимых величин:
+   *   strength  — насколько специфичны сработавшие слова («зуб» против
+   *               «слабость»); нормируется по весу лидера;
+   *   dominance — насколько лидер оторвался от прочих кандидатов.
+   * Единственное общее слово («слабость») даёт ~0.33 и уводит Gateway
+   * в fail-closed: лучше переспросить, чем угадать профиль врача.
+   */
+  const dominance = total > 0 ? top / total : 0;
+  const strength = Math.min(1, top / 3);
+  const confidence = Number((strength * (0.5 + 0.5 * dominance)).toFixed(3));
+
+  return {
+    emergency: emergency ? { id: emergency.id } : null,
+    hasMedicalText,
+    specialties: ranked.slice(0, 3).map(([specialty]) => specialty),
+    confidence,
+    isChild,
+    matchedRules,
+  };
+};
+
+export const SYMPTOM_RULE_IDS = Object.freeze(RULES.map((rule) => rule.id));
+export const RED_FLAG_IDS = Object.freeze(RED_FLAGS.map((flag) => flag.id));
