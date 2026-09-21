@@ -94,8 +94,38 @@ backend/routing/
 
 ```bash
 node scripts/build-road-graph.mjs                    # Казань по умолчанию
-node scripts/build-road-graph.mjs --tiles 4          # мельче тайлы, если Overpass отваливается
+node scripts/build-road-graph.mjs --tiles 4          # мельче тайлы, если запрос не укладывается в таймаут
+node scripts/build-road-graph.mjs --endpoint https://overpass.kumi.systems/api/interpreter
 node scripts/build-road-graph.mjs --input dump.json  # из готовой выгрузки, без сети
+```
+
+Скрипт сам ждёт свободный слот: спрашивает `/api/status` и выдерживает
+паузу, вместо того чтобы получать `429`. Публичные зеркала Overpass —
+волонтёрский ресурс, и выгрузка делается один раз, спешить некуда.
+
+### Если Overpass отказывает
+
+При ошибке скрипт печатает **тело ответа сервера**, а не только код.
+Частые случаи:
+
+| Код | Причина | Что делать |
+|---|---|---|
+| 406 | Зеркало не приняло запрос: чаще всего из-за безымянного User-Agent | Скрипт представляется сам; если повторяется — попробуйте `--endpoint` с другим зеркалом |
+| 429 | Все слоты квоты заняты | Скрипт ждёт освобождения; при упорстве уменьшите `--tiles` |
+| 504 | Запрос не уложился в таймаут | Увеличьте `--tiles`, чтобы тайлы стали мельче |
+
+Обходной путь, если зеркала недоступны: выполните запрос вручную на
+[overpass-turbo.eu](https://overpass-turbo.eu), экспортируйте результат
+в JSON и соберите граф из файла:
+
+```bash
+node scripts/build-road-graph.mjs --input ~/Downloads/export.json
+```
+
+Запрос, который нужно выполнить, печатается командой:
+
+```bash
+node -e "import('./backend/routing/osm.js').then(m=>console.log(m.buildOverpassQuery([55.65,48.85,55.98,49.42])))"
 ```
 
 Результат — `data/graph/kazan.graph`. Файл кладётся рядом с приложением;

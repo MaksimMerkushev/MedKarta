@@ -16,7 +16,7 @@ import { createSearch, SEARCH_RESULT } from '../backend/routing/astar.js';
 import { createGraph } from '../backend/routing/graph.js';
 import { createRoutingEngine, ROUTING_ERROR } from '../backend/routing/engine.js';
 import { ACCESS, decodeGraph, encodeGraph, PROFILES } from '../backend/routing/format.js';
-import { osmToGraph, parseMaxSpeed, wayAccess } from '../backend/routing/osm.js';
+import { buildOverpassQuery, osmToGraph, parseMaxSpeed, wayAccess } from '../backend/routing/osm.js';
 import { buildGridGraph, GRID, nodeIndex, referenceDijkstra } from './fixtures/roadGraph.js';
 
 const materialize = (raw) => createGraph(decodeGraph(encodeGraph(raw)));
@@ -429,5 +429,40 @@ describe('Разбор выгрузки OpenStreetMap', () => {
       SEARCH_RESULT.FOUND,
       'пешеходу перекрыли путь по односторонней улице',
     );
+  });
+});
+
+describe('Запрос к Overpass', () => {
+  it('просит пути ВМЕСТЕ С ТЕГАМИ, а не только скелет', () => {
+    const query = buildOverpassQuery([55.65, 48.85, 55.98, 49.42]);
+
+    // Один «out skel» на всё выглядит правдоподобно — узлы и пути на месте,
+    // размер ответа нормальный, — но теги отброшены, и граф выходит пустым.
+    // Эта ошибка уже была, поэтому закреплена тестом.
+    assert.match(query, /out body;/, 'пути запрошены без тегов');
+    assert.match(query, />;/, 'нет рекурсии к узлам путей');
+    assert.match(query, /out skel qt;/, 'узлы должны выгружаться без тегов');
+    assert.ok(
+      query.indexOf('out body;') < query.indexOf('out skel qt;'),
+      'порядок операторов неверный: сначала пути с тегами, потом их узлы',
+    );
+  });
+
+  it('подставляет рамку в правильном порядке', () => {
+    const query = buildOverpassQuery([55.1, 48.2, 55.3, 48.4]);
+    assert.match(query, /\(55\.1,48\.2,55\.3,48\.4\)/);
+  });
+
+  it('выгрузка без тегов не даёт ни одной дороги — сборщик обязан это заметить', () => {
+    const skeleton = [
+      { type: 'node', id: 1, lat: 55.79, lon: 49.11 },
+      { type: 'node', id: 2, lat: 55.791, lon: 49.11 },
+      { type: 'way', id: 10, nodes: [1, 2] },
+    ];
+
+    const { stats } = osmToGraph(skeleton);
+    assert.equal(stats.osmWays, 1);
+    assert.equal(stats.acceptedWays, 0, 'путь без тегов не должен приниматься');
+    assert.equal(stats.nodeCount, 0);
   });
 });

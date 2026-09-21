@@ -22,7 +22,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { encodeGraph } from '../backend/routing/format.js';
-import { osmToGraph } from '../backend/routing/osm.js';
+import { buildOverpassQuery, osmToGraph } from '../backend/routing/osm.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -33,10 +33,18 @@ const DEFAULT_OUT = 'data/graph/kazan.graph';
 const ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.osm.jp/api/interpreter',
 ];
 
+/*
+ * Overpass требует осмысленного User-Agent: запросы от безымянного клиента
+ * зеркала отклоняют, в том числе кодом 406. Node по умолчанию такого
+ * заголовка не ставит.
+ */
+const USER_AGENT = 'MedKarta-graph-builder/1.0 (https://github.com/MaksimMerkushev/med-navigator)';
+
 const parseArgs = (argv) => {
-  const args = { tiles: 3, out: DEFAULT_OUT, bbox: DEFAULT_BBOX, input: null };
+  const args = { tiles: 2, out: DEFAULT_OUT, bbox: DEFAULT_BBOX, input: null, endpoint: null };
   for (let i = 0; i < argv.length; i += 1) {
     const [key, inline] = argv[i].split('=');
     const value = inline ?? argv[i + 1];
@@ -44,6 +52,7 @@ const parseArgs = (argv) => {
     else if (key === '--tiles') { args.tiles = Math.max(1, Number(value)); if (!inline) i += 1; }
     else if (key === '--out') { args.out = value; if (!inline) i += 1; }
     else if (key === '--input') { args.input = value; if (!inline) i += 1; }
+    else if (key === '--endpoint') { args.endpoint = value; if (!inline) i += 1; }
   }
   if (args.bbox.length !== 4 || args.bbox.some((n) => !Number.isFinite(n))) {
     throw new Error('--bbox ожидает четыре числа: south,west,north,east');
@@ -54,34 +63,82 @@ const parseArgs = (argv) => {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Запрос к Overpass с повторами.
+ * Ждёт свободный слот на сервере Overpass.
  *
- * Публичные серверы Overpass — общий ресурс волонтёрского проекта. Между
- * тайлами выдерживается пауза, при отказе — увеличенная задержка и смена
- * зеркала. Выгрузка делается один раз, спешить некуда.
+ * Публичные зеркала выдают квоту слотами и отвечают 429, когда все заняты.
+ * Правильнее спросить об этом заранее у /api/status, чем ломиться и получать
+ * отказ: это и вежливее к волонтёрскому проекту, и надёжнее.
  */
-const fetchTile = async (bbox, attempt = 0) => {
-  const [south, west, north, east] = bbox;
-  const query = `[out:json][timeout:180];
-way["highway"]["highway"!~"^(proposed|construction|raceway|bus_guideway|escape|elevator|platform|corridor)$"](${south},${west},${north},${east});
-(._;>;);
-out skel qt;`;
+const waitForSlot = async (endpoint, maxWaitMs = 180_000) => {
+  const statusUrl = endpoint.replace(/\/interpreter$/, '/status');
+  const deadline = Date.now() + maxWaitMs;
 
-  const endpoint = ENDPOINTS[attempt % ENDPOINTS.length];
+  while (Date.now() < deadline) {
+    let text = '';
+    try {
+      const response = await fetch(statusUrl, { headers: { 'User-Agent': USER_AGENT } });
+      text = await response.text();
+    } catch {
+      return; // статус недоступен — пробуем запрос как есть
+    }
+
+    if (/\d+ slots? available now/i.test(text) || /Rate limit: 0/i.test(text)) {
+      return;
+    }
+
+    const waits = [...text.matchAll(/in (\d+) seconds/gi)].map((m) => Number(m[1]));
+    if (waits.length === 0) return;
+
+    const wait = Math.min(...waits) + 2;
+    process.stdout.write(`\n    все слоты заняты, жду ${wait} c…`);
+    await sleep(wait * 1000);
+  }
+};
+
+/**
+ * Один запрос к Overpass с повторами.
+ *
+ * Тело ответа при ошибке ПЕЧАТАЕТСЯ. Раньше наружу шёл только код состояния,
+ * и понять, что именно не понравилось серверу, было невозможно.
+ */
+const fetchTile = async (bbox, endpoints, attempt = 0) => {
+  const endpoint = endpoints[attempt % endpoints.length];
+  await waitForSlot(endpoint);
+
   const response = await fetch(endpoint, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: `data=${encodeURIComponent(query)}`,
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': USER_AGENT,
+      Accept: 'application/json',
+    },
+    body: `data=${encodeURIComponent(buildOverpassQuery(bbox))}`,
   });
 
   if (!response.ok) {
-    if (attempt >= 5) {
-      throw new Error(`Overpass ответил ${response.status} после ${attempt + 1} попыток`);
+    const detail = (await response.text().catch(() => '')).replace(/\s+/g, ' ').trim();
+    if (attempt >= 6) {
+      throw new Error(
+        `Overpass отвечает ${response.status} после ${attempt + 1} попыток.\n` +
+        `Ответ сервера: ${detail.slice(0, 400)}\n\n` +
+        'Обходной путь: откройте https://overpass-turbo.eu, выполните там запрос,\n' +
+        'экспортируйте результат в JSON и соберите граф из файла:\n' +
+        '  node scripts/build-road-graph.mjs --input путь/к/export.json',
+      );
     }
-    const wait = 15_000 * (attempt + 1);
-    process.stdout.write(`    ответ ${response.status}, повтор через ${wait / 1000} c\n`);
+
+    const retryAfter = Number(response.headers.get('retry-after'));
+    const wait = Number.isFinite(retryAfter) && retryAfter > 0
+      ? retryAfter * 1000
+      : Math.min(120_000, 10_000 * 2 ** attempt);
+
+    process.stdout.write(
+      `\n    ответ ${response.status}` +
+      (detail ? ` (${detail.slice(0, 120)})` : '') +
+      `, повтор через ${Math.round(wait / 1000)} c через другое зеркало\n    `,
+    );
     await sleep(wait);
-    return fetchTile(bbox, attempt + 1);
+    return fetchTile(bbox, endpoints, attempt + 1);
   }
 
   const payload = await response.json();
@@ -122,7 +179,7 @@ const main = async () => {
     const seen = new Map();
     for (const [index, part] of parts.entries()) {
       process.stdout.write(`  тайл ${index + 1}/${parts.length}…`);
-      const tile = await fetchTile(part);
+      const tile = await fetchTile(part, args.endpoint ? [args.endpoint] : ENDPOINTS);
       for (const element of tile) {
         seen.set(`${element.type}/${element.id}`, element);
       }
@@ -135,8 +192,16 @@ const main = async () => {
   process.stdout.write(`\nСобираю граф из ${elements.length.toLocaleString('ru')} элементов…\n`);
   const { graph, stats } = osmToGraph(elements);
 
+  if (stats.acceptedWays === 0) {
+    throw new Error(
+      `в выгрузке ${stats.osmWays} путей, но ни одного пригодного.\n` +
+      'Самая частая причина — выгрузка без тегов: оператор `out skel` их отбрасывает,\n' +
+      'а без highway, maxspeed и oneway путь для графа бесполезен. Нужен `out body`\n' +
+      'для путей и только потом `>; out skel qt;` для их узлов.',
+    );
+  }
   if (stats.nodeCount === 0) {
-    throw new Error('в выгрузке не оказалось ни одной пригодной дороги');
+    throw new Error('в выгрузке не оказалось ни одного узла дорожной сети');
   }
 
   const buffer = encodeGraph(graph);

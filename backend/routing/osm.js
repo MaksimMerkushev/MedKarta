@@ -237,3 +237,26 @@ export const osmToGraph = (elements) => {
     },
   };
 };
+
+/**
+ * Запрос к Overpass за дорожной сетью в рамке.
+ *
+ * ВАЖНО ПРО ФОРМУ ВЫВОДА. Здесь два оператора вывода, и это не избыточность:
+ *
+ *   out body;   — пути ВМЕСТЕ С ТЕГАМИ;
+ *   >;          — рекурсия вниз, к узлам этих путей;
+ *   out skel qt; — узлы без тегов, только координаты.
+ *
+ * Соблазнительно написать один `out skel qt` на всё — и получить ответ,
+ * который выглядит полным: узлы на месте, пути на месте, размер правдоподобный.
+ * Но `skel` выбрасывает теги, а без highway, maxspeed и oneway путь для графа
+ * бесполезен: сборщик отвергнет все до единого и молча выдаст пустой граф.
+ * Именно эта ошибка здесь и была.
+ *
+ * @param {[number, number, number, number]} bbox [south, west, north, east]
+ */
+export const buildOverpassQuery = ([south, west, north, east]) => `[out:json][timeout:180];
+way["highway"](${south},${west},${north},${east});
+out body;
+>;
+out skel qt;`;
