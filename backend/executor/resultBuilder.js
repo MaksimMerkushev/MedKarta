@@ -17,7 +17,7 @@
  */
 
 import { SPECIALTY_CANON } from '../privacy/catalog.js';
-import { DEFAULT_REPLY, sanitizeAiAction } from '../sanitize.js';
+import { DEFAULT_REPLY, sanitizeAiAction } from '../../shared/contract.js';
 
 const CONSTRAINT_LABELS = Object.freeze({
   available_after: 'приём после указанного времени',

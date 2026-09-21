@@ -3,13 +3,13 @@
  * Общая обвязка тестов: конвейер на фикстуре, без сети и без реальной базы.
  */
 
-import { createPipeline } from '../api/_shared/pipeline.js';
-import { createEntityResolver } from '../api/_shared/privacy/entityResolver.js';
-import { createPrivacyGateway } from '../api/_shared/privacy/gateway.js';
-import { createMemoryStore, createTokenVault } from '../api/_shared/storage/tokenVault.js';
-import { createHaversineRoutingProvider } from '../api/_shared/executor/routing.js';
-import { createSafeLogger } from '../api/_shared/observability/safeLogger.js';
-import { createMetrics } from '../api/_shared/observability/metrics.js';
+import { createPipeline } from '../backend/pipeline.js';
+import { createEntityResolver } from '../backend/privacy/entityResolver.js';
+import { createPrivacyGateway } from '../backend/privacy/gateway.js';
+import { createMemoryStore, createTokenVault } from '../backend/storage/tokenVault.js';
+import { createHaversineRoutingProvider } from '../backend/executor/routing.js';
+import { createSafeLogger } from '../backend/observability/safeLogger.js';
+import { createMetrics } from '../backend/observability/metrics.js';
 import { fixtureCatalog } from './fixtures/catalog.js';
 
 export const TEST_SECRET = 'test-secret-0123456789abcdef';

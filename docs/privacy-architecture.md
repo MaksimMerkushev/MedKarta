@@ -12,7 +12,7 @@
 > Раздел 10 — перечень вопросов, которые нужно ему задать.
 
 Версия политики приватности: `2026-09-21.1`
-(`api/_shared/privacy/policies.js`, константа `POLICY_VERSION`).
+(`backend/privacy/policies.js`, константа `POLICY_VERSION`).
 
 ---
 
@@ -26,7 +26,7 @@ flowchart TB
     end
 
     subgraph trusted["ДОВЕРЕННЫЙ КОНТУР — serverless-функция"]
-        API["api/chat.js — метод, Origin, rate limit, лимит тела"]
+        API["backend/api/chat.js — метод, Origin, rate limit, лимит тела"]
         GW["PRIVACY GATEWAY — детекторы, entity linking, классификатор жалоб, редактура"]
         VAULT[("TOKEN VAULT — @DOCTOR_A в id, HMAC по сессии, TTL 900 c")]
         LOCAL["ЛОКАЛЬНЫЙ ПЛАНИРОВЩИК — детерминированный, без сети"]
@@ -414,28 +414,32 @@ Policy Engine, бюджеты сложности и политику логир�
 
 | Файл | Ответственность |
 |---|---|
-| `api/_shared/privacy/normalize.js` | нормализация, гомоглифы, метрики похожести |
-| `api/_shared/privacy/morphology.js` | основы русских фамилий и слов |
-| `api/_shared/privacy/detectors.js` | регулярные детекторы и эвристика ФИО |
-| `api/_shared/privacy/catalog.js` | загрузка справочника |
-| `api/_shared/privacy/entityResolver.js` | entity linking к справочнику |
-| `api/_shared/privacy/symptoms.js` | локальный классификатор жалоб |
-| `api/_shared/privacy/redaction.js` | замена по исходным индексам |
-| `api/_shared/privacy/policies.js` | пороги fail-closed, версия политики |
-| `api/_shared/privacy/models.js` | `SanitizedPlannerRequest`, решения Gateway |
-| `api/_shared/privacy/gateway.js` | оркестратор; единственный источник типа |
-| `api/_shared/storage/tokenVault.js` | токены, TTL, изоляция сессий |
-| `api/_shared/planner/schema.js` | перечисления и лимиты плана |
-| `api/_shared/planner/validator.js` | строгая валидация ответа модели |
-| `api/_shared/planner/prompts.js` | системный промпт (спецификация формата) |
-| `api/_shared/planner/client.js` | единственный исходящий вызов к модели |
-| `api/_shared/planner/localPlanner.js` | детерминированный планировщик |
-| `api/_shared/executor/policyEngine.js` | авторизация и бюджет сложности |
-| `api/_shared/executor/catalogRepository.js` | доступ к справочнику, место для PostGIS |
-| `api/_shared/executor/routing.js` | абстракция маршрутизации |
-| `api/_shared/executor/actions.js` | исполнение плана |
-| `api/_shared/executor/resultBuilder.js` | детерминированные шаблоны ответа |
-| `api/_shared/observability/safeLogger.js` | логирование по белому списку |
-| `api/_shared/observability/metrics.js` | privacy-safe метрики |
-| `api/_shared/pipeline.js` | сборка и деградация |
-| `api/chat.js` | точка входа |
+| `backend/privacy/normalize.js` | нормализация, гомоглифы, метрики похожести |
+| `backend/privacy/morphology.js` | основы русских фамилий и слов |
+| `backend/privacy/detectors.js` | регулярные детекторы и эвристика ФИО |
+| `backend/privacy/catalog.js` | загрузка справочника |
+| `backend/privacy/entityResolver.js` | entity linking к справочнику |
+| `backend/privacy/symptoms.js` | локальный классификатор жалоб |
+| `backend/privacy/redaction.js` | замена по исходным индексам |
+| `backend/privacy/policies.js` | пороги fail-closed, версия политики |
+| `backend/privacy/models.js` | `SanitizedPlannerRequest`, решения Gateway |
+| `backend/privacy/gateway.js` | оркестратор; единственный источник типа |
+| `backend/storage/tokenVault.js` | токены, TTL, изоляция сессий |
+| `backend/planner/schema.js` | перечисления и лимиты плана |
+| `backend/planner/validator.js` | строгая валидация ответа модели |
+| `backend/planner/prompts.js` | системный промпт (спецификация формата) |
+| `backend/planner/client.js` | единственный исходящий вызов к модели |
+| `backend/planner/localPlanner.js` | детерминированный планировщик |
+| `backend/executor/policyEngine.js` | авторизация и бюджет сложности |
+| `backend/executor/catalogRepository.js` | доступ к справочнику, место для PostGIS |
+| `backend/executor/routing.js` | абстракция маршрутизации |
+| `backend/executor/actions.js` | исполнение плана |
+| `backend/executor/resultBuilder.js` | детерминированные шаблоны ответа |
+| `backend/observability/safeLogger.js` | логирование по белому списку |
+| `backend/observability/metrics.js` | privacy-safe метрики |
+| `backend/pipeline.js` | сборка и деградация |
+| `backend/api/chat.js` | точка входа |
+| `backend/http/securityHeaders.js` | заголовки безопасности в коде |
+| `backend/server.js` | автономный сервер: API, статика, заголовки |
+| `shared/contract.js` | контракт интерфейса, общий для фронта и бекенда |
+| `data/` | справочники врачей, клиник и учреждений |

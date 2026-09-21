@@ -179,7 +179,7 @@ let cached = null;
 /**
  * Каталог по умолчанию.
  *
- * Полная база (`src/verifiedDoctors.full.js`) не попадает в git и может
+ * Полная база (`data/doctors.full.js`) не попадает в git и может
  * отсутствовать. Отсутствие файла — не ошибка: подставляется публичный срез.
  * Ни при каких обстоятельствах загрузчик не выдумывает записи.
  *
@@ -191,16 +191,16 @@ export const loadCatalog = async () => {
   }
 
   const [doctorsModule, clinicsModule, facilitiesModule] = await Promise.all([
-    import('../../../src/verifiedDoctors.js').catch(() => ({ verifiedDoctors: [] })),
-    import('../../../src/ClinicsData.js').catch(() => ({ ClinicsData: { clinics: [] } })),
+    import('../../data/doctors.js').catch(() => ({ verifiedDoctors: [] })),
+    import('../../data/clinics.js').catch(() => ({ ClinicsData: { clinics: [] } })),
     process.env.PRIVACY_CATALOG_FACILITIES === 'off'
       ? Promise.resolve({ kazanFacilities: [] })
-      : import('../../../src/kazanFacilities.js').catch(() => ({ kazanFacilities: [] })),
+      : import('../../data/facilities.js').catch(() => ({ kazanFacilities: [] })),
   ]);
 
   let doctors = doctorsModule.verifiedDoctors || [];
   try {
-    const full = await import('../../../src/verifiedDoctors.full.js');
+    const full = await import('../../data/doctors.full.js');
     const fullList = full.verifiedDoctors || full.default;
     if (Array.isArray(fullList) && fullList.length > doctors.length) {
       doctors = fullList;

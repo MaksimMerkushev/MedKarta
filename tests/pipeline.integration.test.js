@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { PLANNER_ERROR } from '../api/_shared/planner/client.js';
+import { PLANNER_ERROR } from '../backend/planner/client.js';
 import { makeTestPipeline, TEST_SESSION } from './helpers.js';
 
 const ACCEPTANCE =

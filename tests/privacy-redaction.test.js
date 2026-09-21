@@ -6,10 +6,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { detectEntities, ENTITY_KIND } from '../api/_shared/privacy/detectors.js';
-import { stemSurname, stemWord } from '../api/_shared/privacy/morphology.js';
-import { createEntityResolver } from '../api/_shared/privacy/entityResolver.js';
-import { GATEWAY_DECISION } from '../api/_shared/privacy/models.js';
+import { detectEntities, ENTITY_KIND } from '../backend/privacy/detectors.js';
+import { stemSurname, stemWord } from '../backend/privacy/morphology.js';
+import { createEntityResolver } from '../backend/privacy/entityResolver.js';
+import { GATEWAY_DECISION } from '../backend/privacy/models.js';
 import { fixtureCatalog } from './fixtures/catalog.js';
 import { makeGateway, TEST_SESSION } from './helpers.js';
 

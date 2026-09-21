@@ -9,8 +9,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { GATEWAY_DECISION } from '../api/_shared/privacy/models.js';
-import { detectEntities } from '../api/_shared/privacy/detectors.js';
+import { GATEWAY_DECISION } from '../backend/privacy/models.js';
+import { detectEntities } from '../backend/privacy/detectors.js';
 import { makeTestPipeline, TEST_SESSION } from './helpers.js';
 import { FIXTURE_DOCTORS } from './fixtures/catalog.js';
 
@@ -57,7 +57,7 @@ describe('11. Сырые персональные данные не уходят
   });
 
   it('предохранитель клиента отклоняет запрос с остаточными данными', async () => {
-    const { assertOutboundSafe } = await import('../api/_shared/planner/client.js');
+    const { assertOutboundSafe } = await import('../backend/planner/client.js');
     assert.deepEqual(assertOutboundSafe('Построй маршрут к @DOCTOR_A, потом @HOME'), []);
     assert.ok(assertOutboundSafe('телефон +7 843 291-10-16').length > 0);
   });
@@ -167,12 +167,12 @@ describe('15. Медицинский текст не покидает конту
 
 describe('Граница типов', () => {
   it('Gateway — единственный источник SanitizedPlannerRequest', async () => {
-    const { SanitizedPlannerRequest } = await import('../api/_shared/privacy/models.js');
+    const { SanitizedPlannerRequest } = await import('../backend/privacy/models.js');
     assert.throws(() => new SanitizedPlannerRequest(Symbol('fake'), {}), /нельзя создать напрямую/);
   });
 
   it('внешний планировщик не принимает строку', async () => {
-    const { createExternalPlanner, PLANNER_ERROR } = await import('../api/_shared/planner/client.js');
+    const { createExternalPlanner, PLANNER_ERROR } = await import('../backend/planner/client.js');
     const planner = createExternalPlanner({ apiKey: 'k', url: 'https://example.test/v1', model: 'm' });
 
     await assert.rejects(

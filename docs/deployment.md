@@ -1,0 +1,120 @@
+# Развёртывание
+
+Проект разворачивается на собственном сервере. Конфигурации хостинг-платформ
+в репозитории больше нет — всё, что влияет на безопасность, живёт в коде
+(см. `docs/legacy/README.md`, почему это важно).
+
+## Структура репозитория
+
+```
+backend/          серверный код; в браузер не попадает никогда
+  api/chat.js       точка входа HTTP
+  server.js         автономный сервер: API + статика + заголовки
+  pipeline.js       сборка конвейера
+  privacy/          Privacy Gateway: детекторы, entity linking, редактура
+  planner/          контракт плана, валидатор, адаптер модели
+  executor/         авторизация, справочник, маршрутизация, шаблоны ответа
+  storage/          хранилище session-токенов
+  observability/    безопасное логирование и метрики
+  http/             приём запросов: лимит частоты, заголовки безопасности
+
+frontend/         всё, что попадает в браузер
+  index.html
+  public/
+  src/
+
+shared/           контракт между фронтендом и бекендом
+  contract.js       лимиты, перечисления, нормализация ответа
+
+data/             справочники; это данные, а не код
+  doctors.js        публичный срез
+  doctors.full.js   полная база (вне git)
+  clinics.js
+  facilities.js
+
+tests/  docs/  scripts/
+```
+
+Почему `shared/` отдельно: раньше `frontend/src` импортировал файл из папки
+серверного кода. Это не только некрасиво — серверный модуль попадал
+в браузерный бандл. Теперь у обеих сторон общий контракт, и направление
+зависимостей однозначно: фронтенд и бекенд зависят от `shared/`,
+друг от друга — нет. Правило проверяется тестом.
+
+## Запуск
+
+```bash
+npm ci
+npm run build          # собирает frontend/ в dist/
+npm start              # backend/server.js: API + статика из dist/
+```
+
+Переменные окружения — в `.env` в корне, шаблон в `.env.example`.
+Обязательная для продакшена: `PRIVACY_TOKEN_SECRET` (не короче 16 символов).
+Без неё берётся случайный секрет процесса, и соответствия токенов
+не переживают рестарт.
+
+| Переменная | Значение по умолчанию |
+|---|---|
+| `PORT` | 3001 |
+| `HOST` | 127.0.0.1 |
+| `SERVE_STATIC` | включено, если существует `dist/`; `off` — только API |
+
+## Если статику отдаёт nginx
+
+`backend/server.js` выставляет заголовки безопасности сам. Но если HTML
+отдаёт nginx, а сервер работает только как API (`SERVE_STATIC=off`), то
+**заголовки для страницы обязан выставлять nginx** — на ответах API они
+страницу не защищают.
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name medkarta.example;
+
+    add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.tile.openstreetmap.org; font-src 'self' data:; connect-src 'self' https://routing.openstreetmap.de; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests" always;
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "geolocation=(self), camera=(), microphone=(), payment=(), usb=(), magnetometer=(), accelerometer=(), gyroscope=(), browsing-topics=()" always;
+
+    root /srv/medkarta/dist;
+
+    location / {
+        try_files $uri /index.html;
+    }
+
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Host $host;
+        add_header Cache-Control "no-store, max-age=0" always;
+        add_header X-Robots-Tag "noindex" always;
+    }
+}
+```
+
+`X-Forwarded-For` нужен ограничителю частоты: без него все запросы придут
+с адреса прокси и лимит на адрес станет общим на всех.
+
+Оговорка про `add_header` в nginx: директивы не наследуются в блок `location`,
+если в нём есть собственный `add_header`. Поэтому в `/api/` и `/assets/`
+заголовки безопасности придётся перечислить повторно либо вынести их
+в подключаемый файл и `include` его в каждом блоке.
+
+## Что проверить перед выкладкой
+
+1. `npm test` — 129 тестов, включая проверки границы доверия.
+2. `npm run lint`.
+3. `PRIVACY_TOKEN_SECRET` задан в окружении.
+4. В сборке нет секретов: `grep -R "sk-\|ghp_" dist/ || echo чисто`.
+5. `data/doctors.full.js` не попал в git: `git check-ignore data/doctors.full.js`.
+6. Обратный прокси **не пишет тела запросов** в логи. Privacy Gateway
+   бессмыслен, если исходный текст оседает в логах nginx.
+7. Sentry или APM не подключён с автоматическим захватом тела запроса.

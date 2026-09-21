@@ -5,11 +5,11 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist', 'node_modules', '.vercel', 'scratch']),
+  globalIgnores(['dist', 'node_modules', '.vercel', 'scratch', 'data/*.full.js']),
 
   // Клиентский код: окружение браузера.
   {
-    files: ['src/**/*.{js,jsx}'],
+    files: ['frontend/src/**/*.{js,jsx}'],
     extends: [
       js.configs.recommended,
       reactHooks.configs.flat.recommended,
@@ -44,7 +44,9 @@ export default defineConfig([
   // Серверные функции, скрипты и конфиги: окружение Node.
   {
     files: [
-      'api/**/*.js',
+      'backend/**/*.js',
+      'shared/**/*.js',
+      'data/**/*.js',
       'scripts/**/*.{js,mjs}',
       'vite.config.js',
       'eslint.config.js',
@@ -73,7 +75,7 @@ export default defineConfig([
    * Дублируется тестом tests/boundary.test.js на случай отключения линтера.
    */
   {
-    files: ['api/**/*.js'],
+    files: ['backend/**/*.js'],
     rules: {
       'no-restricted-imports': [
         'error',
@@ -107,7 +109,7 @@ export default defineConfig([
   },
 
   {
-    files: ['api/_shared/privacy/gateway.js'],
+    files: ['backend/privacy/gateway.js'],
     rules: { 'no-restricted-imports': 'off' },
   },
 

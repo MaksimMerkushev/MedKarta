@@ -16,11 +16,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { detectEntities, detectObfuscation, ENTITY_KIND } from '../api/_shared/privacy/detectors.js';
-import { createEntityResolver } from '../api/_shared/privacy/entityResolver.js';
-import { extractConstraints } from '../api/_shared/privacy/gateway.js';
-import { GATEWAY_DECISION } from '../api/_shared/privacy/models.js';
-import { translitKey } from '../api/_shared/privacy/normalize.js';
+import { detectEntities, detectObfuscation, ENTITY_KIND } from '../backend/privacy/detectors.js';
+import { createEntityResolver } from '../backend/privacy/entityResolver.js';
+import { extractConstraints } from '../backend/privacy/gateway.js';
+import { GATEWAY_DECISION } from '../backend/privacy/models.js';
+import { translitKey } from '../backend/privacy/normalize.js';
 import { fixtureCatalog } from './fixtures/catalog.js';
 import { makeGateway, TEST_SESSION } from './helpers.js';
 

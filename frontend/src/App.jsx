@@ -45,13 +45,13 @@ import {
   Wallet,
   HelpCircle,
 } from 'lucide-react';
-import { doctorsData } from './doctors';
-import { verifiedDoctors } from './verifiedDoctors';
-import { kazanFacilities } from './kazanFacilities';
-import { ClinicsData } from './ClinicsData';
+import { doctorsData } from '@data/doctors.legacy.js';
+import { verifiedDoctors } from '@data/doctors';
+import { kazanFacilities } from '@data/facilities.js';
+import { ClinicsData } from '@data/clinics.js';
 import Toast, { useToast } from './Toast';
 import SearchFilters from './SearchFilters';
-import { SORT_MODES } from '../api/_shared/sanitize.js';
+import { SORT_MODES } from '@shared/contract.js';
 import { useDebouncedValue } from './hooks/useDebouncedValue';
 import { isBoolean, isStringIdArray, useLocalStorageState } from './hooks/useLocalStorageState';
 

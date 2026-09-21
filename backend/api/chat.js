@@ -4,7 +4,7 @@
  * Серверная точка входа ИИ-навигатора.
  *
  * Функция больше НЕ является прокси к модели. Она принимает запрос, отдаёт его
- * конвейеру (api/_shared/pipeline.js) и возвращает готовое действие интерфейса.
+ * конвейеру (backend/pipeline.js) и возвращает готовое действие интерфейса.
  * Прямого обращения к внешней модели здесь нет и быть не должно: единственный
  * исходящий вызов живёт в planner/client.js и принимает только
  * SanitizedPlannerRequest.
@@ -13,11 +13,11 @@
  * лимит размера тела, разбор входных данных и безопасное логирование.
  */
 
-import { LIMITS, validateChatMessages } from './_shared/sanitize.js';
-import { checkRateLimit, getClientIp } from './_shared/rateLimit.js';
-import { getDefaultPipeline } from './_shared/pipeline.js';
-import { logger } from './_shared/observability/safeLogger.js';
-import { metrics } from './_shared/observability/metrics.js';
+import { LIMITS, validateChatMessages } from '../../shared/contract.js';
+import { checkRateLimit, getClientIp } from '../http/rateLimit.js';
+import { getDefaultPipeline } from '../pipeline.js';
+import { logger } from '../observability/safeLogger.js';
+import { metrics } from '../observability/metrics.js';
 
 const sendJson = (res, status, payload) => {
   res.statusCode = status;

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const doctorsPath = path.resolve(__dirname, '../src/doctors.js');
+const doctorsPath = path.resolve(__dirname, '../data/doctors.legacy.js');
 
 const BASE_PRICE_MAP = {
   '\u0422\u0435\u0440\u0430\u043f\u0435\u0432\u0442': [1200, 1800],
@@ -64,7 +64,7 @@ const fileRaw = fs.readFileSync(doctorsPath, 'utf8');
 const match = fileRaw.match(/export const doctorsData = ([\s\S]*);\s*$/);
 
 if (!match) {
-  console.error('Cannot parse doctors data export in src/doctors.js');
+  console.error('Cannot parse doctors data export in data/doctors.legacy.js');
   process.exit(1);
 }
 
@@ -84,4 +84,4 @@ const updated = doctors.map((doctor) => {
 });
 
 fs.writeFileSync(doctorsPath, `export const doctorsData = ${JSON.stringify(updated, null, 2)};\n`);
-console.log(`Updated service prices for ${updated.length} doctors in src/doctors.js`);
+console.log(`Updated service prices for ${updated.length} doctors in data/doctors.legacy.js`);

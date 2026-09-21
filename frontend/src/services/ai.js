@@ -5,7 +5,7 @@
  * Клиент ходит только в собственный эндпоинт /api/chat.
  * Ключа API здесь нет и быть не может — он живёт в окружении serverless-функции.
  */
-import { LIMITS, sanitizeAiAction } from '../../api/_shared/sanitize.js';
+import { LIMITS, sanitizeAiAction } from '@shared/contract.js';
 
 const CHAT_ENDPOINT = '/api/chat';
 const REQUEST_TIMEOUT_MS = 30_000;

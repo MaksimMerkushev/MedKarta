@@ -6,10 +6,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { validatePlan, VALIDATION_ERROR } from '../api/_shared/planner/validator.js';
-import { DENIED_ACTIONS, PLAN_LIMITS } from '../api/_shared/planner/schema.js';
-import { createPolicyEngine, POLICY_ERROR } from '../api/_shared/executor/policyEngine.js';
-import { createCatalogRepository } from '../api/_shared/executor/catalogRepository.js';
+import { validatePlan, VALIDATION_ERROR } from '../backend/planner/validator.js';
+import { DENIED_ACTIONS, PLAN_LIMITS } from '../backend/planner/schema.js';
+import { createPolicyEngine, POLICY_ERROR } from '../backend/executor/policyEngine.js';
+import { createCatalogRepository } from '../backend/executor/catalogRepository.js';
 import { fixtureCatalog } from './fixtures/catalog.js';
 import { makeTestPipeline, makeVault, TEST_SESSION } from './helpers.js';
 

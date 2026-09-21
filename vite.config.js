@@ -3,26 +3,32 @@ import { fileURLToPath } from 'node:url'
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 
-const CHAT_HANDLER_URL = new URL('./api/chat.js', import.meta.url)
-const FULL_DB_PATH = fileURLToPath(new URL('./src/verifiedDoctors.full.js', import.meta.url))
+const ROOT = fileURLToPath(new URL('.', import.meta.url))
+const FRONTEND = fileURLToPath(new URL('./frontend', import.meta.url))
+const SHARED = fileURLToPath(new URL('./shared', import.meta.url))
+const DATA = fileURLToPath(new URL('./data', import.meta.url))
+
+const CHAT_HANDLER_URL = new URL('./backend/api/chat.js', import.meta.url)
+const FULL_DB_PATH = fileURLToPath(new URL('./data/doctors.full.js', import.meta.url))
+const PUBLIC_DB_PATH = fileURLToPath(new URL('./data/doctors.js', import.meta.url))
 const HAS_FULL_DB = fs.existsSync(FULL_DB_PATH)
 
 /**
- * Dev-режим: `vite dev` не запускает функции из api/, поэтому подключаем тот же
- * обработчик как middleware. Ключ читается из .env через loadEnv БЕЗ префикса
- * VITE_ — то есть он остаётся на стороне dev-сервера и не попадает в бандл.
+ * Dev-режим: `vite dev` не поднимает backend, поэтому тот же обработчик
+ * подключается как middleware. Ключ читается из .env через loadEnv БЕЗ
+ * префикса VITE_ — то есть остаётся на стороне dev-сервера и не попадает
+ * в бандл.
  *
  * Модуль грузится обычным dynamic import, а не через server.ssrLoadModule:
- * api/chat.js — чистый Node-код без JSX, алиасов и import.meta.env, поэтому
- * конвейер Vite ему не нужен, а код не зависит от версии SSR-API.
- * Query-параметр сбрасывает кеш модулей, чтобы правки подхватывались без
- * перезапуска dev-сервера.
+ * backend/api/chat.js — чистый Node-код без JSX и import.meta.env, поэтому
+ * конвейер Vite ему не нужен. Query-параметр сбрасывает кеш модулей, чтобы
+ * правки подхватывались без перезапуска.
  */
 const devApiPlugin = (env) => ({
   name: 'medkarta-dev-api',
   apply: 'serve',
   configureServer(server) {
-    for (const key of ['OPENROUTER_API_KEY', 'AI_API_KEY', 'AI_UPSTREAM_URL', 'AI_MODEL', 'ALLOWED_ORIGINS']) {
+    for (const key of ['OPENROUTER_API_KEY', 'AI_API_KEY', 'AI_UPSTREAM_URL', 'AI_MODEL', 'ALLOWED_ORIGINS', 'PRIVACY_TOKEN_SECRET']) {
       if (env[key] && !process.env[key]) {
         process.env[key] = env[key]
       }
@@ -30,12 +36,10 @@ const devApiPlugin = (env) => ({
 
     if (!process.env.OPENROUTER_API_KEY && !process.env.AI_API_KEY) {
       server.config.logger.warn(
-        '[dev-api] OPENROUTER_API_KEY не найден в .env — AI-помощник вернёт «сервис недоступен». Остальное приложение работает.',
+        '[dev-api] OPENROUTER_API_KEY не найден в .env — планировщик недоступен, конвейер уйдёт в локальный план. Остальное приложение работает.',
       )
     }
 
-    // Слежение за файлом — удобство, а не необходимость: если API вотчера
-    // в этой версии Vite другой, dev-сервер всё равно должен подняться.
     try {
       server.watcher?.add(fileURLToPath(CHAT_HANDLER_URL))
     } catch {
@@ -61,37 +65,51 @@ const devApiPlugin = (env) => ({
 })
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), '')
+  // envDir задан явно: корень проекта больше не совпадает с root Vite.
+  const env = loadEnv(mode, ROOT, '')
 
   return {
+    root: FRONTEND,
+    envDir: ROOT,
     plugins: [react(), devApiPlugin(env)],
     resolve: {
-      alias: HAS_FULL_DB
-        ? [
-            {
-              find: /^\.\/verifiedDoctors$/,
-              replacement: FULL_DB_PATH,
-            },
-          ]
-        : [],
+      /*
+       * Алиасы — регулярные выражения, а не строки: строковый алиас '@data/doctors'
+       * совпал бы и с '@data/doctors.legacy.js' по префиксу и подменил бы не тот
+       * файл. Порядок тоже важен — точное совпадение идёт первым.
+       */
+      alias: [
+        { find: /^@data\/doctors$/, replacement: HAS_FULL_DB ? FULL_DB_PATH : PUBLIC_DB_PATH },
+        { find: /^@data\//, replacement: `${DATA}/` },
+        { find: /^@shared\//, replacement: `${SHARED}/` },
+      ],
+    },
+    server: {
+      // root — frontend/, а shared/ и data/ лежат выше: без этого dev-сервер
+      // откажется их отдавать.
+      fs: { allow: [ROOT] },
     },
     build: {
+      outDir: fileURLToPath(new URL('./dist', import.meta.url)),
+      emptyOutDir: true,
       // Sourcemap в проде отдаёт читаемый исходник рядом с бандлом.
       sourcemap: false,
       rollupOptions: {
         output: {
-          // Крупные статические справочники — отдельным чанком: правка
-          // интерфейса больше не инвалидирует полмегабайта данных в кэше.
+          // Крупные справочники — отдельным чанком: правка интерфейса больше
+          // не инвалидирует полмегабайта данных в кэше браузера.
           manualChunks(id) {
+            const normalized = id.split('\\').join('/')
             if (
-              id.includes('/src/kazanFacilities.js') ||
-              id.includes('/src/verifiedDoctors.js') ||
-              id.includes('/src/doctors.js') ||
-              id.includes('/src/ClinicsData.js')
+              normalized.includes('/data/facilities.js') ||
+              normalized.includes('/data/doctors.js') ||
+              normalized.includes('/data/doctors.full.js') ||
+              normalized.includes('/data/doctors.legacy.js') ||
+              normalized.includes('/data/clinics.js')
             ) {
               return 'facilities-data'
             }
-            if (id.includes('node_modules/leaflet') || id.includes('node_modules/react-leaflet')) {
+            if (normalized.includes('node_modules/leaflet') || normalized.includes('node_modules/react-leaflet')) {
               return 'map'
             }
             return undefined
@@ -99,8 +117,5 @@ export default defineConfig(({ mode }) => {
         },
       },
     },
-    // server.host намеренно не задан: по умолчанию Vite и так слушает только
-    // локальный интерфейс, а жёсткое '127.0.0.1' ломало бы адрес localhost
-    // на системах, где он резолвится в IPv6 (::1).
   }
 })

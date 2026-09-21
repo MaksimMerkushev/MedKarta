@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Bot, X, Send, Loader2 } from 'lucide-react';
 import { analyzeSymptoms } from './services/ai';
-import { LIMITS } from '../api/_shared/sanitize.js';
+import { LIMITS } from '@shared/contract.js';
 
 const GREETING = {
   role: 'assistant',

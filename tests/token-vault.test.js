@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { createMemoryStore, createTokenVault, MAX_TOKENS_PER_SESSION } from '../api/_shared/storage/tokenVault.js';
+import { createMemoryStore, createTokenVault, MAX_TOKENS_PER_SESSION } from '../backend/storage/tokenVault.js';
 import { TEST_SECRET } from './helpers.js';
 
 const makeVault = (store = createMemoryStore()) => ({

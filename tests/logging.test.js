@@ -6,8 +6,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { createSafeLogger } from '../api/_shared/observability/safeLogger.js';
-import { createMetrics } from '../api/_shared/observability/metrics.js';
+import { createSafeLogger } from '../backend/observability/safeLogger.js';
+import { createMetrics } from '../backend/observability/metrics.js';
 import { makeTestPipeline, TEST_SESSION } from './helpers.js';
 
 const capture = () => {
@@ -73,10 +73,10 @@ describe('12. Логи не содержат персональных данны
     });
 
     // Подменяем логгер конвейера: проверяем именно то, что он пишет.
-    const { createPipeline } = await import('../api/_shared/pipeline.js');
+    const { createPipeline } = await import('../backend/pipeline.js');
     const { fixtureCatalog } = await import('./fixtures/catalog.js');
     const { makeVault } = await import('./helpers.js');
-    const { createHaversineRoutingProvider } = await import('../api/_shared/executor/routing.js');
+    const { createHaversineRoutingProvider } = await import('../backend/executor/routing.js');
 
     const instrumented = createPipeline({
       catalog: fixtureCatalog(),
