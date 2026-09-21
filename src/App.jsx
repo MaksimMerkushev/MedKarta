@@ -1584,7 +1584,12 @@ export default function App() {
             ? ((doc.clinic && doc.clinic.toLowerCase().includes(stop.clinic.toLowerCase())) ||
               (doc.name && doc.name.toLowerCase().includes(stop.clinic.toLowerCase())))
             : true;
-          return specialtyMatch && clinicMatch;
+          // Остановка может указывать на конкретного врача: backend разрешил
+          // плейсхолдер @DOCTOR_A в реальную запись и передал её имя сюда.
+          const doctorMatch = stop.doctor
+            ? (doc.name && doc.name.toLowerCase().includes(stop.doctor.toLowerCase()))
+            : true;
+          return specialtyMatch && clinicMatch && doctorMatch;
         });
 
         if (candidates.length > 0) {

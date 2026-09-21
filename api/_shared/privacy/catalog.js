@@ -63,6 +63,22 @@ const CLINIC_ALIASES = Object.freeze({
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 
+const DAY_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+
+/** Приводит расписание к карте дней недели; всё лишнее отбрасывается. */
+const normalizeSchedule = (raw) => {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+  const schedule = {};
+  for (const day of DAY_KEYS) {
+    if (typeof raw[day] === 'string' && raw[day].trim()) {
+      schedule[day] = raw[day].trim();
+    }
+  }
+  return Object.keys(schedule).length > 0 ? schedule : null;
+};
+
 const toClinicRecord = (raw, index) => ({
   id: String(raw.clinic_id || raw.id || `clinic-${index}`),
   name: String(raw.name || '').trim(),
@@ -73,7 +89,9 @@ const toClinicRecord = (raw, index) => ({
   address: raw.address_full || raw.address || null,
   lat: raw.coordinates?.lat ?? raw.lat ?? null,
   lng: raw.coordinates?.lng ?? raw.lng ?? null,
-  workingHours: raw.working_hours || raw.schedule || null,
+  // Расписание приводится к единому виду {mon..sun}: у ClinicsData это
+  // working_hours с дополнительным ключом raw, у OSM-учреждений — schedule.
+  schedule: normalizeSchedule(raw.working_hours || raw.schedule),
   hoursText: raw.working_hours?.raw || raw.hours || null,
   aliases: asArray(raw.aliases).map(String),
 });

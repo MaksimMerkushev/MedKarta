@@ -57,6 +57,13 @@ const triState = (value) => {
 };
 
 const boundedNumber = (value, min, max) => {
+  // null и пустая строка должны остаться null: Number(null) === 0, и без этой
+  // проверки незаданный фильтр превращался в minRating=0, minExperience=0,
+  // maxDistance=0 — то есть в реально применённое ограничение.
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+
   const num = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(num)) {
     return null;
@@ -79,11 +86,15 @@ const normalizeStops = (value) => {
 
       const specialty = cleanText(stop.specialty, LIMITS.MAX_FIELD_CHARS);
       const clinic = cleanText(stop.clinic, LIMITS.MAX_FIELD_CHARS);
-      if (!specialty && !clinic) {
+      // doctor добавлен, чтобы остановка могла указывать на конкретного врача,
+      // а не только на пару «профиль + клиника»: иначе маршрут к названному
+      // специалисту сводился бы к любому врачу того же профиля в той же клинике.
+      const doctor = cleanText(stop.doctor, LIMITS.MAX_FIELD_CHARS);
+      if (!specialty && !clinic && !doctor) {
         return null;
       }
 
-      return { specialty, clinic };
+      return { specialty, clinic, doctor };
     })
     .filter(Boolean);
 };
