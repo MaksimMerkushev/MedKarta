@@ -62,4 +62,66 @@ export default defineConfig([
       eqeqeq: ['error', 'smart'],
     },
   },
+
+  /*
+   * Граница доверия, проверяемая линтером.
+   *
+   * mintSanitizedPlannerRequest создаёт объект, который внешний планировщик
+   * согласен принять. Если бы его мог импортировать любой модуль, инвариант
+   * «наружу уходит только санитизированное» держался бы на внимательности.
+   * Правило оставляет ровно одну точку создания — privacy/gateway.js.
+   * Дублируется тестом tests/boundary.test.js на случай отключения линтера.
+   */
+  {
+    files: ['api/**/*.js'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: './models.js',
+              importNames: ['mintSanitizedPlannerRequest'],
+              message:
+                'SanitizedPlannerRequest создаётся только в privacy/gateway.js — см. docs/privacy-architecture.md.',
+            },
+            {
+              name: '../privacy/models.js',
+              importNames: ['mintSanitizedPlannerRequest'],
+              message:
+                'SanitizedPlannerRequest создаётся только в privacy/gateway.js — см. docs/privacy-architecture.md.',
+            },
+            {
+              name: './privacy/models.js',
+              importNames: ['mintSanitizedPlannerRequest'],
+              message:
+                'SanitizedPlannerRequest создаётся только в privacy/gateway.js — см. docs/privacy-architecture.md.',
+            },
+          ],
+        },
+      ],
+      // В серверном коде логирование идёт только через observability/safeLogger:
+      // console печатает объекты целиком, вместе с телом запроса.
+      'no-console': 'error',
+    },
+  },
+
+  {
+    files: ['api/_shared/privacy/gateway.js'],
+    rules: { 'no-restricted-imports': 'off' },
+  },
+
+  {
+    files: ['tests/**/*.js'],
+    extends: [js.configs.recommended],
+    languageOptions: {
+      ecmaVersion: 2022,
+      globals: globals.node,
+      parserOptions: { ecmaVersion: 'latest', sourceType: 'module' },
+    },
+    rules: {
+      'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+      eqeqeq: ['error', 'smart'],
+    },
+  },
 ])

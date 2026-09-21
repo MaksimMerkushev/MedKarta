@@ -1,25 +1,23 @@
 /*
  * © 2026 MedКарта Казань. Все права защищены.
  *
- * Серверный прокси к LLM.
+ * Серверная точка входа ИИ-навигатора.
  *
- * Зачем он нужен: ключ API больше не попадает в браузер. Раньше переменная
- * называлась VITE_OPENROUTER_API_KEY, а всё с префиксом VITE_ Vite подставляет
- * прямо в JS-бандл — то есть ключ читался из исходников сайта любым посетителем.
- * Здесь ключ живёт только в окружении функции и наружу не уходит.
+ * Функция больше НЕ является прокси к модели. Она принимает запрос, отдаёт его
+ * конвейеру (api/_shared/pipeline.js) и возвращает готовое действие интерфейса.
+ * Прямого обращения к внешней модели здесь нет и быть не должно: единственный
+ * исходящий вызов живёт в planner/client.js и принимает только
+ * SanitizedPlannerRequest.
  *
- * Дополнительно функция: ограничивает частоту запросов, режет размер тела и
- * истории, ставит таймаут на обращение к модели, нормализует ответ по белым
- * спискам и никогда не пересылает клиенту текст ошибки апстрима.
+ * Что осталось на этом уровне: проверка метода и Origin, ограничение частоты,
+ * лимит размера тела, разбор входных данных и безопасное логирование.
  */
 
-import { SYSTEM_PROMPT } from './_shared/prompt.js';
-import { LIMITS, sanitizeAiAction, validateChatMessages } from './_shared/sanitize.js';
+import { LIMITS, validateChatMessages } from './_shared/sanitize.js';
 import { checkRateLimit, getClientIp } from './_shared/rateLimit.js';
-
-const UPSTREAM_URL = process.env.AI_UPSTREAM_URL || 'https://modelhub.my/v1/chat/completions';
-const MODEL = process.env.AI_MODEL || 'gpt-5.4-mini';
-const UPSTREAM_TIMEOUT_MS = 25_000;
+import { getDefaultPipeline } from './_shared/pipeline.js';
+import { logger } from './_shared/observability/safeLogger.js';
+import { metrics } from './_shared/observability/metrics.js';
 
 const sendJson = (res, status, payload) => {
   res.statusCode = status;
@@ -31,7 +29,6 @@ const sendJson = (res, status, payload) => {
 
 const readBody = (req) =>
   new Promise((resolve, reject) => {
-    // Vercel уже разобрал JSON — используем его.
     if (req.body !== undefined && req.body !== null) {
       resolve(req.body);
       return;
@@ -78,7 +75,6 @@ const readBody = (req) =>
 const isAllowedOrigin = (req) => {
   const origin = req.headers.origin;
   if (!origin) {
-    // Same-origin fetch в части браузеров не шлёт Origin — пропускаем.
     return true;
   }
 
@@ -99,37 +95,29 @@ const isAllowedOrigin = (req) => {
   }
 };
 
-const extractContentText = (content) => {
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => (typeof part === 'string' ? part : part?.text || ''))
-      .join('\n')
-      .trim();
+/**
+ * Точка отправления.
+ *
+ * Клиент может её не присылать — и по умолчанию не присылает: расстояния
+ * считаются в браузере, координаты не покидают устройство. Если поле всё же
+ * пришло, оно немедленно огрубляется до двух знаков (≈1.1 км) и используется
+ * ТОЛЬКО для предварительного отбора кандидатов на сервере. Во внешнюю модель
+ * координаты не передаются ни в каком виде: планировщик оперирует значением
+ * selection="nearest" и токеном @CURRENT_LOCATION.
+ */
+const readCoarseOrigin = (raw) => {
+  if (process.env.ALLOW_COARSE_ORIGIN !== 'on') {
+    return null;
   }
-  return content?.text || '';
-};
-
-const parseModelJson = (text) => {
-  const cleaned = String(text || '')
-    .replace(/```json/gi, '')
-    .replace(/```/g, '')
-    .trim();
-
-  if (!cleaned) {
-    throw new Error('empty model response');
+  const lat = Number(raw?.lat);
+  const lng = Number(raw?.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return null;
   }
-
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    const first = cleaned.indexOf('{');
-    const last = cleaned.lastIndexOf('}');
-    if (first !== -1 && last > first) {
-      return JSON.parse(cleaned.slice(first, last + 1));
-    }
-    throw new Error('model response is not JSON');
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+    return null;
   }
+  return { lat: Number(lat.toFixed(2)), lng: Number(lng.toFixed(2)) };
 };
 
 export default async function handler(req, res) {
@@ -151,16 +139,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  const apiKey = process.env.OPENROUTER_API_KEY || process.env.AI_API_KEY;
-  if (!apiKey) {
-    // Внутренняя причина остаётся в логах сервера, наружу — общая формулировка.
-    console.error('[api/chat] OPENROUTER_API_KEY не задан в окружении.');
-    sendJson(res, 503, { error: 'Сервис ИИ временно недоступен.' });
-    return;
-  }
-
-  const ip = getClientIp(req);
-  const limit = checkRateLimit(ip);
+  const limit = checkRateLimit(getClientIp(req));
   if (!limit.allowed) {
     res.setHeader('Retry-After', String(limit.retryAfterSeconds));
     sendJson(res, 429, {
@@ -171,65 +150,36 @@ export default async function handler(req, res) {
   }
 
   let messages;
+  let sessionId;
+  let origin;
   try {
     const body = await readBody(req);
     messages = validateChatMessages(body?.messages);
+    sessionId = typeof body?.sessionId === 'string' ? body.sessionId : undefined;
+    origin = readCoarseOrigin(body?.origin);
   } catch (error) {
+    // Наружу уходит только формулировка валидатора — она не содержит ввода.
     sendJson(res, error.status || 400, { error: error.message || 'Некорректный запрос.' });
     return;
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
-
   try {
-    const upstream = await fetch(UPSTREAM_URL, {
-      method: 'POST',
-      signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...messages],
-        response_format: { type: 'json_object' },
-        temperature: 0.1,
-        max_tokens: 900,
-      }),
-    });
-
-    if (!upstream.ok) {
-      const detail = await upstream.text().catch(() => '');
-      console.error(`[api/chat] upstream ${upstream.status}: ${detail.slice(0, 500)}`);
-      const status = upstream.status === 429 ? 429 : 502;
-      sendJson(res, status, {
-        error:
-          status === 429
-            ? 'Сервис ИИ перегружен. Попробуйте через минуту.'
-            : 'Не удалось получить ответ от ИИ.',
-      });
-      return;
-    }
-
-    const data = await upstream.json();
-    const action = sanitizeAiAction(parseModelJson(extractContentText(data?.choices?.[0]?.message?.content)));
+    const pipeline = await getDefaultPipeline();
+    const { action } = await pipeline.handle({ messages, sessionId, origin });
 
     res.setHeader('X-RateLimit-Remaining', String(limit.remaining));
     sendJson(res, 200, action);
   } catch (error) {
-    if (error?.name === 'AbortError') {
-      sendJson(res, 504, { error: 'Превышено время ожидания ответа ИИ.' });
-      return;
-    }
-
-    console.error('[api/chat]', error);
-    sendJson(res, 502, { error: 'Не удалось обработать ответ ИИ.' });
-  } finally {
-    clearTimeout(timer);
+    /*
+     * Ни error.message, ни стек в лог не попадают: и то, и другое регулярно
+     * содержит фрагменты входных данных. Логируется только код ошибки.
+     * Пользователю не показываются ни SQL, ни схема, ни внутренние id.
+     */
+    metrics.increment('api.chat.error', { code: error?.code || 'unknown' });
+    logger.error('api.chat.failed', error);
+    sendJson(res, 502, { error: 'Не удалось обработать запрос. Попробуйте ещё раз.' });
   }
 }
 
 // maxDuration и memory заданы в vercel.json; ограничение размера тела
 // реализовано внутри readBody, чтобы работать и в dev-режиме Vite.
-

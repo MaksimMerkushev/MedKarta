@@ -9,6 +9,33 @@ import { LIMITS, sanitizeAiAction } from '../../api/_shared/sanitize.js';
 
 const CHAT_ENDPOINT = '/api/chat';
 const REQUEST_TIMEOUT_MS = 30_000;
+const SESSION_STORAGE_KEY = 'medkarta.ai.session';
+
+/**
+ * Непрозрачный идентификатор диалога.
+ *
+ * Нужен серверу, чтобы плейсхолдеры (@DOCTOR_A) одной вкладки нельзя было
+ * разыменовать в другой сессии. Он случайный, не связан с пользователем,
+ * живёт только в sessionStorage и исчезает вместе с вкладкой. Если хранилище
+ * недоступно (приватный режим, отключённые куки), идентификатор генерируется
+ * на каждый запрос — тогда плейсхолдеры просто не переживают перезагрузку.
+ */
+const getSessionId = () => {
+  const fresh = () =>
+    (crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`).replace(/[^A-Za-z0-9_-]/g, '');
+
+  try {
+    const stored = sessionStorage.getItem(SESSION_STORAGE_KEY);
+    if (stored && /^[A-Za-z0-9_-]{12,64}$/.test(stored)) {
+      return stored;
+    }
+    const created = fresh();
+    sessionStorage.setItem(SESSION_STORAGE_KEY, created);
+    return created;
+  } catch {
+    return fresh();
+  }
+};
 
 export class AiError extends Error {
   constructor(message, { code = 'unknown', status = 0 } = {}) {
@@ -50,7 +77,7 @@ export const analyzeSymptoms = async (chatMessages, { signal } = {}) => {
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
       signal: controller.signal,
-      body: JSON.stringify({ messages }),
+      body: JSON.stringify({ messages, sessionId: getSessionId() }),
     });
   } catch (error) {
     if (error?.name === 'AbortError') {
