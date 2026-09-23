@@ -106,9 +106,9 @@ export default async function handler(req, res) {
   const engine = await getDefaultRoutingEngine();
   if (!engine) {
     /*
-     * Граф не собран. Это не поломка: интерфейс нарисует прямые линии между
-     * точками и покажет оценку по прямой. Сообщаем кодом, чтобы клиент мог
-     * отличить «нет данных» от «не получилось построить».
+     * Граф не собран или не читается (причина — в журнале при загрузке).
+     * Интерфейс НЕ рисует прямую вместо маршрута, а показывает, что карта
+     * дорог недоступна. Код позволяет отличить «нет данных» от «не вышло».
      */
     metrics.increment('routing.unavailable');
     respondJson(res, 503, { error: 'Маршрутизация недоступна.', code: ROUTING_ERROR.NO_GRAPH });
@@ -140,5 +140,8 @@ export default async function handler(req, res) {
     distance: result.distanceM,
     time: result.durationS,
     profile: result.profile,
+    // Точки выхода на дорогу — для пунктирной подводки от здания до улицы.
+    // Это проекции тех же координат, что прислал клиент: нового о нём не сообщают.
+    snaps: result.snaps,
   });
 }

@@ -36,6 +36,8 @@ export const ALLOWED_FIELDS = new Set([
   'plan_source', 'planSource', 'rejected', 'rejected_reason', 'rejectedReason',
   'vault_backend', 'vaultBackend', 'routing_provider', 'routingProvider',
   'specialties', 'constraint_keys', 'constraintKeys', 'steps', 'count',
+  // Размер графа дорог: числа, к пользователю отношения не имеют.
+  'nodes', 'edges', 'memory_mb',
 ]);
 
 /**

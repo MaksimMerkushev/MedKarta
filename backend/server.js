@@ -3,8 +3,9 @@
  *
  * Автономный HTTP-сервер для развёртывания на собственном сервере.
  *
- * Отдаёт два вида ответов:
+ * Отдаёт три вида ответов:
  *   /api/chat  — конвейер приватности (backend/api/chat.js);
+ *   /api/route — маршрут по дорогам (backend/api/route.js);
  *   всё прочее — собранный фронтенд из dist/, если он есть.
  *
  * Заголовки безопасности выставляются ЗДЕСЬ, а не в конфигурации хостинга:
@@ -20,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import chatHandler from './api/chat.js';
 import routeHandler from './api/route.js';
 import { applySecurityHeaders } from './http/securityHeaders.js';
+import { getDefaultRoutingEngine } from './routing/engine.js';
 import { logger } from './observability/safeLogger.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -139,10 +141,17 @@ const server = http.createServer(async (req, res) => {
   });
 });
 
-server.listen(PORT, HOST, () => {
+server.listen(PORT, HOST, async () => {
+  /*
+   * Граф дорог грузится сразу, а не при первом запросе: первый пользователь
+   * не ждёт загрузки, а в журнале запуска видно, работает ли маршрутизация.
+   * Раньше здесь печаталось значение переменной окружения, а не фактическое
+   * состояние, — и строка «haversine» вводила в заблуждение.
+   */
+  const engine = await getDefaultRoutingEngine();
   logger.event('server.started', {
     status: SERVE_STATIC ? 'api+static' : 'api-only',
-    routing_provider: process.env.ROUTING_PROVIDER || 'haversine',
+    routing_provider: engine ? 'local' : 'none',
     vault_backend: process.env.TOKEN_VAULT_BACKEND || 'memory',
   });
 });

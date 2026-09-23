@@ -16,13 +16,20 @@
  *     клиники не запускает поиск заново;
  *   - есть потолок раскрытых узлов, после которого возвращается отказ.
  *
- * Если файла графа нет, движок не поднимается и вызывающая сторона переходит
- * на оценку по прямой. Отсутствие графа — штатный режим, а не ошибка.
+ * ТОЧКИ ЛЕЖАТ НА ДОРОГЕ, А НЕ В УЗЛЕ. Клиника и дом привязываются к
+ * ближайшему отрезку дороги, открытому для выбранного транспорта (см.
+ * graph.js). Маршрут начинается в точке проекции, проходит по рёбрам графа
+ * и заканчивается в проекции финиша; «хвосты» внутри крайних отрезков
+ * входят и во время, и в расстояние.
+ *
+ * Если файла графа нет, движок не поднимается, и маршрут на карте не
+ * рисуется вовсе: прямая через дома и реку хуже, чем честное «не удалось».
  */
 
-import { createSearch, DEFAULT_MAX_EXPANSIONS, SEARCH_RESULT } from './astar.js';
+import { createSearch, DEFAULT_MAX_EXPANSIONS, edgeSpeedMps, SEARCH_RESULT } from './astar.js';
 import { loadGraph } from './graph.js';
-import { PROFILE_NAMES } from './format.js';
+import { COORD_SCALE, PROFILE_NAMES, PROFILES } from './format.js';
+import { logger } from '../observability/safeLogger.js';
 
 export const ROUTING_ERROR = Object.freeze({
   NO_GRAPH: 'routing_graph_unavailable',
@@ -35,8 +42,10 @@ export const ROUTING_ERROR = Object.freeze({
 /** Дальше этого расстояния от дороги точка считается вне сети. */
 const MAX_SNAP_DISTANCE_M = 2000;
 
-/** Сколько результатов держать в кеше. Запись весит сотни байт. */
+/** Сколько результатов держать в кеше. Запись — путь в Uint32Array, килобайты. */
 const CACHE_LIMIT = 256;
+
+const EMPTY_ESTIMATE = Object.freeze({ distanceKm: null, durationSeconds: null, approximate: true });
 
 /**
  * @param {object} params
@@ -45,12 +54,13 @@ const CACHE_LIMIT = 256;
  */
 export const createRoutingEngine = ({ graph, maxExpansions = DEFAULT_MAX_EXPANSIONS }) => {
   const search = createSearch(graph);
+  const { lengths, speeds } = graph;
 
   /*
    * Кеш «первым пришёл — первым вышел»: LRU здесь не окупается.
-   * Ключ — пара УЗЛОВ графа, а не координат: две соседние клиники в одном
-   * здании привязываются к одному узлу и делят один результат, а дрожание
-   * геолокации в пределах квартала не промахивается мимо кеша.
+   * Ключ — отрезок привязки и положение на нём с точностью до тысячной
+   * доли, а не сырые координаты: дрожание геолокации в пределах пары
+   * метров не промахивается мимо кеша.
    */
   const cache = new Map();
 
@@ -66,9 +76,11 @@ export const createRoutingEngine = ({ graph, maxExpansions = DEFAULT_MAX_EXPANSI
     return value;
   };
 
-  const snapPoint = (point) => {
+  const snapPoint = (point, profile) => {
     if (
       !point ||
+      typeof point.lat !== 'number' ||
+      typeof point.lng !== 'number' ||
       !Number.isFinite(point.lat) ||
       !Number.isFinite(point.lng) ||
       Math.abs(point.lat) > 90 ||
@@ -76,14 +88,67 @@ export const createRoutingEngine = ({ graph, maxExpansions = DEFAULT_MAX_EXPANSI
     ) {
       return null;
     }
-    return graph.snap(point.lat, point.lng, MAX_SNAP_DISTANCE_M);
+    return graph.snapToRoad(point.lat, point.lng, profile, MAX_SNAP_DISTANCE_M);
   };
 
-  /** Один участок между двумя узлами графа. */
-  const leg = (fromNode, toNode, profile) => {
-    const key = `${fromNode}:${toNode}:${profile}`;
-    return cached(key, () => search.run({ source: fromNode, target: toNode, profile, maxExpansions }));
+  /** Цена и длина части отрезка привязки. */
+  const partial = (edge, fraction, settings) => {
+    const metres = lengths[edge] * fraction;
+    return { metres, cost: metres / edgeSpeedMps(settings, speeds[edge]) };
   };
+
+  /** Куда можно попасть с точки привязки: узлы и стоимость пути до них. */
+  const departures = (hit, settings) => {
+    const out = [];
+    if (hit.forward) out.push({ node: hit.to, ...partial(hit.edge, 1 - hit.t, settings) });
+    if (hit.reverseEdge >= 0) out.push({ node: hit.from, ...partial(hit.reverseEdge, hit.t, settings) });
+    return out;
+  };
+
+  /** Откуда можно попасть в точку привязки: узлы и стоимость «хвоста». */
+  const arrivals = (hit, settings) => {
+    const out = [];
+    if (hit.forward) out.push({ node: hit.from, ...partial(hit.edge, hit.t, settings) });
+    if (hit.reverseEdge >= 0) out.push({ node: hit.to, ...partial(hit.reverseEdge, 1 - hit.t, settings) });
+    return out;
+  };
+
+  /**
+   * Обе точки на одном отрезке: ехать прямо по нему, если направление
+   * разрешено. Объезд квартала не может быть быстрее.
+   */
+  const directAlong = (a, b, settings) => {
+    if (a.edge !== b.edge) return null;
+
+    let best = null;
+    if (a.forward && b.t >= a.t) best = partial(a.edge, b.t - a.t, settings);
+    if (a.reverseEdge >= 0 && b.t <= a.t) {
+      const back = partial(a.reverseEdge, a.t - b.t, settings);
+      if (!best || back.cost < best.cost) best = back;
+    }
+    return best;
+  };
+
+  const legKey = (a, b, profile) =>
+    `${profile}|${a.edge}|${Math.round(a.t * 1000)}|${b.edge}|${Math.round(b.t * 1000)}`;
+
+  /** Один участок маршрута между двумя точками привязки. */
+  const leg = (a, b, profile) =>
+    cached(legKey(a, b, profile), () => {
+      const settings = PROFILES[profile];
+      const direct = directAlong(a, b, settings);
+      if (direct) {
+        return { status: SEARCH_RESULT.FOUND, durationS: direct.cost, distanceM: direct.metres, path: null };
+      }
+
+      return search.run({
+        sources: departures(a, settings),
+        goals: arrivals(b, settings),
+        goalPoint: [Math.round(b.lat * COORD_SCALE), Math.round(b.lon * COORD_SCALE)],
+        profile,
+        maxExpansions,
+      });
+    });
 
   return Object.freeze({
     name: 'local',
@@ -96,17 +161,18 @@ export const createRoutingEngine = ({ graph, maxExpansions = DEFAULT_MAX_EXPANSI
      * @param {object} params
      * @param {Array<{lat: number, lng: number}>} params.waypoints минимум две
      * @param {string} [params.profile]
-     * @returns {{ok: true, geometry: number[][], distanceM: number, durationS: number, legs: object[]}
-     *          | {ok: false, error: string}}
+     * @returns {{ok: true, geometry: number[][], distanceM: number, durationS: number,
+     *            legs: object[], snaps: object[]} | {ok: false, error: string}}
      */
     route({ waypoints, profile = 'driving' }) {
       if (!Array.isArray(waypoints) || waypoints.length < 2) {
         return { ok: false, error: ROUTING_ERROR.BAD_REQUEST };
       }
+      const name = PROFILES[profile] ? profile : 'driving';
 
       const snapped = [];
       for (const point of waypoints) {
-        const hit = snapPoint(point);
+        const hit = snapPoint(point, name);
         if (!hit) {
           return { ok: false, error: ROUTING_ERROR.OFF_NETWORK };
         }
@@ -114,12 +180,21 @@ export const createRoutingEngine = ({ graph, maxExpansions = DEFAULT_MAX_EXPANSI
       }
 
       const geometry = [];
+      const push = (latDeg, lonDeg) => {
+        const last = geometry[geometry.length - 1];
+        // Стык участков и узел, совпавший с точкой привязки, не дублируются.
+        if (last && Math.abs(last[0] - latDeg) < 1e-7 && Math.abs(last[1] - lonDeg) < 1e-7) return;
+        geometry.push([latDeg, lonDeg]);
+      };
+
       const legs = [];
       let distanceM = 0;
       let durationS = 0;
 
       for (let i = 0; i + 1 < snapped.length; i += 1) {
-        const result = leg(snapped[i].node, snapped[i + 1].node, profile);
+        const a = snapped[i];
+        const b = snapped[i + 1];
+        const result = leg(a, b, name);
 
         if (result.status === SEARCH_RESULT.BUDGET_EXCEEDED) {
           return { ok: false, error: ROUTING_ERROR.TOO_COMPLEX };
@@ -133,23 +208,29 @@ export const createRoutingEngine = ({ graph, maxExpansions = DEFAULT_MAX_EXPANSI
         legs.push({
           distanceM: Math.round(result.distanceM),
           durationS: Math.round(result.durationS),
-          snapDistanceM: Math.round(snapped[i].distance),
+          snapDistanceM: Math.round(a.distance),
         });
 
-        // Стык участков не дублируется: первый узел повторяет последний узел
-        // предыдущего участка.
-        for (let k = i === 0 ? 0 : 1; k < result.path.length; k += 1) {
-          geometry.push(graph.coordsOf(result.path[k]));
+        push(a.lat, a.lon);
+        if (result.path) {
+          for (const node of result.path) {
+            const [nodeLat, nodeLon] = graph.coordsOf(node);
+            push(nodeLat, nodeLon);
+          }
         }
+        push(b.lat, b.lon);
       }
 
       return {
         ok: true,
-        profile,
+        profile: name,
         geometry,
         distanceM: Math.round(distanceM),
         durationS: Math.round(durationS),
         legs,
+        // Где каждая точка встала на дорогу: интерфейс дорисует короткую
+        // пунктирную «подводку» от здания до улицы.
+        snaps: snapped.map((hit) => ({ lat: hit.lat, lng: hit.lon, distanceM: Math.round(hit.distance) })),
       };
     },
 
@@ -161,10 +242,11 @@ export const createRoutingEngine = ({ graph, maxExpansions = DEFAULT_MAX_EXPANSI
      */
     async travelTimes(origin, destinations, mode = 'driving') {
       const profile = PROFILE_NAMES.includes(mode) ? mode : 'driving';
-      const source = snapPoint(origin);
+      const settings = PROFILES[profile];
+      const from = snapPoint(origin, profile);
 
-      if (!source) {
-        return destinations.map(() => ({ distanceKm: null, durationSeconds: null, approximate: true }));
+      if (!from) {
+        return destinations.map(() => ({ ...EMPTY_ESTIMATE }));
       }
 
       /*
@@ -172,28 +254,30 @@ export const createRoutingEngine = ({ graph, maxExpansions = DEFAULT_MAX_EXPANSI
        * десять клиник в одном районе — это одна и та же окрестность, обходить
        * её десять раз незачем. На слабом сервере это основная экономия.
        */
-      const snappedTargets = destinations.map((destination) => snapPoint(destination));
-      const reachable = snappedTargets.filter(Boolean).map((hit) => hit.node);
-
-      if (reachable.length === 0) {
-        return destinations.map(() => ({ distanceKm: null, durationSeconds: null, approximate: true }));
+      const hits = destinations.map((destination) => snapPoint(destination, profile));
+      if (!hits.some(Boolean)) {
+        return destinations.map(() => ({ ...EMPTY_ESTIMATE }));
       }
 
-      const matrix = search.runOneToMany({ source: source.node, targets: reachable, profile, maxExpansions });
+      const matrix = search.runOneToMany({
+        sources: departures(from, settings),
+        goals: hits.map((hit) => (hit ? arrivals(hit, settings) : null)),
+        profile,
+        maxExpansions,
+      });
 
-      let cursor = 0;
-      return snappedTargets.map((hit) => {
-        if (!hit) {
-          return { distanceKm: null, durationSeconds: null, approximate: true };
+      return hits.map((hit, index) => {
+        if (!hit) return { ...EMPTY_ESTIMATE };
+
+        let duration = matrix.durations[index];
+        let distance = matrix.distances[index];
+        const direct = directAlong(from, hit, settings);
+        if (direct && direct.cost < duration) {
+          duration = direct.cost;
+          distance = direct.metres;
         }
 
-        const duration = matrix.durations[cursor];
-        const distance = matrix.distances[cursor];
-        cursor += 1;
-
-        if (!Number.isFinite(duration)) {
-          return { distanceKm: null, durationSeconds: null, approximate: true };
-        }
+        if (!Number.isFinite(duration)) return { ...EMPTY_ESTIMATE };
 
         return {
           distanceKm: Number((distance / 1000).toFixed(3)),
@@ -219,7 +303,10 @@ let enginePromise = null;
 
 /**
  * Движок по умолчанию. Граф грузится один раз и переиспользуется.
- * Возвращает null, если файла нет, — это не ошибка, а отсутствие данных.
+ *
+ * Возвращает null, если графа нет или он не читается. Причина пишется
+ * в журнал кодом — без пути к файлу и без текста исключения; раньше она
+ * глоталась молча, и понять, почему маршруты не строятся, было нельзя.
  */
 export const getDefaultRoutingEngine = async (
   filePath = process.env.ROUTING_GRAPH_PATH || new URL('../../data/graph/kazan.graph', import.meta.url),
@@ -227,12 +314,27 @@ export const getDefaultRoutingEngine = async (
   if (enginePromise) return enginePromise;
 
   enginePromise = (async () => {
+    const started = Date.now();
     try {
       const graph = await loadGraph(filePath);
-      return createRoutingEngine({ graph });
-    } catch {
-      // Файла нет или он повреждён: маршрутизация деградирует до оценки
-      // по прямой, приложение продолжает работать.
+      const engine = createRoutingEngine({ graph });
+      const stats = engine.stats();
+      logger.event('routing.graph_loaded', {
+        status: 'ready',
+        provider: 'local',
+        nodes: stats.nodes,
+        edges: stats.edges,
+        memory_mb: Math.round(((stats.graphBytes + stats.searchStateBytes) / 1e6) * 10) / 10,
+        latency_ms: Date.now() - started,
+      });
+      return engine;
+    } catch (error) {
+      logger.warn('routing.graph_unavailable', {
+        status: 'failed',
+        provider: 'local',
+        // ENOENT — файла нет (соберите: npm run build:graph); иначе — повреждён.
+        reason: error?.code === 'ENOENT' ? 'graph_file_missing' : 'graph_file_invalid',
+      });
       return null;
     }
   })();
