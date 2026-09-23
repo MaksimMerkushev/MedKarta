@@ -277,6 +277,15 @@ const InvalidateMapSize = () => {
   return null;
 };
 
+/** Понятная причина, по которой маршрут не построен. Коды — из backend/routing/engine.js. */
+const ROUTE_ERROR_TEXT = {
+  point_far_from_road_network: 'Точка слишком далеко от дорог',
+  no_route_between_points: 'Для этого транспорта пути по дорогам нет',
+  route_too_complex: 'Маршрут слишком длинный для расчёта',
+  routing_graph_unavailable: 'Карта дорог не загружена на сервере',
+};
+const routeErrorText = (reason, fallback) => ROUTE_ERROR_TEXT[reason] || fallback;
+
 const RoutingMachine = ({ originLocation, routeTargets, travelMode, setRouteData }) => {
   const map = useMap();
   const layerRef = useRef(null);
@@ -333,30 +342,46 @@ const RoutingMachine = ({ originLocation, routeTargets, travelMode, setRouteData
         if (cancelled) return;
 
         if (!response.ok) {
-          // Граф не собран или маршрут не построился: рисуем прямые линии
-          // между точками и честно помечаем оценку приблизительной, вместо
-          // того чтобы оставить пользователя без всякой подсказки.
+          // Прямую между точками НЕ рисуем: линия через дома и реку выглядит
+          // как маршрут и вводит в заблуждение. Показываем причину отказа.
+          const failure = await response.json().catch(() => null);
+          if (cancelled) return;
           clear();
-          layerRef.current = L.polyline(
-            waypoints.map((point) => [point.lat, point.lng]),
-            { color: lineColors[mode], weight: 4, opacity: 0.55, dashArray: '8 10' },
-          ).addTo(map);
-          setRouteData({ distance: 0, time: 0, error: true });
+          setRouteData({ distance: 0, time: 0, error: true, reason: failure?.code || null });
           return;
         }
 
         const payload = await response.json();
-        if (cancelled || !Array.isArray(payload.geometry) || payload.geometry.length < 2) {
-          setRouteData({ distance: 0, time: 0, error: true });
+        if (cancelled) return;
+        if (!Array.isArray(payload.geometry) || payload.geometry.length < 2) {
+          clear();
+          setRouteData({ distance: 0, time: 0, error: true, reason: null });
           return;
         }
 
         clear();
-        layerRef.current = L.polyline(payload.geometry, {
+        const group = L.layerGroup();
+        L.polyline(payload.geometry, {
           color: lineColors[mode],
           weight: 6,
           opacity: 0.9,
-        }).addTo(map);
+        }).addTo(group);
+
+        // Короткая пунктирная «подводка» от здания до места, где маршрут
+        // выходит на дорогу, — как в навигаторах. Сам маршрут идёт по улицам.
+        (payload.snaps || []).forEach((snap, index) => {
+          const point = waypoints[index];
+          if (!point || !(snap?.distanceM > 10)) return;
+          L.polyline([[point.lat, point.lng], [snap.lat, snap.lng]], {
+            color: '#64748b',
+            weight: 3,
+            opacity: 0.8,
+            dashArray: '2 7',
+            lineCap: 'round',
+          }).addTo(group);
+        });
+
+        layerRef.current = group.addTo(map);
 
         setRouteData({ distance: payload.distance, time: payload.time, error: false });
       } catch (error) {
@@ -2681,7 +2706,7 @@ export default function App() {
               <div className="p-4 text-center">
                 {routeData ? (
                   routeData.error ? (
-                    <div className="text-sm font-medium text-red-500">Маршрут не найден</div>
+                    <div className="text-sm font-medium text-red-500">{routeErrorText(routeData.reason, 'Маршрут не найден')}</div>
                   ) : (
                     <>
                       <div className="text-3xl font-extrabold tracking-tight text-slate-800 dark:text-white">{formatTime(routeData.time)}</div>
@@ -2859,7 +2884,7 @@ export default function App() {
             <div className={`${isMobile ? 'p-4' : 'p-6'} text-center`}>
               {routeData ? (
                 routeData.error ? (
-                  <div className="text-sm font-medium text-red-500">Маршрут для этого транспорта не найден</div>
+                  <div className="text-sm font-medium text-red-500">{routeErrorText(routeData.reason, 'Маршрут для этого транспорта не найден')}</div>
                 ) : (
                   <>
                     <div className={`${isMobile ? 'text-3xl' : 'text-4xl'} font-extrabold tracking-tight text-slate-800 dark:text-white`}>{formatTime(routeData.time)}</div>

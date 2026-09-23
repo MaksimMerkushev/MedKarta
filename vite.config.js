@@ -9,6 +9,7 @@ const SHARED = fileURLToPath(new URL('./shared', import.meta.url))
 const DATA = fileURLToPath(new URL('./data', import.meta.url))
 
 const CHAT_HANDLER_URL = new URL('./backend/api/chat.js', import.meta.url)
+const ROUTE_HANDLER_URL = new URL('./backend/api/route.js', import.meta.url)
 const FULL_DB_PATH = fileURLToPath(new URL('./data/doctors.full.js', import.meta.url))
 const PUBLIC_DB_PATH = fileURLToPath(new URL('./data/doctors.js', import.meta.url))
 const HAS_FULL_DB = fs.existsSync(FULL_DB_PATH)
@@ -40,27 +41,34 @@ const devApiPlugin = (env) => ({
       )
     }
 
-    try {
-      server.watcher?.add(fileURLToPath(CHAT_HANDLER_URL))
-    } catch {
-      // не критично
-    }
-
-    server.middlewares.use('/api/chat', async (req, res, next) => {
+    // Оба обработчика API: без /api/route в dev-режиме маршрут не строился
+    // вовсе, и казалось, что сломан движок.
+    for (const [mount, handlerUrl, label] of [
+      ['/api/chat', CHAT_HANDLER_URL, 'чата'],
+      ['/api/route', ROUTE_HANDLER_URL, 'маршрута'],
+    ]) {
       try {
-        const { default: handler } = await import(`${CHAT_HANDLER_URL.href}?t=${Date.now()}`)
-        await handler(req, res)
-      } catch (error) {
-        server.config.logger.error(`[dev-api] ${error?.stack || error?.message || error}`)
-        if (!res.writableEnded) {
-          res.statusCode = 500
-          res.setHeader('Content-Type', 'application/json; charset=utf-8')
-          res.end(JSON.stringify({ error: 'Ошибка dev-обработчика /api/chat.' }))
-          return
-        }
-        next(error)
+        server.watcher?.add(fileURLToPath(handlerUrl))
+      } catch {
+        // не критично
       }
-    })
+
+      server.middlewares.use(mount, async (req, res, next) => {
+        try {
+          const { default: handler } = await import(`${handlerUrl.href}?t=${Date.now()}`)
+          await handler(req, res)
+        } catch (error) {
+          server.config.logger.error(`[dev-api] ${error?.stack || error?.message || error}`)
+          if (!res.writableEnded) {
+            res.statusCode = 500
+            res.setHeader('Content-Type', 'application/json; charset=utf-8')
+            res.end(JSON.stringify({ error: `Ошибка dev-обработчика ${label}.` }))
+            return
+          }
+          next(error)
+        }
+      })
+    }
   },
 })
 
