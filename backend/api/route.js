@@ -131,7 +131,12 @@ export default async function handler(req, res) {
 
   if (!result.ok) {
     metrics.increment('routing.failed', { code: result.error });
-    respondJson(res, 422, { error: 'Не удалось построить маршрут.', code: result.error });
+    respondJson(res, 422, {
+      error: 'Не удалось построить маршрут.',
+      code: result.error,
+      // Номер точки, которую не удалось поставить на дорогу (0 — старт).
+      ...(Number.isInteger(result.index) ? { point: result.index } : {}),
+    });
     return;
   }
 

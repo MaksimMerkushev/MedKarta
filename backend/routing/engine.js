@@ -27,6 +27,8 @@
  */
 
 import { createSearch, DEFAULT_MAX_EXPANSIONS, edgeSpeedMps, SEARCH_RESULT } from './astar.js';
+import { stat } from 'node:fs/promises';
+
 import { loadGraph } from './graph.js';
 import { COORD_SCALE, PROFILE_NAMES, PROFILES } from './format.js';
 import { logger } from '../observability/safeLogger.js';
@@ -171,10 +173,11 @@ export const createRoutingEngine = ({ graph, maxExpansions = DEFAULT_MAX_EXPANSI
       const name = PROFILES[profile] ? profile : 'driving';
 
       const snapped = [];
-      for (const point of waypoints) {
+      for (const [index, point] of waypoints.entries()) {
         const hit = snapPoint(point, name);
         if (!hit) {
-          return { ok: false, error: ROUTING_ERROR.OFF_NETWORK };
+          // Номер точки — чтобы интерфейс назвал её, а не писал «где-то».
+          return { ok: false, error: ROUTING_ERROR.OFF_NETWORK, index };
         }
         snapped.push(hit);
       }
@@ -299,50 +302,108 @@ export const createRoutingEngine = ({ graph, maxExpansions = DEFAULT_MAX_EXPANSI
   });
 };
 
-let enginePromise = null;
+const defaultGraphPath = () =>
+  process.env.ROUTING_GRAPH_PATH || new URL('../../data/graph/kazan.graph', import.meta.url);
+
+/** Как часто проверять, не пересобран ли файл графа. */
+const RELOAD_CHECK_MS = 30_000;
+
+/** Время изменения файла или null, если его нет. */
+const modifiedAt = async (filePath) => {
+  try {
+    return (await stat(filePath)).mtimeMs;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Загружает граф и пишет в журнал результат. Причина отказа — кодом, без
+ * пути к файлу и без текста исключения; раньше она глоталась молча, и понять,
+ * почему маршруты не строятся, было нельзя.
+ */
+const loadEngine = async (filePath, event) => {
+  const started = Date.now();
+  try {
+    const graph = await loadGraph(filePath);
+    const engine = createRoutingEngine({ graph });
+    const stats = engine.stats();
+    logger.event(event, {
+      status: 'ready',
+      provider: 'local',
+      nodes: stats.nodes,
+      edges: stats.edges,
+      memory_mb: Math.round(((stats.graphBytes + stats.searchStateBytes) / 1e6) * 10) / 10,
+      latency_ms: Date.now() - started,
+    });
+    return engine;
+  } catch (error) {
+    logger.warn('routing.graph_unavailable', {
+      status: 'failed',
+      provider: 'local',
+      // ENOENT — файла нет (соберите: npm run build:graph); иначе — повреждён.
+      reason: error?.code === 'ENOENT' ? 'graph_file_missing' : 'graph_file_invalid',
+    });
+    return null;
+  }
+};
+
+let current = null;
 
 /**
  * Движок по умолчанию. Граф грузится один раз и переиспользуется.
  *
- * Возвращает null, если графа нет или он не читается. Причина пишется
- * в журнал кодом — без пути к файлу и без текста исключения; раньше она
- * глоталась молча, и понять, почему маршруты не строятся, было нельзя.
+ * Возвращает null, если графа нет или он не читается.
+ *
+ * ПЕРЕСБОРКА БЕЗ ПЕРЕЗАПУСКА. Раз в полминуты движок сверяет время изменения
+ * файла графа. Если граф пересобран (npm run build:graph кладёт его атомарно),
+ * новый загружается в фоне, а запросы до конца загрузки обслуживает старый.
+ * На слабом сервере это значит: обновить карту дорог можно, не роняя сайт.
+ * Если новый файл не читается, остаётся старый граф.
  */
-export const getDefaultRoutingEngine = async (
-  filePath = process.env.ROUTING_GRAPH_PATH || new URL('../../data/graph/kazan.graph', import.meta.url),
-) => {
-  if (enginePromise) return enginePromise;
+export const getDefaultRoutingEngine = async (filePath = defaultGraphPath()) => {
+  const key = String(filePath);
 
-  enginePromise = (async () => {
-    const started = Date.now();
-    try {
-      const graph = await loadGraph(filePath);
-      const engine = createRoutingEngine({ graph });
-      const stats = engine.stats();
-      logger.event('routing.graph_loaded', {
-        status: 'ready',
-        provider: 'local',
-        nodes: stats.nodes,
-        edges: stats.edges,
-        memory_mb: Math.round(((stats.graphBytes + stats.searchStateBytes) / 1e6) * 10) / 10,
-        latency_ms: Date.now() - started,
-      });
-      return engine;
-    } catch (error) {
-      logger.warn('routing.graph_unavailable', {
-        status: 'failed',
-        provider: 'local',
-        // ENOENT — файла нет (соберите: npm run build:graph); иначе — повреждён.
-        reason: error?.code === 'ENOENT' ? 'graph_file_missing' : 'graph_file_invalid',
-      });
-      return null;
-    }
-  })();
+  if (!current || current.key !== key) {
+    const mtimeMs = await modifiedAt(filePath);
+    current = {
+      key,
+      mtimeMs,
+      checkedAt: Date.now(),
+      reloading: null,
+      promise: loadEngine(filePath, 'routing.graph_loaded'),
+    };
+    return current.promise;
+  }
 
-  return enginePromise;
+  const state = current;
+  if (!state.reloading && Date.now() - state.checkedAt >= RELOAD_CHECK_MS) {
+    state.checkedAt = Date.now();
+    state.reloading = (async () => {
+      const mtimeMs = await modifiedAt(filePath);
+      if (mtimeMs !== null && mtimeMs !== state.mtimeMs) {
+        const fresh = await loadEngine(filePath, 'routing.graph_reloaded');
+        if (fresh) {
+          state.promise = Promise.resolve(fresh);
+          state.mtimeMs = mtimeMs;
+        }
+      }
+      state.reloading = null;
+    })();
+  }
+
+  return state.promise;
+};
+
+/** Дождаться фоновой перезагрузки графа, если она идёт. Для тестов и диагностики. */
+export const __pendingRoutingReload = () => current?.reloading || Promise.resolve();
+
+/** Только для тестов: сдвинуть момент последней проверки файла в прошлое. */
+export const __expireRoutingReloadCheck = () => {
+  if (current) current.checkedAt = 0;
 };
 
 /** Только для тестов. */
 export const __resetRoutingEngine = () => {
-  enginePromise = null;
+  current = null;
 };

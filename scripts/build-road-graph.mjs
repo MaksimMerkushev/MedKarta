@@ -8,7 +8,7 @@
  * на слабой машине лучше не занимать. Собранный файл кладётся рядом с
  * приложением и загружается за десятки миллисекунд.
  *
- *   node scripts/build-road-graph.mjs                      # Казань по умолчанию
+ *   npm run build:graph                                    # Казань и все точки справочника
  *   node scripts/build-road-graph.mjs --tiles 4            # мельче тайлы, если Overpass отваливается
  *   node scripts/build-road-graph.mjs --input dump.json    # из готовой выгрузки, без сети
  *   node scripts/build-road-graph.mjs --print-query        # запрос для overpass-turbo.eu
@@ -18,18 +18,17 @@
  * «© участники OpenStreetMap».
  */
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { encodeGraph } from '../backend/routing/format.js';
+import { coverageBbox, directoryPoints } from '../backend/routing/coverage.js';
+import { createGraph } from '../backend/routing/graph.js';
+import { decodeGraph, encodeGraph, PROFILE_NAMES } from '../backend/routing/format.js';
 import { buildOverpassQuery, osmToGraph } from '../backend/routing/osm.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
-/** Казань с пригородами. */
-// Охват всех учреждений справочника с запасом ~3 км (самое западное — 48.81° в.д.).
-const DEFAULT_BBOX = [55.64, 48.75, 55.99, 49.43];
 const DEFAULT_OUT = 'data/graph/kazan.graph';
 
 const ENDPOINTS = [
@@ -49,7 +48,7 @@ const MAX_SPLIT_DEPTH = 3;
 const USER_AGENT = 'MedKarta-graph-builder/1.0 (https://github.com/MaksimMerkushev/med-navigator)';
 
 const parseArgs = (argv) => {
-  const args = { tiles: 2, out: DEFAULT_OUT, bbox: DEFAULT_BBOX, input: [], endpoint: null, printQuery: false };
+  const args = { tiles: 3, out: DEFAULT_OUT, bbox: null, input: [], endpoint: null, printQuery: false };
   for (let i = 0; i < argv.length; i += 1) {
     const [key, inline] = argv[i].split('=');
     const value = inline ?? argv[i + 1];
@@ -60,7 +59,7 @@ const parseArgs = (argv) => {
     else if (key === '--print-query') { args.printQuery = true; }
     else if (key === '--endpoint') { args.endpoint = value; if (!inline) i += 1; }
   }
-  if (args.bbox.length !== 4 || args.bbox.some((n) => !Number.isFinite(n))) {
+  if (args.bbox && (args.bbox.length !== 4 || args.bbox.some((n) => !Number.isFinite(n)))) {
     throw new Error('--bbox ожидает четыре числа: south,west,north,east');
   }
   return args;
@@ -209,8 +208,27 @@ const splitBbox = ([south, west, north, east], tiles) => {
   return parts;
 };
 
+/**
+ * Проверка собранного графа: к каждой точке справочника должна найтись
+ * дорога для каждого вида транспорта. Раньше граф молча не покрывал
+ * окраинные учреждения, и это обнаруживалось только в интерфейсе.
+ */
+const checkCoverage = (buffer, points) => {
+  const graph = createGraph(decodeGraph(buffer));
+  const missing = [];
+  const unique = new Map(points.map((point) => [`${point.lat.toFixed(5)},${point.lng.toFixed(5)}`, point]));
+  for (const point of unique.values()) {
+    const profiles = PROFILE_NAMES.filter((profile) => !graph.snapToRoad(point.lat, point.lng, profile));
+    if (profiles.length > 0) missing.push({ point, profiles });
+  }
+  return { missing, checked: unique.size, components: graph.mainComponentSizes() };
+};
+
 const main = async () => {
   const args = parseArgs(process.argv.slice(2));
+  const points = await directoryPoints();
+  // Рамка по умолчанию выводится из справочника: см. backend/routing/coverage.js.
+  if (!args.bbox) args.bbox = coverageBbox(points);
   let elements = [];
 
   if (args.printQuery) {
@@ -235,7 +253,10 @@ const main = async () => {
     elements = [...seen.values()];
   } else {
     const parts = splitBbox(args.bbox, args.tiles);
-    process.stdout.write(`Выгружаю ${parts.length} тайл(ов) из Overpass. Это занимает минуты.\n`);
+    process.stdout.write(
+      `Рамка ${args.bbox.join(',')} — Казань и ${points.length} точек справочника с запасом.\n` +
+      `Выгружаю ${parts.length} тайл(ов) из Overpass. Это занимает минуты.\n`,
+    );
 
     // Элементы дедуплицируются по id: тайлы перекрываются по границам,
     // и один и тот же узел приходит несколько раз.
@@ -270,7 +291,12 @@ const main = async () => {
   const buffer = encodeGraph(graph);
   const outPath = path.resolve(ROOT, args.out);
   await mkdir(path.dirname(outPath), { recursive: true });
-  await writeFile(outPath, buffer);
+  // Запись через временный файл: работающий сервер следит за графом
+  // и не должен прочитать его наполовину записанным.
+  await writeFile(`${outPath}.tmp`, buffer);
+  await rename(`${outPath}.tmp`, outPath);
+
+  const coverage = checkCoverage(buffer, points);
 
   const mib = (bytes) => (bytes / 1048576).toFixed(1);
   process.stdout.write(
@@ -279,9 +305,19 @@ const main = async () => {
     `  рёбер:  ${stats.edgeCount.toLocaleString('ru')}\n` +
     `  дорог:  ${stats.acceptedWays.toLocaleString('ru')} из ${stats.osmWays.toLocaleString('ru')}\n` +
     `  файл:   ${mib(buffer.byteLength)} МБ\n` +
-    `  в памяти сервера: примерно ${mib(buffer.byteLength + stats.nodeCount * 20)} МБ\n\n` +
-    'Данные © участники OpenStreetMap, лицензия ODbL.\n',
+    `  в памяти сервера: примерно ${mib(buffer.byteLength * 1.5)} МБ\n` +
+    `  главная компонента: ${Object.entries(coverage.components).map(([k, v]) => `${k} ${v.toLocaleString('ru')}`).join(', ')}\n`,
   );
+
+  if (coverage.missing.length === 0) {
+    process.stdout.write(`  покрытие: все ${coverage.checked} адресов справочника доступны для всех видов транспорта\n`);
+  } else {
+    process.stdout.write(`\n  ВНИМАНИЕ: ${coverage.missing.length} из ${coverage.checked} адресов без дороги рядом — маршрут к ним не построится:\n`);
+    for (const { point, profiles } of coverage.missing.slice(0, 20)) {
+      process.stdout.write(`    ${point.lat.toFixed(5)},${point.lng.toFixed(5)}  ${profiles.join('/')}  ${point.label || ''}\n`);
+    }
+  }
+  process.stdout.write('\nДанные © участники OpenStreetMap, лицензия ODbL.\n');
 };
 
 main().catch((error) => {

@@ -284,7 +284,15 @@ const ROUTE_ERROR_TEXT = {
   route_too_complex: 'Маршрут слишком длинный для расчёта',
   routing_graph_unavailable: 'Карта дорог не загружена на сервере',
 };
-const routeErrorText = (reason, fallback) => ROUTE_ERROR_TEXT[reason] || fallback;
+const routeErrorText = (routeData, targets, fallback) => {
+  if (routeData?.reason === 'point_far_from_road_network' && Number.isInteger(routeData.point)) {
+    if (routeData.point === 0) return 'Точка старта слишком далеко от дорог';
+    const target = targets?.[routeData.point - 1];
+    const label = target ? target.clinic || target.name : null;
+    if (label) return `Точка «${label}» слишком далеко от дорог`;
+  }
+  return ROUTE_ERROR_TEXT[routeData?.reason] || fallback;
+};
 
 const RoutingMachine = ({ originLocation, routeTargets, travelMode, setRouteData }) => {
   const map = useMap();
@@ -347,7 +355,13 @@ const RoutingMachine = ({ originLocation, routeTargets, travelMode, setRouteData
           const failure = await response.json().catch(() => null);
           if (cancelled) return;
           clear();
-          setRouteData({ distance: 0, time: 0, error: true, reason: failure?.code || null });
+          setRouteData({
+            distance: 0,
+            time: 0,
+            error: true,
+            reason: failure?.code || null,
+            point: Number.isInteger(failure?.point) ? failure.point : null,
+          });
           return;
         }
 
@@ -2706,7 +2720,7 @@ export default function App() {
               <div className="p-4 text-center">
                 {routeData ? (
                   routeData.error ? (
-                    <div className="text-sm font-medium text-red-500">{routeErrorText(routeData.reason, 'Маршрут не найден')}</div>
+                    <div className="text-sm font-medium text-red-500">{routeErrorText(routeData, routeTargets, 'Маршрут не найден')}</div>
                   ) : (
                     <>
                       <div className="text-3xl font-extrabold tracking-tight text-slate-800 dark:text-white">{formatTime(routeData.time)}</div>
@@ -2884,7 +2898,7 @@ export default function App() {
             <div className={`${isMobile ? 'p-4' : 'p-6'} text-center`}>
               {routeData ? (
                 routeData.error ? (
-                  <div className="text-sm font-medium text-red-500">{routeErrorText(routeData.reason, 'Маршрут для этого транспорта не найден')}</div>
+                  <div className="text-sm font-medium text-red-500">{routeErrorText(routeData, routeTargets, 'Маршрут для этого транспорта не найден')}</div>
                 ) : (
                   <>
                     <div className={`${isMobile ? 'text-3xl' : 'text-4xl'} font-extrabold tracking-tight text-slate-800 dark:text-white`}>{formatTime(routeData.time)}</div>
