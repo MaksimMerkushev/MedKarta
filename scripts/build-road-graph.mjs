@@ -28,7 +28,8 @@ import { buildOverpassQuery, osmToGraph } from '../backend/routing/osm.js';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 /** Казань с пригородами. */
-const DEFAULT_BBOX = [55.65, 48.85, 55.98, 49.42];
+// Охват всех учреждений справочника с запасом ~3 км (самое западное — 48.81° в.д.).
+const DEFAULT_BBOX = [55.64, 48.75, 55.99, 49.43];
 const DEFAULT_OUT = 'data/graph/kazan.graph';
 
 const ENDPOINTS = [

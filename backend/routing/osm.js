@@ -41,8 +41,10 @@ const DEFAULT_SPEED = {
 const BASE_ACCESS = {
   motorway: ACCESS.CAR,
   motorway_link: ACCESS.CAR,
-  trunk: ACCESS.CAR,
-  trunk_link: ACCESS.CAR,
+  // Магистрали городского типа в Казани (проспекты) — с тротуарами;
+  // загородные трассы размечены motorroad=yes и пешеходов не пускают.
+  trunk: ACCESS.CAR | ACCESS.BIKE | ACCESS.FOOT,
+  trunk_link: ACCESS.CAR | ACCESS.BIKE | ACCESS.FOOT,
   primary: ACCESS.CAR | ACCESS.BIKE | ACCESS.FOOT,
   primary_link: ACCESS.CAR | ACCESS.BIKE | ACCESS.FOOT,
   secondary: ACCESS.CAR | ACCESS.BIKE | ACCESS.FOOT,
@@ -62,8 +64,19 @@ const BASE_ACCESS = {
   track: ACCESS.FOOT | ACCESS.BIKE,
 };
 
-/** Значения тега access, запрещающие проход и проезд всем. */
-const BLOCKED_ACCESS = new Set(['no', 'private', 'military', 'delivery']);
+/** Значения тегов доступа, запрещающие проход и проезд. */
+const BLOCKED_ACCESS = new Set(['no', 'private', 'military', 'delivery', 'agricultural', 'forestry', 'emergency']);
+
+/** Значения, прямо разрешающие проход: сильнее общего запрета (access=no + foot=yes). */
+const ALLOWED_ACCESS = new Set(['yes', 'designated', 'permissive', 'destination', 'customers']);
+
+/**
+ * Одностороннее движение подразумевается и без тега oneway: кольцевые
+ * развязки и автомагистрали. Без этого машина «объезжала» кольцо против
+ * движения — геометрически по дороге, фактически нарушая ПДД.
+ */
+const impliesOneway = (tags) =>
+  tags.junction === 'roundabout' || tags.junction === 'circular' || tags.highway === 'motorway';
 
 /** Разбирает maxspeed: «60», «60 km/h», «RU:urban». */
 export const parseMaxSpeed = (value) => {
@@ -82,36 +95,46 @@ export const parseMaxSpeed = (value) => {
 };
 
 /**
- * Права проезда по одному пути с учётом частных тегов.
- * Возвращает маску вперёд и назад: односторонняя улица закрыта для
- * автомобиля в обратную сторону, но пешеход по ней ходит в обе.
+ * Права доступа по направлениям: { forward, backward } или null, если путь
+ * закрыт для всех профилей.
  */
 export const wayAccess = (tags = {}) => {
-  const base = BASE_ACCESS[tags.highway];
+  let base = BASE_ACCESS[tags.highway];
   if (base === undefined) return null;
 
-  let mask = base;
-  if (BLOCKED_ACCESS.has(tags.access)) return null;
-  if (BLOCKED_ACCESS.has(tags.motor_vehicle) || BLOCKED_ACCESS.has(tags.vehicle)) mask &= ~ACCESS.CAR;
+  // Автомобильная дорога (знак 5.3) закрыта для пешеходов и велосипедов.
+  if (tags.motorroad === 'yes') base &= ~(ACCESS.FOOT | ACCESS.BIKE);
+
+  let mask = BLOCKED_ACCESS.has(tags.access) ? 0 : base;
+  if (BLOCKED_ACCESS.has(tags.vehicle)) mask &= ~(ACCESS.CAR | ACCESS.BIKE);
+  if (BLOCKED_ACCESS.has(tags.motor_vehicle) || BLOCKED_ACCESS.has(tags.motorcar)) mask &= ~ACCESS.CAR;
   if (BLOCKED_ACCESS.has(tags.foot)) mask &= ~ACCESS.FOOT;
   if (BLOCKED_ACCESS.has(tags.bicycle)) mask &= ~ACCESS.BIKE;
-  if (tags.foot === 'yes' || tags.foot === 'designated') mask |= ACCESS.FOOT;
-  if (tags.bicycle === 'yes' || tags.bicycle === 'designated') mask |= ACCESS.BIKE;
+
+  if (ALLOWED_ACCESS.has(tags.foot)) mask |= ACCESS.FOOT;
+  if (ALLOWED_ACCESS.has(tags.bicycle)) mask |= ACCESS.BIKE;
+  if (ALLOWED_ACCESS.has(tags.motorcar) || ALLOWED_ACCESS.has(tags.motor_vehicle)) mask |= base & ACCESS.CAR;
   if (mask === 0) return null;
 
   const oneway = tags.oneway;
-  const isOneway = oneway === 'yes' || oneway === '1' || oneway === 'true';
   const isReversed = oneway === '-1' || oneway === 'reverse';
+  const isOneway =
+    !isReversed &&
+    (oneway === 'yes' || oneway === '1' || oneway === 'true' || (oneway !== 'no' && impliesOneway(tags)));
 
-  // Пешеход и велосипед игнорируют одностороннее движение, если явно
-  // не сказано обратное. Для велосипеда это тег oneway:bicycle.
-  const bikeIgnoresOneway = tags['oneway:bicycle'] !== 'yes';
+  /*
+   * Пешеход одностороннее движение не учитывает никогда. Велосипед — только
+   * на кольце и при явном oneway:bicycle=yes; на обычной односторонней улице
+   * велосипедист может спешиться и пройти по тротуару.
+   */
+  const bikeObeysOneway =
+    tags['oneway:bicycle'] === 'yes' || (tags['oneway:bicycle'] !== 'no' && impliesOneway(tags));
 
   let forward = mask;
   let backward = mask;
 
   if (isOneway || isReversed) {
-    const restricted = ACCESS.CAR | (bikeIgnoresOneway ? 0 : ACCESS.BIKE);
+    const restricted = ACCESS.CAR | (bikeObeysOneway ? ACCESS.BIKE : 0);
     if (isOneway) backward &= ~restricted;
     if (isReversed) forward &= ~restricted;
   }
