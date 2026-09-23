@@ -12,13 +12,17 @@
  *   node scripts/build-road-graph.mjs --tiles 4            # мельче тайлы, если Overpass отваливается
  *   node scripts/build-road-graph.mjs --input dump.json    # из готовой выгрузки, без сети
  *   node scripts/build-road-graph.mjs --print-query        # запрос для overpass-turbo.eu
+ *
+ * Оборвалась сборка — запустите ту же команду снова: скачанные рамки
+ * лежат в data/graph/.overpass-cache и повторно не качаются.
  *   node scripts/build-road-graph.mjs --bbox 55.7,49.0,55.9,49.3 --out data/graph/kazan.graph
  *
  * Данные OpenStreetMap — ODbL. В приложении требуется указание авторства:
  * «© участники OpenStreetMap».
  */
 
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -31,10 +35,17 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 const DEFAULT_OUT = 'data/graph/kazan.graph';
 
+/*
+ * Публичные зеркала Overpass. Первым пробуется то, что последним ответило
+ * успешно: перегрузка у волонтёрских серверов длится часами, и раз за разом
+ * начинать с упавшего зеркала — потеря времени. maps.mail.ru — зеркало
+ * в России, для выгрузки по Казани обычно самое быстрое.
+ */
 const ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
-  'https://overpass.osm.jp/api/interpreter',
 ];
 
 /*
@@ -48,7 +59,9 @@ const MAX_SPLIT_DEPTH = 3;
 const USER_AGENT = 'MedKarta-graph-builder/1.0 (https://github.com/MaksimMerkushev/med-navigator)';
 
 const parseArgs = (argv) => {
-  const args = { tiles: 3, out: DEFAULT_OUT, bbox: null, input: [], endpoint: null, printQuery: false };
+  const args = {
+    tiles: 3, out: DEFAULT_OUT, bbox: null, input: [], endpoint: null, printQuery: false, noCache: false, keepCache: false,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const [key, inline] = argv[i].split('=');
     const value = inline ?? argv[i + 1];
@@ -57,6 +70,8 @@ const parseArgs = (argv) => {
     else if (key === '--out') { args.out = value; if (!inline) i += 1; }
     else if (key === '--input') { args.input.push(...value.split(',')); if (!inline) i += 1; }
     else if (key === '--print-query') { args.printQuery = true; }
+    else if (key === '--no-cache') { args.noCache = true; }
+    else if (key === '--keep-cache') { args.keepCache = true; }
     else if (key === '--endpoint') { args.endpoint = value; if (!inline) i += 1; }
   }
   if (args.bbox && (args.bbox.length !== 4 || args.bbox.some((n) => !Number.isFinite(n)))) {
@@ -114,81 +129,175 @@ const quarter = ([south, west, north, east]) => {
 
 const TIMEOUT_CODES = new Set([504, 502, 503]);
 
+/** Сколько раз пробовать одну рамку, перебирая зеркала, прежде чем сдаться. */
+const MAX_ATTEMPTS = 16;
+
 /**
- * Выгружает одну рамку, при необходимости дробя её.
+ * Отказ 504 быстрее этого порога — сервер перегружен и не взял запрос
+ * в работу; медленнее — запрос взят, но не уложился, то есть рамка тяжела.
+ * Переменная окружения — только для тестов с имитацией сервера.
+ */
+const SLOW_RESPONSE_MS = Number(process.env.OVERPASS_SLOW_MS) || 30_000;
+
+/** Потолок ожидания ответа: таймаут самого запроса 180 с плюс запас. */
+const REQUEST_TIMEOUT_MS = 200_000;
+
+/*
+ * КЕШ ВЫГРУЗКИ. Каждая успешно скачанная рамка сразу пишется на диск.
+ * Если сборка оборвалась — сеть, перегруженное зеркало, Ctrl+C, — повторный
+ * запуск той же команды не качает скачанное заново, а продолжает с места
+ * остановки. Рамки, которые пришлось дробить, помечаются, чтобы при повторе
+ * сразу идти к частям. После успешной сборки кеш удаляется.
+ */
+const CACHE_DIR = path.join(ROOT, 'data/graph/.overpass-cache');
+
+const cacheFile = (bbox) =>
+  path.join(CACHE_DIR, `${createHash('sha1').update(buildOverpassQuery(bbox)).digest('hex').slice(0, 20)}.json`);
+
+const readCache = async (bbox) => {
+  try {
+    return JSON.parse(await readFile(cacheFile(bbox), 'utf8'));
+  } catch {
+    return null;
+  }
+};
+
+const writeCache = async (bbox, value) => {
+  const file = cacheFile(bbox);
+  await mkdir(CACHE_DIR, { recursive: true });
+  await writeFile(`${file}.tmp`, JSON.stringify(value));
+  await rename(`${file}.tmp`, file);
+};
+
+const hostOf = (endpoint) => {
+  try {
+    return new URL(endpoint).host;
+  } catch {
+    return endpoint;
+  }
+};
+
+const fetchQuarters = async (bbox, state, depth) => {
+  const collected = [];
+  for (const part of quarter(bbox)) {
+    collected.push(...(await fetchArea(part, state, depth + 1)));
+  }
+  return collected;
+};
+
+/**
+ * Выгружает одну рамку.
  *
- * ПОЧЕМУ ДРОБИТЬ, А НЕ ПОВТОРЯТЬ. Код 504 означает, что запрос не уложился
- * в отведённое время: рамка слишком велика для публичного зеркала. Повторять
- * тот же запрос бессмысленно — он не станет быстрее. Правильная реакция —
- * разделить рамку на четыре и выгрузить по частям. Так сборка сама
- * подстраивается под плотность застройки: над полями тайл берётся целиком,
- * над центром города дробится.
+ * КАК РЕАГИРОВАТЬ НА ОТКАЗ. Код 504 бывает двух видов, и лечатся они
+ * по-разному:
+ *   - быстрый 504 (секунды) — сервер перегружен и запрос в работу не взял.
+ *     Дробить рамку бессмысленно: 64 маленьких запроса перегруженный сервер
+ *     отклонит так же. Нужно другое зеркало или пауза;
+ *   - медленный 504 (десятки секунд) — запрос не уложился в таймаут,
+ *     рамка тяжела. Её делим на четыре части.
+ * Ответ 200 тоже бывает неполным: при нехватке времени или памяти Overpass
+ * отдаёт то, что успел, и пишет об этом в поле remark. Такой ответ не
+ * принимается — граф с дырами хуже, чем повторный запрос.
  *
  * @param {number[]} bbox
- * @param {string[]} endpoints
+ * @param {{endpoints: string[], preferred: number, useCache: boolean, stats: object}} state
  * @param {number} depth текущая глубина дробления
  */
-const fetchArea = async (bbox, endpoints, depth = 0, attempt = 0) => {
-  const endpoint = endpoints[attempt % endpoints.length];
-  await waitForSlot(endpoint);
-
-  let response;
-  try {
-    response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': USER_AGENT,
-        Accept: 'application/json',
-      },
-      body: `data=${encodeURIComponent(buildOverpassQuery(bbox))}`,
-    });
-  } catch (error) {
-    if (attempt >= 5) throw new Error(`сеть недоступна: ${error.message}`);
-    await sleep(10_000);
-    return fetchArea(bbox, endpoints, depth, attempt + 1);
-  }
-
-  if (response.ok) {
-    const payload = await response.json();
-    return payload.elements || [];
-  }
-
-  const detail = (await response.text().catch(() => '')).replace(/\s+/g, ' ').trim();
-
-  // Не уложился в таймаут — рамка велика. Дробим, а не повторяем.
-  if (TIMEOUT_CODES.has(response.status) && depth < MAX_SPLIT_DEPTH) {
-    process.stdout.write(`\n      ${response.status}: рамка велика, дроблю на 4 части`);
-    const parts = quarter(bbox);
-    const collected = [];
-    for (const part of parts) {
-      collected.push(...(await fetchArea(part, endpoints, depth + 1)));
-      await sleep(2000);
+const fetchArea = async (bbox, state, depth = 0) => {
+  if (state.useCache) {
+    const cached = await readCache(bbox);
+    if (cached?.split) return fetchQuarters(bbox, state, depth);
+    if (Array.isArray(cached?.elements)) {
+      state.stats.fromCache += 1;
+      return cached.elements;
     }
-    return collected;
   }
 
-  if (attempt >= 6) {
-    throw new Error(
-      `Overpass отвечает ${response.status} после ${attempt + 1} попыток.\n` +
-      `Ответ сервера: ${detail.slice(0, 300)}\n\n` +
-      'Обходной путь — выгрузить вручную, см. docs/routing.md:\n' +
-      '  node scripts/build-road-graph.mjs --input путь/к/export.json',
+  const split = async (reason) => {
+    process.stdout.write(`\n      ${reason}: дроблю рамку на 4 части`);
+    if (state.useCache) await writeCache(bbox, { split: true });
+    return fetchQuarters(bbox, state, depth);
+  };
+
+  let fastFailures = 0;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    const endpoint = state.endpoints[(state.preferred + attempt) % state.endpoints.length];
+    await waitForSlot(endpoint);
+
+    const started = Date.now();
+    let response;
+    let failure;
+    try {
+      response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent': USER_AGENT,
+          Accept: 'application/json',
+        },
+        body: `data=${encodeURIComponent(buildOverpassQuery(bbox))}`,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch (error) {
+      failure = `нет ответа (${error.name === 'TimeoutError' ? 'таймаут' : error.message})`;
+    }
+    const elapsed = Date.now() - started;
+
+    if (response?.ok) {
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch {
+        failure = 'ответ не JSON';
+      }
+
+      if (payload) {
+        const remark = String(payload.remark || '');
+        if (/runtime error|timed out|out of memory/i.test(remark)) {
+          // Данные неполные: сервер не уложился и отдал часть.
+          if (depth < MAX_SPLIT_DEPTH) return split('ответ неполный');
+          failure = 'ответ неполный';
+        } else {
+          state.preferred = state.endpoints.indexOf(endpoint);
+          const elements = payload.elements || [];
+          if (state.useCache) await writeCache(bbox, { elements });
+          state.stats.downloaded += 1;
+          return elements;
+        }
+      }
+    } else if (response) {
+      const detail = (await response.text().catch(() => '')).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      failure = `ответ ${response.status}${detail ? ` (${detail.slice(0, 80)})` : ''}`;
+
+      if (TIMEOUT_CODES.has(response.status)) {
+        const heavy = elapsed >= SLOW_RESPONSE_MS;
+        if (!heavy) fastFailures += 1;
+        // Дробим, если рамка тяжела, или если перегружены все зеркала по два раза подряд.
+        if (depth < MAX_SPLIT_DEPTH && (heavy || fastFailures >= state.endpoints.length * 2)) {
+          return split(`${response.status} за ${Math.round(elapsed / 1000)} c`);
+        }
+      }
+
+      const retryAfter = Number(response.headers.get('retry-after'));
+      if (response.status === 429 && Number.isFinite(retryAfter) && retryAfter > 0) {
+        await sleep(retryAfter * 1000);
+      }
+    }
+
+    // Сначала быстро обходим все зеркала, потом паузы удваиваются.
+    const wait = Math.min(120_000, 5000 * 2 ** Math.floor(attempt / state.endpoints.length));
+    const next = hostOf(state.endpoints[(state.preferred + attempt + 1) % state.endpoints.length]);
+    process.stdout.write(
+      `\n      ${hostOf(endpoint)}: ${failure} — через ${Math.round(wait / 1000)} c пробую ${next}`,
     );
+    await sleep(wait);
   }
 
-  const retryAfter = Number(response.headers.get('retry-after'));
-  const wait = Number.isFinite(retryAfter) && retryAfter > 0
-    ? retryAfter * 1000
-    : Math.min(90_000, 8000 * 2 ** attempt);
-
-  process.stdout.write(
-    `\n      ответ ${response.status}` +
-    (detail ? ` (${detail.slice(0, 90)})` : '') +
-    `, через ${Math.round(wait / 1000)} c другое зеркало`,
+  throw new Error(
+    `часть рамки ${bbox.map((n) => n.toFixed(3)).join(',')} не выгрузилась за ${MAX_ATTEMPTS} попыток: ` +
+    'все зеркала Overpass перегружены.\n' +
+    'Скачанное сохранено. Запустите ту же команду ещё раз — сборка продолжится с места остановки.',
   );
-  await sleep(wait);
-  return fetchArea(bbox, endpoints, depth, attempt + 1);
 };
 
 const splitBbox = ([south, west, north, east], tiles) => {
@@ -228,7 +337,8 @@ const main = async () => {
   const args = parseArgs(process.argv.slice(2));
   const points = await directoryPoints();
   // Рамка по умолчанию выводится из справочника: см. backend/routing/coverage.js.
-  if (!args.bbox) args.bbox = coverageBbox(points);
+  const derived = !args.bbox;
+  if (derived) args.bbox = coverageBbox(points);
   let elements = [];
 
   if (args.printQuery) {
@@ -253,8 +363,14 @@ const main = async () => {
     elements = [...seen.values()];
   } else {
     const parts = splitBbox(args.bbox, args.tiles);
+    const state = {
+      endpoints: args.endpoint ? [args.endpoint] : ENDPOINTS,
+      preferred: 0,
+      useCache: !args.noCache,
+      stats: { downloaded: 0, fromCache: 0 },
+    };
     process.stdout.write(
-      `Рамка ${args.bbox.join(',')} — Казань и ${points.length} точек справочника с запасом.\n` +
+      `Рамка ${args.bbox.join(',')}${derived ? ` — Казань и ${points.length} точек справочника с запасом` : ''}.\n` +
       `Выгружаю ${parts.length} тайл(ов) из Overpass. Это занимает минуты.\n`,
     );
 
@@ -263,14 +379,16 @@ const main = async () => {
     const seen = new Map();
     for (const [index, part] of parts.entries()) {
       process.stdout.write(`  тайл ${index + 1}/${parts.length}…`);
-      const tile = await fetchArea(part, args.endpoint ? [args.endpoint] : ENDPOINTS);
+      const tile = await fetchArea(part, state);
       for (const element of tile) {
         seen.set(`${element.type}/${element.id}`, element);
       }
       process.stdout.write(` +${tile.length.toLocaleString('ru')} элементов\n`);
-      if (index + 1 < parts.length) await sleep(3000);
     }
     elements = [...seen.values()];
+    if (state.stats.fromCache > 0) {
+      process.stdout.write(`  (из них ${state.stats.fromCache} рамок взято из кеша прошлого запуска)\n`);
+    }
   }
 
   process.stdout.write(`\nСобираю граф из ${elements.length.toLocaleString('ru')} элементов…\n`);
@@ -297,6 +415,10 @@ const main = async () => {
   await rename(`${outPath}.tmp`, outPath);
 
   const coverage = checkCoverage(buffer, points);
+
+  if (args.input.length === 0 && !args.keepCache) {
+    await rm(CACHE_DIR, { recursive: true, force: true });
+  }
 
   const mib = (bytes) => (bytes / 1048576).toFixed(1);
   process.stdout.write(
