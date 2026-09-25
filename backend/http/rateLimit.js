@@ -67,17 +67,42 @@ export const checkRouteRateLimit = createRateLimiter({
   maxPerInstance: 1500,
 });
 
+/**
+ * Сколько доверенных прокси стоит перед сервером (TRUST_PROXY, по умолчанию 0).
+ *
+ * Раньше адрес брался из первого значения X-Forwarded-For без всяких условий.
+ * Этот заголовок пишет клиент, поэтому, меняя его в каждом запросе, любой
+ * обходил лимит «20 запросов с адреса» — а за nginx с
+ * `$proxy_add_x_forwarded_for` первое значение тоже остаётся клиентским.
+ *
+ * Теперь без прокси адрес берётся только из сокета. С TRUST_PROXY=N берётся
+ * N-е значение с конца: его дописал наш собственный прокси, подделать его
+ * клиент не может.
+ */
+const trustedProxyHops = () => {
+  const hops = Number.parseInt(process.env.TRUST_PROXY ?? '0', 10);
+  return Number.isFinite(hops) && hops > 0 ? Math.min(hops, 5) : 0;
+};
+
 export const getClientIp = (req) => {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string' && forwarded.length > 0) {
-    return forwarded.split(',')[0].trim().slice(0, 64);
+  const socketAddress = (req.socket?.remoteAddress || 'unknown').toString().slice(0, 64);
+  const hops = trustedProxyHops();
+  if (hops === 0) {
+    return socketAddress;
   }
 
-  return (
-    req.headers['x-real-ip'] ||
-    req.socket?.remoteAddress ||
-    'unknown'
-  ).toString().slice(0, 64);
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.length > 0) {
+    const chain = forwarded.split(',').map((part) => part.trim()).filter(Boolean);
+    const candidate = chain[chain.length - hops];
+    if (candidate) return candidate.slice(0, 64);
+  }
+
+  const realIp = req.headers['x-real-ip'];
+  if (typeof realIp === 'string' && realIp.length > 0) {
+    return realIp.trim().slice(0, 64);
+  }
+  return socketAddress;
 };
 
 /**

@@ -61,7 +61,18 @@ const MIME = {
  * проверки `GET /../.env` отдал бы файл с ключом API.
  */
 const resolveStaticPath = (requestUrl) => {
-  const pathname = decodeURIComponent(new URL(requestUrl, 'http://localhost').pathname);
+  let pathname;
+  try {
+    pathname = decodeURIComponent(new URL(requestUrl, 'http://localhost').pathname);
+  } catch {
+    // «/%», «/%E0%A4%A» и прочая битая кодировка. Раньше исключение летело
+    // мимо всех обработчиков и роняло процесс: один такой запрос выключал
+    // сайт для всех.
+    return null;
+  }
+  if (pathname.includes('\0')) {
+    return null;
+  }
   const candidate = path.resolve(DIST, `.${pathname}`);
   if (candidate !== DIST && !candidate.startsWith(DIST + path.sep)) {
     return null;
@@ -80,10 +91,17 @@ const sendFile = (res, filePath, status = 200) => {
       ? 'public, max-age=31536000, immutable'
       : 'no-cache',
   );
-  fs.createReadStream(filePath).pipe(res);
+  const stream = fs.createReadStream(filePath);
+  // Файл мог исчезнуть между stat и чтением (пересборка dist/): без обработчика
+  // ошибка потока тоже уронила бы процесс.
+  stream.on('error', () => {
+    if (!res.headersSent) res.statusCode = 404;
+    res.end();
+  });
+  stream.pipe(res);
 };
 
-const server = http.createServer(async (req, res) => {
+const handleRequest = async (req, res) => {
   applySecurityHeaders(res, { api: req.url?.startsWith('/api/') });
 
   const apiHandler = req.url?.startsWith('/api/chat')
@@ -139,6 +157,42 @@ const server = http.createServer(async (req, res) => {
       sendFile(res, index, 200);
     });
   });
+};
+
+const server = http.createServer((req, res) => {
+  // Последний рубеж: любое исключение в разборе запроса — это 500 для одного
+  // клиента, а не остановка сервера для всех.
+  handleRequest(req, res).catch((error) => {
+    logger.error('server.request_failed', error);
+    if (!res.headersSent) {
+      res.statusCode = 500;
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.end(JSON.stringify({ error: 'Внутренняя ошибка сервера.' }));
+    } else if (!res.writableEnded) {
+      res.destroy();
+    }
+  });
+});
+
+/*
+ * Таймауты и потолок соединений. Значения Node по умолчанию (заголовки —
+ * 60 с, запрос — 5 мин) рассчитаны не на сервер с одним ядром: сотня
+ * медленных клиентов держала бы сокеты и память минутами. Наши запросы
+ * укладываются в доли секунды, тело ограничено 32 КБ.
+ */
+server.headersTimeout = 15_000;
+server.requestTimeout = 20_000;
+server.keepAliveTimeout = 5_000;
+server.maxConnections = Number(process.env.MAX_CONNECTIONS) || 512;
+
+process.on('unhandledRejection', (error) => {
+  logger.error('process.unhandled_rejection', error);
+});
+process.on('uncaughtException', (error) => {
+  // Состояние процесса после такого исключения не гарантировано: пишем код
+  // ошибки и выходим, чтобы менеджер процессов (systemd, pm2) поднял чистый.
+  logger.error('process.uncaught_exception', error);
+  process.exit(1);
 });
 
 server.listen(PORT, HOST, async () => {

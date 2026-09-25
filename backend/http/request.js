@@ -81,7 +81,9 @@ export const verifyOrigin = (req) => {
   }
 
   try {
-    const host = req.headers['x-forwarded-host'] || req.headers.host;
+    // X-Forwarded-Host пишет клиент; верить ему можно только за своим прокси.
+    const behindProxy = Number.parseInt(process.env.TRUST_PROXY ?? '0', 10) > 0;
+    const host = (behindProxy && req.headers['x-forwarded-host']) || req.headers.host;
     return Boolean(host) && new URL(origin).host === host;
   } catch {
     return false;
