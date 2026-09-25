@@ -50,6 +50,7 @@ import { kazanFacilities } from '@data/facilities.js';
 import { ClinicsData } from '@data/clinics.js';
 import Toast, { useToast } from './Toast';
 import SearchFilters from './SearchFilters';
+import PlaceDoctorList from './PlaceDoctorList';
 import { SORT_MODES } from '@shared/contract.js';
 import { useDebouncedValue } from './hooks/useDebouncedValue';
 import { isBoolean, isStringIdArray, useLocalStorageState } from './hooks/useLocalStorageState';
@@ -256,6 +257,37 @@ const FlyToPoint = ({ target, onDone }) => {
     }
   }, [target, map, onDone]);
   return null;
+};
+
+/*
+ * Стабильные позиции и иконки маркеров.
+ *
+ * react-leaflet вызывает marker.setLatLng(), как только массив позиции —
+ * НОВЫЙ объект, даже с теми же числами. Внутри кластера это «переезд»
+ * маркера: он снимается с карты и ставится заново, а открытое окно
+ * закрывается. Из-за этого окно со списком врачей закрывалось от любого
+ * действия в нём — сердечко, «в маршрут», — и найденного врача приходилось
+ * искать заново. Поэтому один и тот же массив на одни и те же координаты,
+ * и одна и та же иконка на один и тот же номер в маршруте.
+ */
+const markerPositions = new Map();
+const stablePosition = (key, lat, lng) => {
+  let position = markerPositions.get(key);
+  if (!position) {
+    position = [lat, lng];
+    markerPositions.set(key, position);
+  }
+  return position;
+};
+
+const routeIcons = new Map();
+const routeIconFor = (number) => {
+  let icon = routeIcons.get(number);
+  if (!icon) {
+    icon = createBeautifulArrow('#ef4444', false, String(number));
+    routeIcons.set(number, icon);
+  }
+  return icon;
 };
 
 const InvalidateMapSize = () => {
@@ -1819,6 +1851,7 @@ export default function App() {
       const key = `${Number(doc.lat).toFixed(5)},${Number(doc.lng).toFixed(5)}`;
       if (!groupsMap.has(key)) {
         groupsMap.set(key, {
+          key,
           lat: doc.lat,
           lng: doc.lng,
           items: [],
@@ -1828,7 +1861,7 @@ export default function App() {
     });
 
     return Array.from(groupsMap.values()).map((group) => {
-      const { lat, lng, items } = group;
+      const { key, lat, lng, items } = group;
       // Если среди специалистов точки есть точка маршрута — маркер должен быть красным маршрутным
       const targetItem = items.find((it) => it.isRouteTarget);
       const isRouteTarget = Boolean(targetItem);
@@ -1840,7 +1873,7 @@ export default function App() {
 
       // Приоритет иконки: Маршрут -> Избранное -> Государственная/Частная
       const icon = isRouteTarget
-        ? createBeautifulArrow('#ef4444', false, (routeIndex + 1).toString())
+        ? routeIconFor(routeIndex + 1)
         : hasFavorite
           ? amberArrowIcon
           : ownershipIcon;
@@ -1854,9 +1887,20 @@ export default function App() {
           : 'mt-2 w-full text-xs font-medium py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition-all bg-blue-50 text-blue-600 border border-blue-200 dark:bg-blue-900 dark:text-blue-300 dark:border-blue-800';
 
       return (
-        <Marker key={`group-${lat}-${lng}`} position={[lat, lng]} icon={icon}>
-          <Popup>
-            <div className="min-w-[240px] max-w-[300px] pb-1 dark:text-white">
+        <Marker key={`group-${key}`} position={stablePosition(key, lat, lng)} icon={icon}>
+          <Popup maxWidth={isSingle ? 300 : 360} minWidth={isSingle ? 240 : 300}>
+            {/*
+              Клик внутри окна не должен доходить до карты. Leaflet отличает
+              клик по окну от клика по карте, поднимаясь по DOM от цели события.
+              Но React успевает перерисовать список раньше, чем событие доходит
+              до карты: нажатая кнопка (сердечко, «в маршрут») уже удалена из
+              DOM, Leaflet не находит окно среди её предков, считает это кликом
+              по карте и закрывает окно. Останавливаем всплытие здесь.
+            */}
+            <div
+              className={`${isSingle ? 'min-w-[240px] max-w-[300px]' : 'w-full'} pb-1 dark:text-white`}
+              onClick={(event) => event.stopPropagation()}
+            >
               <strong className="mb-1 block text-lg font-bold leading-tight text-blue-600 dark:text-blue-400">
                 {primary.clinic || primary.name}
               </strong>
@@ -1923,55 +1967,12 @@ export default function App() {
                   </button>
                 </div>
               ) : (
-                <div>
-                  <div className="mb-2 flex items-center justify-between text-xs font-semibold text-slate-600 dark:text-slate-300">
-                    <span>Специалисты в учреждении:</span>
-                    <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-bold text-blue-700 dark:bg-blue-900 dark:text-blue-300">
-                      {items.length}
-                    </span>
-                  </div>
-                  <div className="max-h-52 space-y-2 overflow-y-auto pr-1 scrollbar-thin">
-                    {items.map((doc) => (
-                      <div
-                        key={doc.id}
-                        className={`rounded-xl border p-2 text-xs transition-colors ${
-                          doc.isRouteTarget
-                            ? 'border-red-200 bg-red-50/50 dark:border-red-900/50 dark:bg-red-950/20'
-                            : 'border-slate-100 bg-slate-50 dark:border-slate-700 dark:bg-slate-800'
-                        }`}
-                      >
-                        <div className="font-bold text-slate-800 dark:text-white">{doc.name}</div>
-                        <div className="text-[11px] text-slate-500 dark:text-slate-400">{doc.specialty}</div>
-                        <div className="mt-1.5 flex gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => (doc.isRouteTarget ? removeFromRoute(doc.id) : handleRouteClick(doc))}
-                            className={`flex flex-1 items-center justify-center gap-1 rounded-lg py-1 text-[11px] font-medium transition-all ${
-                              doc.isRouteTarget
-                                ? 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900 dark:text-red-200'
-                                : 'bg-blue-600 text-white hover:bg-blue-700'
-                            }`}
-                          >
-                            {doc.isRouteTarget ? <XCircle size={12} /> : <Navigation size={12} />}
-                            {doc.isRouteTarget ? 'Убрать' : 'В маршрут'}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => toggleFavorite(doc.id)}
-                            className={`flex h-7 w-7 items-center justify-center rounded-lg border text-slate-500 transition-colors ${
-                              doc.isFavorite
-                                ? 'border-amber-200 bg-amber-50 text-amber-600'
-                                : 'border-slate-200 bg-white hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-700'
-                            }`}
-                            title={doc.isFavorite ? 'В избранном' : 'В избранное'}
-                          >
-                            <Heart size={13} fill={doc.isFavorite ? 'currentColor' : 'none'} />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                <PlaceDoctorList
+                  items={items}
+                  onAddToRoute={handleRouteClick}
+                  onRemoveFromRoute={removeFromRoute}
+                  onToggleFavorite={toggleFavorite}
+                />
               )}
             </div>
           </Popup>
