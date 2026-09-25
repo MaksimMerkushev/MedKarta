@@ -34,7 +34,21 @@ const MAX_GLUE_TOKENS = 14;
  * предлог, а хвост слова оставался снаружи.
  */
 /** Сколько нечётких сравнений допускается на один разбор сообщения. */
-const FUZZY_BUDGET_PER_RESOLVE = 12;
+const FUZZY_BUDGET_PER_RESOLVE = 24;
+
+/*
+ * Слова, которые совпадают с названиями клиник, но в запросе почти всегда
+ * значат своё: «для» (Госпиталь для ветеранов войн), «Ваш» (Ваш доктор),
+ * «хорошего» (Хорошие руки), «марта» (Март). Раньше «построй маршрут
+ * к педиатру для сына» превращался в маршрут в госпиталь для ветеранов.
+ */
+const COMMON_SINGLE_WORDS = [
+  'для', 'ваш', 'наш', 'мой', 'твой', 'свой', 'хороший', 'хорошо', 'плюс', 'город', 'мир', 'март',
+  'апрель', 'май', 'июнь', 'июль', 'август', 'здоровый', 'добрый', 'новый', 'свет', 'жизнь', 'семья',
+  'мама', 'папа', 'дети', 'ребенок', 'будь', 'здоров', 'лучший', 'лучше', 'рядом', 'дом', 'сити',
+  'центр', 'столица', 'первый', 'главный', 'личный', 'надежда', 'вера', 'любовь', 'гармония',
+  'баланс', 'эксперт', 'профи', 'норма', 'формула', 'точка', 'линия', 'время', 'сейчас', 'сегодня',
+];
 
 const FUNCTION_LETTERS = new Set(['к', 'в', 'с', 'у', 'и', 'а', 'о', 'я', 'ж', 'б', 'й']);
 
@@ -72,6 +86,7 @@ const PERSON_CUE_WORDS_RAW = [
  * Любая новая константа обязана проходить через stemWord здесь, а не в коде.
  */
 const GENERIC_CLINIC_TOKENS = new Set(GENERIC_CLINIC_WORDS.map((word) => stemWord(word)));
+const COMMON_SINGLE_TOKENS = new Set(COMMON_SINGLE_WORDS.map((word) => stemWord(word)));
 const PERSON_CUE_WORDS = new Set(PERSON_CUE_WORDS_RAW.map((word) => stemWord(word)));
 
 const tokenizeWithOffsets = (text) => {
@@ -141,6 +156,26 @@ export const createEntityResolver = (catalog) => {
     addToIndex(fullNameIndex, words.map(stemSurname).join(' '), doctor.id);
   }
 
+  /*
+   * Короткие фамилии (Цой, Пак, Хван, Ким): основа из трёх букв слишком
+   * коротка для общего индекса, и «к доктору Цою» уходило наружу. Для них
+   * строятся падежные формы целиком и ищутся точным совпадением слова
+   * с заглавной буквы.
+   */
+  const shortSurnameIndex = new Map();
+  for (const doctor of catalog.doctors) {
+    const surname = normalizeRu(doctor.name).split(' ')[0] || '';
+    if (surname.length < 2 || surname.length > 4) continue;
+    const forms = new Set([surname]);
+    if (/[ой]й$/u.test(surname) || /ай$/u.test(surname)) {
+      const stem = surname.slice(0, -1);
+      for (const ending of ['я', 'ю', 'ем', 'е']) forms.add(stem + ending);
+    } else if (/[бвгджзклмнпрстфхцчшщ]$/u.test(surname)) {
+      for (const ending of ['а', 'у', 'ом', 'е', 'ым']) forms.add(surname + ending);
+    }
+    for (const form of forms) addToIndex(shortSurnameIndex, form, doctor.id);
+  }
+
   const surnameStems = [...surnameIndex.keys()];
   // Ведро по первой букве: отсекает 95% кандидатов до дорогой метрики.
   const surnameByFirstChar = new Map();
@@ -150,9 +185,26 @@ export const createEntityResolver = (catalog) => {
 
   const clinicIndex = new Map();
   const clinicById = new Map();
+  // Однословные ключи из аббревиатур («РКБ», «МКДЦ»): им не нужна заглавная
+  // буква, «поеду в ркб» — обычная запись.
+  const aliasSingleKeys = new Set();
   for (const clinic of catalog.clinics) {
     clinicById.set(clinic.id, clinic);
     const variants = [clinic.name, clinic.branchName, ...clinic.aliases].filter(Boolean);
+
+    for (const alias of clinic.aliases || []) {
+      const stems = normalizeRu(alias).split(' ').filter(Boolean).map(stemWord);
+      if (stems.length === 1) aliasSingleKeys.add(stems[0]);
+    }
+    // Аббревиатуры прямо в названии: «… МЗ РТ (РКБ)», «(МКДЦ)».
+    for (const variant of variants) {
+      for (const word of String(variant).match(/\p{Lu}{2,6}/gu) || []) {
+        // Организационно-правовые формы и названия услуг («МРТ», «УЗИ») —
+        // не название конкретной клиники: «Где сделать МРТ» — вопрос об услуге.
+        if (/^(?:МЗ|РТ|РФ|ГАУЗ|ГБУЗ|ФГБУ|ФГБОУ|АНО|ООО|ЗАО|ОАО|ПАО|ИП|МУ|МБУЗ|ЛПУ|ЦРБ|МРТ|КТ|УЗИ|ЭКГ|ЭЭГ|ЭНМГ|ЛОР|ЛФК|ОМС|ДМС|МСЭ|ВМП|ПЭТ|СПИД|ВИЧ|ЭКО|ПЦР|ЦКБ)$/u.test(word)) continue;
+        aliasSingleKeys.add(stemWord(normalizeRu(word)));
+      }
+    }
 
     for (const variant of variants) {
       const stems = normalizeRu(variant).split(' ').filter(Boolean).map(stemWord);
@@ -166,6 +218,12 @@ export const createEntityResolver = (catalog) => {
             if (single.length < 3 || GENERIC_CLINIC_TOKENS.has(single)) {
               continue;
             }
+          }
+          // Окно только из общих слов («Медицинский центр», «Детская
+          // поликлиника») ничего не идентифицирует: раньше такой запрос
+          // целиком становился токеном клиники и не уходил планировщику.
+          if (window.every((stem) => GENERIC_CLINIC_TOKENS.has(stem) || stem.length < 3)) {
+            continue;
           }
           addToIndex(clinicIndex, window.join(' '), clinic.id);
         }
@@ -282,6 +340,7 @@ export const createEntityResolver = (catalog) => {
    * в замыкании резолвера и сбрасывается в начале каждого resolve().
    */
   let fuzzyBudget = FUZZY_BUDGET_PER_RESOLVE;
+  let fuzzySkipped = 0;
 
   /**
    * Поиск фамилии по всем ключам сравнения: точная основа, схлопнутые
@@ -319,6 +378,7 @@ export const createEntityResolver = (catalog) => {
       const bucket = translitIndex.get(latin) || translitIndex.get(translitKey(stemSurname(word)));
       if (bucket) return { ids: [...bucket], matcher: 'doctor.translit', confidence: 0.95 };
 
+      if (allowFuzzy && fuzzyBudget <= 0) fuzzySkipped += 1;
       if (allowFuzzy && fuzzyBudget > 0) {
         fuzzyBudget -= 1;
         // «Petroff» против «Петров»: одна правка на скелете из шести букв.
@@ -347,6 +407,7 @@ export const createEntityResolver = (catalog) => {
 
   const fuzzySurname = (stem) => {
     if (fuzzyBudget <= 0) {
+      fuzzySkipped += 1;
       return null;
     }
     fuzzyBudget -= 1;
@@ -379,6 +440,7 @@ export const createEntityResolver = (catalog) => {
   const resolve = (scanText) => {
     const tokens = tokenizeWithOffsets(scanText);
     fuzzyBudget = FUZZY_BUDGET_PER_RESOLVE;
+    fuzzySkipped = 0;
     const links = [];
     const specialties = new Set();
     const districts = new Set();
@@ -449,6 +511,22 @@ export const createEntityResolver = (catalog) => {
         const bucket = clinicIndex.get(key);
         if (!bucket) continue;
 
+        /*
+         * Одно слово — слабое основание считать, что речь о клинике. Такое
+         * совпадение принимается, только если слово не из общеупотребимых,
+         * написано с заглавной не в начале предложения или стоит в кавычках.
+         * Аббревиатуры («ркб») принимаются всегда.
+         */
+        if (size === 1 && !aliasSingleKeys.has(key)) {
+          const token = window[0];
+          if (COMMON_SINGLE_TOKENS.has(key) || token.normalized.length < 4) continue;
+          const before = scanText.slice(Math.max(0, token.start - 3), token.start);
+          const quoted = /[«"„“]\s*$/u.test(before);
+          const sentenceStart = token.start === 0 || /[.!?]\s*$/u.test(scanText.slice(0, token.start));
+          const capitalized = /^\p{Lu}/u.test(token.raw);
+          if (!quoted && (!capitalized || sentenceStart)) continue;
+        }
+
         links.push({
           kind: ENTITY_KIND.CLINIC,
           start: window[0].start,
@@ -485,6 +563,11 @@ export const createEntityResolver = (catalog) => {
 
       let hit = lookupSurname(token.raw, surnameCandidate, token.normalized);
 
+      if (!hit && capitalized && token.normalized.length <= 6) {
+        const short = shortSurnameIndex.get(token.normalized);
+        if (short) hit = { ids: [...short], matcher: 'doctor.short', confidence: 0.9 };
+      }
+
       if (!hit && surnameCandidate) {
         const fuzzy = fuzzySurname(stemSurname(token.normalized));
         if (fuzzy) {
@@ -497,6 +580,30 @@ export const createEntityResolver = (catalog) => {
       }
 
       if (!hit) continue;
+
+      /*
+       * Имя и отчество ПЕРЕД фамилией: «к Альберту Галявичу». Раньше спан
+       * рос только вперёд, и имя оставалось в тексте. Берём до двух слов
+       * назад, если они совпадают с именем или отчеством найденного врача.
+       */
+      let begin = token.start;
+      let first = index;
+      const nameStems = new Set();
+      for (const id of hit.ids) {
+        const parts = normalizeRu(doctorById.get(id)?.name || '').split(' ').slice(1);
+        for (const part of parts) nameStems.add(stemWord(part));
+      }
+      for (let previousIndex = index - 1; previousIndex >= Math.max(0, index - 2); previousIndex -= 1) {
+        if (consumed.has(previousIndex)) break;
+        const candidate = tokens[previousIndex];
+        const stem = stemWord(candidate.normalized);
+        const matchesName = [...nameStems].some(
+          (nameStem) => nameStem.length >= 3 && (stem.startsWith(nameStem) || nameStem.startsWith(stem)) && stem.length >= 3,
+        );
+        if (!matchesName) break;
+        begin = candidate.start;
+        first = previousIndex;
+      }
 
       // Расширяем спан до полного ФИО: «Галявич Альберт Сарварович».
       // Иначе имя и отчество остались бы в тексте после редактуры фамилии.
@@ -531,7 +638,7 @@ export const createEntityResolver = (catalog) => {
 
       links.push({
         kind: ENTITY_KIND.DOCTOR,
-        start: token.start,
+        start: begin,
         end,
         ids: hit.ids,
         ambiguous: hit.ids.length > 1,
@@ -539,7 +646,7 @@ export const createEntityResolver = (catalog) => {
         matcher: hit.matcher,
       });
 
-      for (let i = index; i <= last; i += 1) {
+      for (let i = first; i <= last; i += 1) {
         consumed.add(i);
       }
       index = last;
@@ -578,7 +685,13 @@ export const createEntityResolver = (catalog) => {
            * вызывается и напрямую, и тогда «Пет\u200bрову» распадалось на два
            * токена, которые уже никак не склеивались.
            */
-          if (separator.length > 2 || !/^[\s.\-_*·\u00AD\u200B-\u200F\uFEFF]*$/u.test(separator)) break;
+          // Эмодзи, косая черта, запятая и прочий «мусор» внутри слова —
+          // «Галя🙂вичу», «Шуль/ману» — тоже разрыв (эмодзи занимает две
+          // единицы UTF-16, отсюда предел в четыре).
+          if (
+            separator.length > 4 ||
+            !/^(?:[\s.\-_*·/\\|,+~'`\u00AD\u200B-\u200F\uFEFF]|\p{Extended_Pictographic})*$/u.test(separator)
+          ) break;
         }
 
         gluedRaw += tokens[end].raw;
@@ -655,6 +768,8 @@ export const createEntityResolver = (catalog) => {
       specialties: [...specialties],
       specialtyHits,
       districts: [...districts],
+      // Были кандидаты в фамилии, которые не удалось проверить из-за бюджета.
+      incomplete: fuzzySkipped > 0,
     };
   };
 

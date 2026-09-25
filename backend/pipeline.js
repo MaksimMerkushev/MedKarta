@@ -107,7 +107,7 @@ export const createPipeline = ({
       if (gate.decision === GATEWAY_DECISION.EMERGENCY) {
         metrics.increment('gateway.emergency');
         return {
-          action: buildEmergencyAction(),
+          action: buildEmergencyAction(gate.context?.classification?.emergency?.id),
           diagnostics: { requestId: gate.requestId, decision: gate.decision, planSource: 'none' },
         };
       }

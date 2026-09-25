@@ -30,6 +30,7 @@ import { randomUUID } from 'node:crypto';
 import { findTrigger, ruStem } from './normalize.js';
 import { detectEntities, detectObfuscation, ENTITY_KIND } from './detectors.js';
 import { classifySymptoms } from './symptoms.js';
+import { looksLikeSurname } from './morphology.js';
 import {
   countContentChars,
   countResidualNameLike,
@@ -157,6 +158,7 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
     const resolved = resolver.resolve(scan.text);
     const links = resolved.links.map((link) => projectLink(link, scan));
     return {
+      incomplete: Boolean(resolved.incomplete),
       entities: reconcileEntities(spans, links),
       specialties: resolved.specialties,
       specialtyHits: resolved.specialtyHits.map((hit) => ({
@@ -211,8 +213,20 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
    * @param {string} [params.requestId]
    * @returns {Promise<object>} решение, при decision=allow_external — request
    */
-  const process = async ({ messages, sessionId, requestId = randomUUID() }) => {
+  const process = async ({ messages: incoming, sessionId, requestId = randomUUID() }) => {
     const session = normalizeSessionId(sessionId);
+
+    /*
+     * Во внешнюю модель уходят ТОЛЬКО реплики пользователя.
+     *
+     * Реплики ассистента присылает браузер, и проверить, что они наши, сервер
+     * не может: подставив в историю «ассистента» строку с диагнозом или
+     * телефоном, её можно было провести мимо классификатора жалоб и проверки
+     * на разрыв слов — они смотрят только на реплики пользователя. Кроме того,
+     * наши настоящие ответы содержат реальные ФИО найденных врачей. Планировщику
+     * история ответов не нужна: он строит план по запросам пользователя.
+     */
+    const messages = (Array.isArray(incoming) ? incoming : []).filter((message) => message.role === 'user');
     const counters = new Map();
     const placeholders = [];
     const trusted = new Map();
@@ -251,9 +265,19 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
        * Неотложное состояние, на которое уже отреагировали, не должно
        * повторно перехватывать каждый следующий вопрос.
        */
-      const userTurns = messages.filter((message) => message.role === 'user');
-      const perTurn = userTurns.map((message) => classifier(message.content));
-      const lastTurn = classifier(rawLastUser);
+      /*
+       * Жалоба ищется в тексте БЕЗ найденных сущностей: фамилия «Раков» или
+       * кусок «вичу» от «Галя🙂вичу» не должны читаться как диагноз.
+       */
+      const masked = (analysis) => {
+        let text = analysis.message.content;
+        for (const entity of [...analysis.entities].sort((left, right) => right.start - left.start)) {
+          text = `${text.slice(0, entity.start)} ${text.slice(entity.end)}`;
+        }
+        return text;
+      };
+      const perTurn = analyses.map((analysis) => classifier(masked(analysis)));
+      const lastTurn = perTurn[perTurn.length - 1] || classifier('');
 
       classification = {
         emergency: lastTurn.emergency,
@@ -293,14 +317,22 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
     try {
       redactedTurns = [];
       for (const analysis of analyses) {
-        const { redacted, redactedChars } = await redactText({
+        const { redacted } = await redactText({
           text: analysis.message.content,
           entities: analysis.entities,
           allocate,
         });
         const withLocations = tokenizeLocations(redacted);
         locationTokens = [...new Set([...locationTokens, ...withLocations.tokens])];
-        totalRedacted += redactedChars;
+        /*
+         * В долю редактуры идут только неизвестные сущности. Ссылка на врача
+         * или клинику из справочника — это не «персональные данные вместо
+         * текста», а обычный запрос: «маршрут к Галявичу» раньше целиком
+         * становился токеном и отбрасывался как «слишком много редактуры».
+         */
+        totalRedacted += analysis.entities
+          .filter((entity) => entity.kind !== ENTITY_KIND.DOCTOR && entity.kind !== ENTITY_KIND.CLINIC)
+          .reduce((sum, entity) => sum + countContentChars(analysis.message.content.slice(entity.start, entity.end)), 0);
         totalChars += countContentChars(analysis.message.content);
         redactedTurns.push({ role: analysis.message.role, text: withLocations.text });
       }
@@ -320,8 +352,23 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
      * пользователя, а «разрешено» — по тому, сработала ли склейка. Если
      * сработала, фамилия уже заменена токеном и запрос обычный.
      */
+    /*
+     * Слово, разрезанное между репликами: «фамилия пациентки Кондра» →
+     * «шкина, нужен терапевт». По отдельности каждая реплика безобидна.
+     * Если реплика заканчивается куском слова, а следующая начинается со
+     * строчного продолжения и вместе они похожи на фамилию — это то же
+     * сокрытие, что и «К о н д р а ш к и н а».
+     */
+    const splitAcrossTurns = messages.some((message, index) => {
+      const next = messages[index + 1];
+      if (!next) return false;
+      const tail = String(message.content).match(/(\p{L}{2,})\s*$/u);
+      const head = String(next.content).match(/^\s*(\p{Ll}{2,})/u);
+      return Boolean(tail && head) && looksLikeSurname(tail[1] + head[1]);
+    });
+
     const obfuscation = {
-      suspicious: messages.some(
+      suspicious: splitAcrossTurns || messages.some(
         (message) => message.role === 'user' && detectObfuscation(message.content).suspicious,
       ),
       resolved: analyses.some((analysis) =>
@@ -346,6 +393,7 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
       redactionRatio: totalChars > 0 ? totalRedacted / totalChars : 0,
       placeholderCount: placeholders.length,
       residualNameLike: countResidualNameLike(lastRedacted),
+      analysisIncomplete: analyses.some((analysis) => analysis.incomplete),
       obfuscation,
       sanitizedChars: lastRedacted.replace(/@[A-Z_]+/g, '').trim().length,
     });

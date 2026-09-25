@@ -14,7 +14,7 @@
  */
 
 import { normalizeRu, ruPattern } from './normalize.js';
-import { ENTITY_KIND } from './detectors.js';
+import { ENTITY_KIND, isCommonAdjective } from './detectors.js';
 import { looksLikePatronymic, looksLikeSurname } from './morphology.js';
 
 /**
@@ -72,7 +72,14 @@ export const reconcileEntities = (detectorSpans, catalogLinks) => {
           start: Math.min(entity.start, previous.start),
           end: Math.max(entity.end, previous.end),
         };
-      } else if (entity.end > previous.end && entity.priority === previous.priority) {
+      } else if (entity.end > previous.end) {
+        /*
+         * Более слабая сущность, заходящая дальше, тоже расширяет границы.
+         * Раньше это делалось только при равном приоритете, и в «маму
+         * шарапову марию петровну» ссылка на врача по фамилии оставляла имя
+         * и отчество открытыми: ФИО эвристики начиналось там же, но было
+         * «слабее» ссылки и отбрасывалось целиком.
+         */
         result[result.length - 1] = { ...previous, end: entity.end };
       }
       continue;
@@ -91,7 +98,9 @@ export const reconcileEntities = (detectorSpans, catalogLinks) => {
  */
 export const countResidualNameLike = (redactedText) => {
   const words = redactedText.match(/\p{Lu}\p{L}{2,}/gu) || [];
-  return words.filter((word) => looksLikeSurname(word) || looksLikePatronymic(word)).length;
+  return words.filter(
+    (word) => (looksLikeSurname(word) && !isCommonAdjective(word)) || looksLikePatronymic(word),
+  ).length;
 };
 
 /**

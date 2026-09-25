@@ -46,6 +46,16 @@ export const EMERGENCY_REPLY =
   'Пожалуйста, немедленно позвоните 103 или 112 — не ждите и не ищите врача через приложение. ' +
   'Я не ставлю диагнозов, но в такой ситуации лучше перестраховаться.';
 
+/**
+ * Отдельный текст для мыслей о самоповреждении: здесь человеку нужен не
+ * «поиск врача», а контакт с живым человеком прямо сейчас.
+ */
+export const SELF_HARM_REPLY =
+  'Похоже, вам сейчас очень тяжело. Если есть мысли причинить себе вред, пожалуйста, ' +
+  'позвоните 112 прямо сейчас — это бесплатно и круглосуточно — или скажите о своём ' +
+  'состоянии кому-то рядом. Вы не обязаны справляться с этим в одиночку. ' +
+  'Когда будете готовы, я помогу найти психиатра или психотерапевта поблизости.';
+
 const describeStop = (stop) => {
   if (stop.kind === 'location') {
     return stop.token === '@HOME' ? 'дом' : stop.token === '@WORK' ? 'работа' : 'ваше местоположение';
@@ -259,5 +269,5 @@ export const buildUiAction = (execution, context = {}) => {
 };
 
 /** Ответ на случай красного флага: без поиска и без изменения состояния карты. */
-export const buildEmergencyAction = () =>
-  sanitizeAiAction({ replyText: EMERGENCY_REPLY });
+export const buildEmergencyAction = (flagId = null) =>
+  sanitizeAiAction({ replyText: flagId === 'self_harm' ? SELF_HARM_REPLY : EMERGENCY_REPLY });

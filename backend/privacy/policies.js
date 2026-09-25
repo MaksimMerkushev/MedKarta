@@ -13,7 +13,7 @@ import { FAIL_CLOSED_REASON, GATEWAY_DECISION } from './models.js';
 import { HARD_BLOCK_KINDS } from './detectors.js';
 
 /** Версия политики. Пишется в логи и в SanitizedPlannerRequest. */
-export const POLICY_VERSION = '2026-09-21.1';
+export const POLICY_VERSION = '2026-09-25.1';
 
 export const POLICY = Object.freeze({
   /**
@@ -74,6 +74,7 @@ export const decideGatewayPolicy = ({
   residualNameLike = 0,
   sanitizedChars = 0,
   obfuscation = { suspicious: false, resolved: false },
+  analysisIncomplete = false,
 }) => {
   if (classification.emergency) {
     return { decision: GATEWAY_DECISION.EMERGENCY, reason: FAIL_CLOSED_REASON.EMERGENCY };
@@ -95,6 +96,15 @@ export const decideGatewayPolicy = ({
      * запрос считался бы обычным.
      */
     return { decision: GATEWAY_DECISION.LOCAL_ONLY, reason: FAIL_CLOSED_REASON.OBFUSCATION };
+  }
+
+  if (analysisIncomplete) {
+    /*
+     * Резолвер исчерпал бюджет нечётких сравнений, а кандидаты в фамилии ещё
+     * оставались. Двенадцать слов с заглавной перед фамилией с опечаткой
+     * раньше выключали проверку для этой фамилии. Непроверенное не уходит.
+     */
+    return { decision: GATEWAY_DECISION.LOCAL_ONLY, reason: FAIL_CLOSED_REASON.RESIDUAL_RISK };
   }
 
   if (placeholderCount > POLICY.maxPlaceholders) {
