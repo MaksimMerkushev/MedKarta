@@ -14,6 +14,8 @@
  * обрабатывается тем же механизмом токенизации, что и данные пациента.
  */
 
+import { parseOpeningHours } from '../../shared/openingHours.js';
+
 /** Канонические специальности. Значение — ключ, используемый в плане. */
 export const SPECIALTY_CANON = Object.freeze({
   therapist: 'Терапевт',
@@ -132,7 +134,9 @@ export const buildCatalog = ({ doctors = [], clinics = [], facilities = [] } = {
           district: item.district,
           address_full: item.address,
           coordinates: { lat: item.lat, lng: item.lng },
-          working_hours: item.schedule,
+          // Часы из исходной строки OSM: сохранённое расписание по дням
+          // закрывало выходные почти у всех учреждений (shared/openingHours.js).
+          working_hours: parseOpeningHours(item.hours) || item.schedule,
           hours: item.hours,
         },
         index,

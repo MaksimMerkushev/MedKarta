@@ -47,8 +47,13 @@ const worksAfter = (schedule, time) => {
     if (typeof raw !== 'string') return false;
     const interval = /^(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})$/.exec(raw.trim());
     if (!interval) return false;
-    const close = parseMinutes(interval[2]);
-    return close !== null && close >= threshold;
+    const open = parseMinutes(interval[1]);
+    let close = parseMinutes(interval[2]);
+    if (close === null || open === null) return false;
+    // «00:00-00:00» — круглосуточно, «20:00-08:00» — через полночь: закрытие
+    // на следующие сутки. Раньше такие учреждения не проходили «после 18:00».
+    if (close <= open) close += 24 * 60;
+    return close >= threshold;
   });
 };
 
