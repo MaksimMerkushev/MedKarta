@@ -67,9 +67,17 @@ export default function AIAssistant({ isOpen, onClose, onApplyTriage, isMobile }
     }
 
     const onKeyDown = (event) => {
-      if (event.key === 'Escape') {
-        handleClose();
-      }
+      if (event.key !== 'Escape') return;
+      /*
+       * Esc в чужом поле ввода относится к нему: в строке поиска им
+       * закрывают подсказки. Раньше слушатель на window закрывал чат из
+       * любого места страницы, а закрытие стирало переписку.
+       */
+      const target = event.target instanceof Element ? event.target : null;
+      const insideAssistant = Boolean(target?.closest('[aria-label="AI-помощник МедКарты"]'));
+      const editableElsewhere = Boolean(target?.closest('input, textarea, select, [contenteditable="true"]')) && !insideAssistant;
+      if (editableElsewhere) return;
+      handleClose();
     };
 
     window.addEventListener('keydown', onKeyDown);

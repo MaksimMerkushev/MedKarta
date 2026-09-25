@@ -70,7 +70,14 @@ export const analyzeSymptoms = async (chatMessages, { signal } = {}) => {
   const onExternalAbort = () => controller.abort();
   signal?.addEventListener('abort', onExternalAbort, { once: true });
 
+  /*
+   * Таймер и отмена действуют до конца чтения ТЕЛА, а не только до прихода
+   * заголовков: сервер, приславший заголовки и зависший на теле, раньше
+   * оставлял «Думаю...» и заблокированное поле ввода навсегда.
+   */
   let response;
+  let payload = null;
+  let bodyUnreadable = false;
   try {
     response = await fetch(CHAT_ENDPOINT, {
       method: 'POST',
@@ -79,6 +86,12 @@ export const analyzeSymptoms = async (chatMessages, { signal } = {}) => {
       signal: controller.signal,
       body: JSON.stringify({ messages, sessionId: getSessionId() }),
     });
+    try {
+      payload = await response.json();
+    } catch (error) {
+      if (error?.name === 'AbortError') throw error;
+      bodyUnreadable = true;
+    }
   } catch (error) {
     if (error?.name === 'AbortError') {
       throw new AiError('Превышено время ожидания.', { code: 'timeout' });
@@ -89,7 +102,11 @@ export const analyzeSymptoms = async (chatMessages, { signal } = {}) => {
     signal?.removeEventListener('abort', onExternalAbort);
   }
 
-  const payload = await response.json().catch(() => null);
+  // Ответ 200 без JSON — не «готово»: раньше пользователь видел
+  // «я применил подходящие фильтры», хотя ничего не применялось.
+  if (response.ok && (bodyUnreadable || !payload || typeof payload !== 'object')) {
+    throw new AiError('Некорректный ответ сервера.', { code: 'server', status: response.status });
+  }
 
   if (!response.ok) {
     const code = response.status === 429 ? 'rate_limit' : response.status === 503 ? 'unavailable' : 'server';
