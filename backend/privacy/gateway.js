@@ -28,7 +28,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { findTrigger, ruStem } from './normalize.js';
-import { detectEntities, detectObfuscation, ENTITY_KIND } from './detectors.js';
+import { detectEntities, detectObfuscation, ENTITY_KIND, isKinshipWord } from './detectors.js';
 import { classifySymptoms } from './symptoms.js';
 import { looksLikeSurname } from './morphology.js';
 import {
@@ -41,6 +41,12 @@ import {
 import { decideGatewayPolicy, POLICY, POLICY_VERSION } from './policies.js';
 import { FAIL_CLOSED_REASON, GATEWAY_DECISION, mintSanitizedPlannerRequest } from './models.js';
 import { SPECIALTY_CANON } from './catalog.js';
+import {
+  checkClosedVocabulary,
+  findKnownPlaces,
+  isStreetMention,
+  registerCatalogVocabulary,
+} from './vocabulary.js';
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{12,64}$/;
 
@@ -139,13 +145,46 @@ export const extractIntentSignals = (text) => {
   };
 };
 
+/*
+ * Пациент с фамилией врача. «Моя мама Гульнара Хабибуллина, нужен
+ * кардиолог» связывалось с врачом Хабибуллиным, и маршрут строился к нему.
+ * Если прямо перед фамилией стоит родственник или «пациент» (допускается
+ * имя между ними), это человек, а не врач из справочника.
+ */
+const KIN_BEFORE = /(\p{L}+)\s+(?:\p{Lu}\p{Ll}+\s+){0,2}$/u;
+
+export const isNamedRelative = (content, entity) => {
+  if (entity.kind !== ENTITY_KIND.DOCTOR) return false;
+  const before = content.slice(Math.max(0, entity.start - 60), entity.start);
+  const match = before.match(KIN_BEFORE);
+  return Boolean(match) && isKinshipWord(match[1]);
+};
+
+/** Стыки реплик: сущность, пересекающая стык, собрана из нескольких сообщений. */
+const crossTurnEntities = (contents) => {
+  const boundaries = [];
+  let offset = 0;
+  for (const content of contents.slice(0, -1)) {
+    offset += content.length;
+    boundaries.push(offset);
+    offset += 1;
+  }
+  if (boundaries.length === 0) return [];
+  const { spans } = detectEntities(contents.join('\n'));
+  return spans.filter((span) => boundaries.some((boundary) => span.start < boundary && span.end > boundary));
+};
+
 /**
  * @param {object} deps
  * @param {{resolve: Function}} deps.resolver entity resolver по справочнику
  * @param {{mint: Function}} deps.vault хранилище токенов
  * @param {Function} [deps.classifier] классификатор жалоб (подменяется в тестах)
  */
-export const createPrivacyGateway = ({ resolver, vault, classifier = classifySymptoms }) => {
+export const createPrivacyGateway = ({ resolver, vault, classifier = classifySymptoms, catalog = null }) => {
+  if (catalog) {
+    registerCatalogVocabulary(catalog);
+  }
+
   /** Переводит координаты ссылки из «скан-вида» в исходные индексы строки. */
   const projectLink = (link, scan) => ({
     ...link,
@@ -157,9 +196,23 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
     const { scan, spans } = detectEntities(content);
     const resolved = resolver.resolve(scan.text);
     const links = resolved.links.map((link) => projectLink(link, scan));
+    const streets = [];
+    const entities = [];
+    for (const entity of reconcileEntities(spans, links)) {
+      if (isStreetMention(content, entity)) {
+        streets.push(content.slice(entity.start, entity.end));
+        continue;
+      }
+      entities.push(
+        isNamedRelative(content, entity)
+          ? { kind: ENTITY_KIND.PERSON, start: entity.start, end: entity.end, confidence: 0.9, matcher: 'person.relative' }
+          : entity,
+      );
+    }
     return {
       incomplete: Boolean(resolved.incomplete),
-      entities: reconcileEntities(spans, links),
+      entities,
+      streets,
       specialties: resolved.specialties,
       specialtyHits: resolved.specialtyHits.map((hit) => ({
         ...hit,
@@ -175,10 +228,15 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
    * о здоровье. Слова пользователя в него НЕ попадают — только перечислимые
    * значения из справочника и классификатора.
    */
-  const buildSyntheticTurn = ({ specialties, tokens, constraints, signals, isChild }) => {
+  const buildSyntheticTurn = ({ specialties, tokens, constraints, signals, isChild, places = [], defaultProfile = true }) => {
     const parts = [];
-    const profiles = specialties.length > 0 ? specialties : ['therapist'];
-    parts.push(`Пользователь ищет врача по профилю: ${profiles.join(', ')}.`);
+    const profiles = specialties.length > 0 ? specialties : defaultProfile ? ['therapist'] : [];
+    parts.push(profiles.length > 0
+      ? `Пользователь ищет врача по профилю: ${profiles.join(', ')}.`
+      : 'Пользователь ищет врача, профиль не указан.');
+    if (places.length > 0) {
+      parts.push(`Места: ${places.join(', ')}.`);
+    }
 
     if (tokens.length > 0) {
       parts.push(`Упомянуты сущности: ${tokens.join(', ')}.`);
@@ -231,8 +289,21 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
     const placeholders = [];
     const trusted = new Map();
 
+    /*
+     * Бюджет токенов проверяется ДО записи в хранилище. Раньше запрос
+     * с сотней телефонов и ссылок сначала записывал их все (192 записи на
+     * 4 КБ текста), и только потом политика отказывала по числу токенов.
+     * Сверх бюджета выдаётся «пустой» токен без записи: текст всё равно
+     * редактируется, а запрос уходит в локальный режим по TOKEN_BUDGET.
+     */
+    let overBudget = 0;
+
     /** Выдаёт токен и запоминает связь «токен → реальная сущность». */
     const allocate = async (entity, identity) => {
+      if (placeholders.length >= POLICY.maxPlaceholders) {
+        overBudget += 1;
+        return `@${entity.kind}`;
+      }
       const kind = entity.kind === ENTITY_KIND.PERSON ? ENTITY_KIND.PERSON : entity.kind;
       const index = counters.get(kind) || 0;
       counters.set(kind, index + 1);
@@ -241,7 +312,7 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
         ? { ids: entity.ids, ambiguous: Boolean(entity.ambiguous) }
         : { opaque: true };
 
-      const token = await vault.mint({ sessionId: session, kind, index, value });
+      const token = await vault.mint({ sessionId: session, requestId, kind, index, value });
       placeholders.push({ token, kind });
       trusted.set(token, { kind, identity, ...value });
       return token;
@@ -367,8 +438,23 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
       return Boolean(tail && head) && looksLikeSurname(tail[1] + head[1]);
     });
 
+    /*
+     * Данные, разложенные по нескольким сообщениям: «снилс 123 456» →
+     * «789 01». Каждая реплика по отдельности чиста, поэтому детекторы
+     * прогоняются ещё и по склейке. Найденное на стыке — повод не
+     * отправлять запрос, а документ — повод для обычного отказа.
+     */
+    let crossTurn = [];
+    try {
+      crossTurn = crossTurnEntities(messages.map((message) => String(message.content)));
+    } catch {
+      crossTurn = [{ kind: ENTITY_KIND.ACCOUNT }];
+    }
+    const joinedObfuscation = messages.length > 1
+      && detectObfuscation(messages.map((message) => message.content).join(' ')).suspicious;
+
     const obfuscation = {
-      suspicious: splitAcrossTurns || messages.some(
+      suspicious: splitAcrossTurns || joinedObfuscation || messages.some(
         (message) => message.role === 'user' && detectObfuscation(message.content).suspicious,
       ),
       resolved: analyses.some((analysis) =>
@@ -386,16 +472,35 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
      */
     const outline = buildOutline(lastRedacted, placeholders, locationTokens, analyses);
     const allEntities = analyses.flatMap((analysis) => analysis.entities);
+    const streetWords = new Set(
+      analyses.flatMap((analysis) => analysis.streets.flatMap((street) => street.split(/\s+/u))),
+    );
+
+    /*
+     * Длина осмысленного текста. Токен врача, клиники или места — это
+     * содержание запроса («РКБ», «Инвитро рядом со мной»), а не вырезанные
+     * данные; раньше он вычитался, и запрос из одного названия клиники
+     * считался «пересредактированным».
+     */
+    const contentTokens = new Set([
+      ...placeholders
+        .filter((item) => item.kind === ENTITY_KIND.DOCTOR || item.kind === ENTITY_KIND.CLINIC)
+        .map((item) => item.token),
+      ...locationTokens,
+    ]);
+    const sanitizedChars = lastRedacted
+      .replace(/@[A-Z][A-Z0-9_]*/g, (token) => (contentTokens.has(token) ? 'xxxxxxxx' : ''))
+      .trim().length;
 
     const decision = decideGatewayPolicy({
-      entities: allEntities,
+      entities: [...allEntities, ...crossTurn],
       classification,
       redactionRatio: totalChars > 0 ? totalRedacted / totalChars : 0,
-      placeholderCount: placeholders.length,
-      residualNameLike: countResidualNameLike(lastRedacted),
-      analysisIncomplete: analyses.some((analysis) => analysis.incomplete),
+      placeholderCount: placeholders.length + overBudget,
+      residualNameLike: countResidualNameLike(lastRedacted, streetWords),
+      analysisIncomplete: analyses.some((analysis) => analysis.incomplete) || crossTurn.length > 0,
       obfuscation,
-      sanitizedChars: lastRedacted.replace(/@[A-Z_]+/g, '').trim().length,
+      sanitizedChars,
     });
 
     const specialties = [
@@ -437,20 +542,35 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
      * Это относится ко всем репликам, а не только к последней, — иначе
      * жалоба «утекла» бы через историю диалога.
      */
-    const outboundTurns = classification.hasMedicalText
-      ? [
+    /*
+     * Слова пользователя уходят наружу, только если ВСЕ они из закрытого
+     * словаря (privacy/vocabulary.js). Иначе — то же синтезированное
+     * описание: неизвестное слово может оказаться фамилией, диагнозом,
+     * названием лекарства или ником, и детекторы о нём ничего не знают.
+     */
+    const issuedTokens = [...placeholders.map((item) => item.token), ...locationTokens];
+    const vocabulary = classification.hasMedicalText
+      ? { ok: false, reason: 'medical' }
+      : checkClosedVocabulary(redactedTurns.map((turn) => turn.text), issuedTokens);
+    context.metrics.textWithheld = !vocabulary.ok;
+    context.metrics.withheldReason = vocabulary.reason;
+
+    const outboundTurns = vocabulary.ok
+      ? redactedTurns
+      : [
           {
             role: 'user',
             text: buildSyntheticTurn({
               specialties,
-              tokens: [...placeholders.map((item) => item.token), ...locationTokens],
+              tokens: issuedTokens,
               constraints,
               signals,
               isChild: classification.isChild,
+              places: findKnownPlaces(rawLastUser),
+              defaultProfile: classification.hasMedicalText,
             }),
           },
-        ]
-      : redactedTurns;
+        ];
 
     const request = mintSanitizedPlannerRequest({
       requestId,
@@ -466,6 +586,7 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
         constraints,
         isChild: Boolean(classification.isChild),
         medicalTextWithheld: Boolean(classification.hasMedicalText),
+        textWithheld: !vocabulary.ok && !classification.hasMedicalText,
       },
       locale: 'ru-RU',
     });

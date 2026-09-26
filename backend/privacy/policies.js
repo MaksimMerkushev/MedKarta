@@ -13,7 +13,7 @@ import { FAIL_CLOSED_REASON, GATEWAY_DECISION } from './models.js';
 import { HARD_BLOCK_KINDS } from './detectors.js';
 
 /** Версия политики. Пишется в логи и в SanitizedPlannerRequest. */
-export const POLICY_VERSION = '2026-09-25.1';
+export const POLICY_VERSION = '2026-09-26.1';
 
 export const POLICY = Object.freeze({
   /**

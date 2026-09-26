@@ -25,6 +25,7 @@
 
 import { isSanitizedPlannerRequest } from '../privacy/models.js';
 import { detectEntities } from '../privacy/detectors.js';
+import { checkClosedVocabulary, isStreetMention } from '../privacy/vocabulary.js';
 import { PLAN_JSON_SCHEMA } from './schema.js';
 import { buildHintBlock, PLANNER_SYSTEM_PROMPT } from './prompts.js';
 
@@ -57,7 +58,48 @@ export const PLANNER_ERROR = Object.freeze({
  */
 export const assertOutboundSafe = (serialized) => {
   const { spans } = detectEntities(serialized);
-  return [...new Set(spans.map((span) => span.kind))];
+  // Улица «на Ямашева» — не человек; то же правило, что и в gateway.
+  const real = spans.filter((span) => !isStreetMention(serialized, span));
+  return [...new Set(real.map((span) => span.kind))];
+};
+
+/*
+ * Предел размера ответа модели. План — это несколько сотен байт JSON;
+ * ответ в 300 МБ раньше целиком читался в память (response.json()) и лишь
+ * потом отбрасывался как слишком большой: четыре таких ответа поднимали
+ * память процесса до 3 ГБ.
+ */
+export const MAX_RESPONSE_BYTES = 256 * 1024;
+
+const readJsonLimited = async (response, limit) => {
+  const declared = Number(response.headers?.get?.('content-length'));
+  if (Number.isFinite(declared) && declared > limit) {
+    throw new PlannerError('upstream response too large', PLANNER_ERROR.UPSTREAM);
+  }
+
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    // Нестандартный fetch (тесты): у него нет потока, только json().
+    return response.json();
+  }
+
+  const chunks = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel().catch(() => {});
+      throw new PlannerError('upstream response too large', PLANNER_ERROR.UPSTREAM);
+    }
+    chunks.push(value);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString('utf8'));
+  } catch {
+    throw new PlannerError('upstream response is not JSON', PLANNER_ERROR.UPSTREAM);
+  }
 };
 
 /**
@@ -130,6 +172,16 @@ export const createExternalPlanner = ({
       request.toWireMessages().map((message) => message.content).join('\n') + '\n' + hintBlock,
     );
     const leaked = assertOutboundSafe(payloadUnderTest);
+    /*
+     * Третий предохранитель — закрытый словарь. Детекторы ищут известное;
+     * эта проверка пропускает только известное. Gateway уже применил её,
+     * здесь она повторяется независимо от того, каким путём собран текст.
+     */
+    const tokens = request.placeholders.map((item) => item.token);
+    for (const texts of [request.toWireMessages().map((message) => message.content), [hintBlock]]) {
+      const vocabulary = checkClosedVocabulary(texts, tokens);
+      if (!vocabulary.ok) leaked.push(`vocabulary:${vocabulary.reason}`);
+    }
     if (leaked.length > 0) {
       logger?.event('planner.outbound_blocked', { kinds: leaked });
       throw new PlannerError(
@@ -162,7 +214,7 @@ export const createExternalPlanner = ({
         throw new PlannerError(`upstream ${response.status}`, PLANNER_ERROR.UPSTREAM);
       }
 
-      const payload = await response.json();
+      const payload = await readJsonLimited(response, MAX_RESPONSE_BYTES);
       const content = payload?.choices?.[0]?.message?.content;
       const raw = typeof content === 'string'
         ? content

@@ -123,7 +123,7 @@ export const buildScanView = (original) => {
     const width = char.length;
     INVISIBLE_CHARS.lastIndex = 0;
 
-    if (INVISIBLE_CHARS.test(char) || char === '️' || char === '︎') {
+    if (INVISIBLE_CHARS.test(char) || char === '\ufe0f' || char === '\ufe0e') {
       index += width;
       continue;
     }
@@ -145,6 +145,9 @@ export const buildScanView = (original) => {
       folded = foldDigit(folded);
     }
     folded = CYRILLIC_VARIANT_FOLD.get(folded) || folded;
+    // Любое тире и знак минуса — обычный дефис: «123–456–789–01» и
+    // «8−917…» иначе не совпадали ни с одним шаблоном номера.
+    if (/^[\p{Pd}\u2212\u2043\ufe63\uff0d]$/u.test(folded)) folded = '-';
 
     // NFKC может развернуть символ в несколько («ﬁ» → «fi»): все они
     // указывают на один исходный индекс.
@@ -299,10 +302,15 @@ const PATTERNS = [
     detector: 'digits.run',
     kind: ENTITY_KIND.ACCOUNT,
     confidence: 0.7,
-    source: String.raw`(?<![\d.,])\+?\d(?:[\s./_\-()]{0,3}\d){6,}(?![\d])`,
+    // Разделитель — до трёх любых небуквенных знаков: запятая, двоеточие,
+    // «+», «*», «|», эмодзи. Строка без перевода: номер в соседней строке
+    // — другой номер.
+    source: String.raw`(?<![\d.,])\+?\d(?:[^\p{L}\p{N}\n]{0,3}\d){6,}(?![\d])`,
     // Российский мобильный или городской с кодом — телефон (редактируется,
     // запрос уходит); всё прочее длинное — номер документа (не уходит).
     classify: (value) => {
+      // «9:00-18:00», «с 9.00 до 18.00» — часы работы, а не номер.
+      if (/^\d{1,2}[:.]\d{2}\s*-\s*\d{1,2}[:.]\d{2}$/u.test(value)) return null;
       const digits = value.replace(/\D/g, '');
       if ((digits.length === 11 && /^[78]/.test(digits)) || (digits.length === 10 && /^9/.test(digits))) {
         return ENTITY_KIND.PHONE;
@@ -329,7 +337,7 @@ const PATTERNS = [
     detector: 'plate',
     kind: ENTITY_KIND.PLATE,
     confidence: 0.9,
-    source: String.raw`(?<![\p{L}\d])[авекмнорстухabekmhopctyx]\s?\d{3}\s?[авекмнорстухabekmhopctyx]{2}\s?\d{2,3}(?:\s?rus)?(?![\p{L}\d])`,
+    source: String.raw`(?<![\p{L}\d])[авекмнорстухabekmhopctyx][\s\-]?\d{3}[\s\-]?[авекмнорстухabekmhopctyx]{2}[\s\-]?\d{2,3}(?:[\s\-]?rus)?(?![\p{L}\d])`,
     flags: 'iu',
   },
   {
@@ -415,6 +423,13 @@ const PATTERNS = [
     kind: ENTITY_KIND.COORDS,
     confidence: 0.8,
     source: String.raw`(?<![\d.])\d{1,3}\.\d{4,}(?![\d.])`,
+  },
+  {
+    // «55,7533» — координата в русской записи, по одной.
+    detector: 'coords.single.comma',
+    kind: ENTITY_KIND.COORDS,
+    confidence: 0.75,
+    source: String.raw`(?<![\d.,])(?:4\d|5\d),\d{4,}(?![\d.,])`,
   },
   {
     // Телефон, записанный с разрядкой: «8 9 6 5 1 2 3 4 5 6 7».
@@ -534,6 +549,7 @@ const runPatternDetectors = (scan) => {
         continue;
       }
       const kind = pattern.classify ? pattern.classify(match[0]) : pattern.kind;
+      if (!kind) continue;
       spans.push(
         makeSpan(scan, match.index, match.index + match[0].length, kind, pattern.confidence, pattern.detector),
       );
@@ -565,8 +581,15 @@ const KINSHIP = /^(?:мам|пап|мат|отц|отец|сын|доч|жен|�
 const NOT_A_SURNAME = /^(?:медицинск|детск|семейн|городск|республиканск|клиническ|стоматологическ|женск|мужск|частн|государственн|ближайш|круглосуточн|районн|центральн|областн|военн|железнодорожн|ведомственн|психоневрологическ|онкологическ|наркологическ|травматологическ|хирургическ|неврологическ|кардиологическ|диагностическ|реабилитационн|консультативн|санаторн|инфекционн|кожно|вахитовск|московск|советск|кировск|приволжск|авиастроительн|савиновск|ново|казанск|татарск|российск|русск|европейск|международн|университетск|академическ|научн|специализированн)/iu;
 
 export const isCommonAdjective = (word) => NOT_A_SURNAME.test(String(word || ''));
+export const isKinshipWord = (word) => KINSHIP.test(String(word || ''));
 const PERSON_CUE = /(?:врач\w*|доктор\w*|терапевт\w*|специалист\w*|пациент\w*|к|у|от|для)\s+$/iu;
 const CAPITALIZED_WORD = /\p{Lu}\p{L}{2,}/gu;
+
+/* Указатель и следующее за ним слово с заглавной (или ЗАГЛАВНЫМИ). */
+const STRONG_PERSON_CUE = /(?<![\p{L}])(\p{L}+)\s+(\p{Lu}[\p{L}]+(?:-\p{Lu}\p{L}+)?)(?![\p{L}])/u;
+const STRONG_CUE_WORD = /^(?:пациент\p{L}*|доктор\p{L}*|врач\p{L}*|медсестр\p{L}*|фамили\p{L}*)$/iu;
+/* Что может стоять после «врач»/«мама» и не быть именем. */
+const NOT_A_NAME_AFTER_CUE = /^(?:РКБ|ДРКБ|МКДЦ|ЛОР|УЗИ|МРТ|КТ|ЭКГ|ОМС|ДМС|Казан\p{L}*|Татарстан\p{L}*|Республик\p{L}*|Клиник\p{L}*|Больниц\p{L}*|Поликлиник\p{L}*|Центр\p{L}*|Терапевт\p{L}*|Педиатр\p{L}*|Стоматолог\p{L}*|Хирург\p{L}*|Невролог\p{L}*|Кардиолог\p{L}*|Гинеколог\p{L}*|Уролог\p{L}*|Офтальмолог\p{L}*|Окулист\p{L}*|Дерматолог\p{L}*|Эндокринолог\p{L}*|Ортопед\p{L}*|Травматолог\p{L}*|Сегодня|Завтра|Сейчас)$/u;
 
 const detectPersons = (scan) => {
   const spans = [];
@@ -608,6 +631,19 @@ const detectPersons = (scan) => {
     const confidence = patronymic ? 0.95 : cued ? 0.9 : 0.6;
     spans.push(makeSpan(scan, match.index, end, ENTITY_KIND.PERSON, confidence, 'person.morphology'));
     words.lastIndex = end;
+  }
+
+  // 3. Любое слово с заглавной сразу после сильного указателя на человека:
+  //    «пациент Шмидт», «к доктору Ким», «маму Фирдаус». Морфология фамилии
+  //    здесь не нужна: после «пациентки» стоит человек, как ни пишись.
+  const strong = new RegExp(STRONG_PERSON_CUE.source, 'gu');
+  while ((match = strong.exec(text)) !== null) {
+    const cue = match[1];
+    if (!STRONG_CUE_WORD.test(cue) && !KINSHIP.test(cue)) continue;
+    const name = match[2];
+    if (isCommonAdjective(name) || NOT_A_NAME_AFTER_CUE.test(name)) continue;
+    const start = match.index + match[0].length - name.length;
+    spans.push(makeSpan(scan, start, start + name.length, ENTITY_KIND.PERSON, 0.85, 'person.cued'));
   }
 
   spans.push(...detectNamesByDictionary(scan));

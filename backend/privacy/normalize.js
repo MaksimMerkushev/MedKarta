@@ -49,15 +49,16 @@ export const normalizeRu = (value) => {
     return '';
   }
 
-  let text = stripInvisible(value).normalize('NFKC').toLowerCase();
-
+  /*
+   * Гомоглифы сворачиваются ДО перевода в нижний регистр. Заглавная
+   * латинская «B» выглядит как кириллическая «В», а строчная «b» — как «ь»;
+   * после toLowerCase() различие терялось, и «BИЧ» становилось «ьич».
+   */
   let out = '';
-  for (const char of text) {
-    if (char === 'ё') {
-      out += 'е';
-      continue;
-    }
-    out += HOMOGLYPHS.get(char) || char;
+  for (const char of stripInvisible(value).normalize('NFKC')) {
+    let lower = HOMOGLYPHS.get(char) || char.toLowerCase();
+    if (lower === 'ё') lower = 'е';
+    out += HOMOGLYPHS.get(lower) || lower;
   }
 
   return out.replace(/[^\p{L}\p{N}]+/gu, ' ').replace(/\s+/g, ' ').trim();

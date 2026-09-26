@@ -58,9 +58,16 @@ export const createMemoryStore = ({ maxEntries = 50_000 } = {}) => {
       if (entries.size >= maxEntries) {
         prune(now);
       }
-      if (entries.size >= maxEntries) {
-        // Переполнение — это отказ, а не молчаливая перезапись чужих записей.
-        throw new Error('token vault is full');
+      /*
+       * Переполнение после чистки просроченных — вытесняются самые старые
+       * записи (Map хранит порядок вставки). Раньше здесь был отказ, и 261
+       * запрос со множеством телефонов и ссылок выключал токенизацию для всех
+       * пользователей на 15 минут. Свежие соответствия — то, что нужно
+       * текущим запросам, — остаются.
+       */
+      for (const key of entries.keys()) {
+        if (entries.size < maxEntries) break;
+        entries.delete(key);
       }
       entries.set(key, { value, expiresAt: now + ttlSeconds * 1000 });
     },
@@ -151,6 +158,17 @@ export const createTokenVault = ({
   const sessionKey = (sessionId) =>
     createHmac('sha256', secret).update(`session:${sessionId}`).digest('hex').slice(0, 32);
 
+  /*
+   * Запрос — часть ключа. Токены нумеруются заново в каждом запросе, и два
+   * одновременных запроса одной сессии (две вкладки) выдавали одинаковый
+   * @DOCTOR_A разным врачам: второй перезаписывал первый, и маршрут первого
+   * строился к врачу из второго. План исполняется в том же запросе, в
+   * котором выданы токены, поэтому привязка к запросу ничего не ломает.
+   */
+  const requestKey = (requestId) =>
+    requestId ? createHmac('sha256', secret).update(`request:${requestId}`).digest('hex').slice(0, 16) : '-';
+  const storageKey = (sessionId, requestId, token) => `pv:${sessionKey(sessionId)}:${requestKey(requestId)}:${token}`;
+
   /**
    * Смещение алфавита для сессии. Один и тот же врач получает РАЗНЫЕ внешние
    * токены в разных сессиях — иначе внешняя сторона, наблюдая много запросов,
@@ -185,7 +203,7 @@ export const createTokenVault = ({
      * @param {object} params.value произвольные данные доверенного контура
      * @returns {Promise<string>} токен вида @DOCTOR_A
      */
-    async mint({ sessionId, kind, index, value }) {
+    async mint({ sessionId, requestId, kind, index, value }) {
       if (!sessionId || !kind) {
         throw new Error('mint requires sessionId and kind');
       }
@@ -194,8 +212,7 @@ export const createTokenVault = ({
       }
 
       const token = `@${kind}_${label(sessionId, index)}`;
-      const key = `pv:${sessionKey(sessionId)}:${token}`;
-      await store.set(key, JSON.stringify({ kind, value }), ttlSeconds);
+      await store.set(storageKey(sessionId, requestId, token), JSON.stringify({ kind, value }), ttlSeconds);
       return token;
     },
 
@@ -204,13 +221,12 @@ export const createTokenVault = ({
      * принадлежит другой сессии. Вызывающая сторона ОБЯЗАНА трактовать null
      * как отказ выполнения, а не как «пропустим этот шаг».
      */
-    async resolve({ sessionId, token }) {
+    async resolve({ sessionId, requestId, token }) {
       if (!sessionId || typeof token !== 'string' || !token.startsWith('@')) {
         return null;
       }
 
-      const key = `pv:${sessionKey(sessionId)}:${token}`;
-      const raw = await store.get(key);
+      const raw = await store.get(storageKey(sessionId, requestId, token));
       if (!raw) {
         return null;
       }
@@ -222,8 +238,8 @@ export const createTokenVault = ({
       }
     },
 
-    async revoke({ sessionId, token }) {
-      await store.delete(`pv:${sessionKey(sessionId)}:${token}`);
+    async revoke({ sessionId, requestId, token }) {
+      await store.delete(storageKey(sessionId, requestId, token));
     },
 
     /** Сравнение идентификаторов сессии без утечки времени. */

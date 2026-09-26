@@ -91,6 +91,9 @@ export const buildHintBlock = (hints) => {
   if (hints.medicalTextWithheld) {
     lines.push('Описание жалоб удалено локально и тебе не передаётся.');
   }
+  if (hints.textWithheld) {
+    lines.push('Текст запроса заменён описанием: исходные слова не передаются.');
+  }
 
   return lines.join(' ');
 };

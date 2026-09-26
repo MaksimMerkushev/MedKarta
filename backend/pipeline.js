@@ -43,8 +43,15 @@ export const createPipeline = ({
   metrics = defaultMetrics,
 }) => {
   const resolver = createEntityResolver(catalog);
+  const allowedServices = new Map(
+    [
+      ...(catalog.doctors || []).flatMap((doctor) => doctor.services || []),
+      ...(catalog.specialties || []),
+      ...(catalog.clinics || []).map((clinic) => clinic.facilityType).filter(Boolean),
+    ].map((service) => [String(service).toLowerCase(), String(service)]),
+  );
   const repository = createCatalogRepository(catalog);
-  const gateway = createPrivacyGateway({ resolver, vault });
+  const gateway = createPrivacyGateway({ resolver, vault, catalog });
   const policyEngine = createPolicyEngine({ vault, repository });
   const executor = createExecutor({ repository, routing });
 
@@ -57,6 +64,7 @@ export const createPipeline = ({
     const validated = validatePlan(completion.raw, {
       allowedTokens: request.allowedTokens,
       allowedDistricts: catalog.districts,
+      allowedServices,
     });
 
     if (!validated.ok) {
@@ -87,7 +95,7 @@ export const createPipeline = ({
      * @param {{lat: number, lng: number}|null} [params.origin] огрублённая точка
      * @returns {Promise<{action: object, diagnostics: object}>}
      */
-    async handle({ messages, sessionId, origin = null }) {
+    async handle({ messages, sessionId, origin = null, takeExternalBudget = () => true }) {
       const started = Date.now();
       const gate = await gateway.process({ messages, sessionId });
 
@@ -115,7 +123,15 @@ export const createPipeline = ({
       let plan = null;
       let planSource = 'local';
 
-      if (gate.decision === GATEWAY_DECISION.ALLOW_EXTERNAL && gate.request) {
+      /*
+       * Общий бюджет обращений к модели исчерпан — это не отказ пользователю,
+       * а локальный план. Раньше глобальный лимит отвечал 429 всем подряд, и
+       * полтора десятка адресов, отправив по двадцать пустых запросов,
+       * отключали ассистента для всех на пять минут.
+       */
+      if (gate.decision === GATEWAY_DECISION.ALLOW_EXTERNAL && gate.request && !takeExternalBudget()) {
+        metrics.increment('planner.budget_exhausted');
+      } else if (gate.decision === GATEWAY_DECISION.ALLOW_EXTERNAL && gate.request) {
         try {
           plan = await planExternally(gate.request);
           if (plan) planSource = 'external';
@@ -138,7 +154,7 @@ export const createPipeline = ({
         metrics.increment('planner.local_fallback', { reason: gate.reason || 'planner_failed' });
       }
 
-      let authorized = await policyEngine.authorize({ plan, sessionId: gate.sessionId });
+      let authorized = await policyEngine.authorize({ plan, sessionId: gate.sessionId, requestId: gate.requestId });
 
       if (!authorized.ok) {
         metrics.increment('policy.rejected', { code: authorized.error.code });
@@ -152,7 +168,7 @@ export const createPipeline = ({
         if (planSource === 'external') {
           plan = planLocally(gate.context);
           planSource = 'local_after_rejection';
-          authorized = await policyEngine.authorize({ plan, sessionId: gate.sessionId });
+          authorized = await policyEngine.authorize({ plan, sessionId: gate.sessionId, requestId: gate.requestId });
         }
       }
 

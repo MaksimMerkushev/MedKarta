@@ -54,6 +54,23 @@ const FORBIDDEN_FIELDS = new Set([
 
 const MAX_STRING = 120;
 
+/*
+ * Служебные поля строгого формата. Детекторы принимали UUID запроса за
+ * идентификатор, а версию политики «2026-09-25.1» — за дату рождения, и в
+ * логах вместо них стоял «[redacted]»: связать события одного запроса было
+ * нельзя. Значение, совпавшее с форматом, ничего пользовательского нести
+ * не может; несовпавшее проверяется детекторами как обычно.
+ */
+const TRUSTED_FORMATS = {
+  request_id: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+  requestId: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+  policy_version: /^\d{4}-\d{2}-\d{2}\.\d{1,3}$/,
+  policyVersion: /^\d{4}-\d{2}-\d{2}\.\d{1,3}$/,
+};
+
+/** Сколько последних записей держать в памяти (для тестов и отладки). */
+const MAX_RECORDS = 500;
+
 /** Ограничивает значение безопасным примитивом либо отбрасывает его. */
 const sanitizeValue = (value) => {
   if (value === null || typeof value === 'boolean' || typeof value === 'number') {
@@ -96,13 +113,19 @@ export const createSafeLogger = ({
       if (FORBIDDEN_FIELDS.has(key) || !ALLOWED_FIELDS.has(key)) {
         continue;
       }
-      const safe = sanitizeValue(value);
+      const safe = typeof value === 'string' && TRUSTED_FORMATS[key]?.test(value) ? value : sanitizeValue(value);
       if (safe !== undefined) {
         payload[key] = safe;
       }
     }
 
+    /*
+     * Раньше сюда складывалась каждая запись за всё время жизни процесса —
+     * около килобайта на запрос, без ограничения. На VPS с 2 ГБ это медленная
+     * утечка памяти. Теперь — кольцо из последних записей.
+     */
     records.push(payload);
+    if (records.length > MAX_RECORDS) records.splice(0, records.length - MAX_RECORDS);
     if (!enabled) {
       return payload;
     }

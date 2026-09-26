@@ -96,10 +96,11 @@ export const reconcileEntities = (detectorSpans, catalogLinks) => {
  * Это и есть реализация принципа «не нашли — не значит, что нет»: остаточное
  * имя делает текст непригодным для отправки наружу (см. policies.js).
  */
-export const countResidualNameLike = (redactedText) => {
+export const countResidualNameLike = (redactedText, ignore = new Set()) => {
   const words = redactedText.match(/\p{Lu}\p{L}{2,}/gu) || [];
   return words.filter(
-    (word) => (looksLikeSurname(word) && !isCommonAdjective(word)) || looksLikePatronymic(word),
+    (word) => !ignore.has(word)
+      && ((looksLikeSurname(word) && !isCommonAdjective(word)) || looksLikePatronymic(word)),
   ).length;
 };
 

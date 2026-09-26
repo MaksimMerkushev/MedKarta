@@ -52,7 +52,7 @@ export const createPolicyEngine = ({ vault, repository }) => ({
    * @param {string} params.sessionId
    * @returns {Promise<{ok: true, value: object} | {ok: false, error: object}>}
    */
-  async authorize({ plan, sessionId }) {
+  async authorize({ plan, sessionId, requestId }) {
     if (DENIED_ACTIONS.some((denied) => String(plan.action).toUpperCase().includes(denied))) {
       return deny(POLICY_ERROR.ACTION_DENIED, plan.action);
     }
@@ -94,7 +94,7 @@ export const createPolicyEngine = ({ vault, repository }) => ({
           return deny(POLICY_ERROR.COMPLEXITY, 'token_resolutions');
         }
 
-        const record = await vault.resolve({ sessionId, token: step.token });
+        const record = await vault.resolve({ sessionId, requestId, token: step.token });
         if (!record) {
           /*
            * Токен не найден: он выдуман моделью, истёк по TTL или принадлежит

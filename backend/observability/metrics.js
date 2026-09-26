@@ -11,6 +11,7 @@
  */
 
 const ALLOWED_LABEL_VALUES = /^[a-z0-9_.:-]{1,48}$/i;
+const MAX_SAMPLES = 1000;
 
 export const createMetrics = ({ sink = null } = {}) => {
   const counters = new Map();
@@ -34,6 +35,8 @@ export const createMetrics = ({ sink = null } = {}) => {
       const key = keyOf(name, labels);
       const bucket = timings.get(key) || [];
       bucket.push(milliseconds);
+      // Для перцентилей хватает последних замеров; хранить все — утечка памяти.
+      if (bucket.length > MAX_SAMPLES) bucket.splice(0, bucket.length - MAX_SAMPLES);
       timings.set(key, bucket);
       sink?.({ type: 'timing', key, value: milliseconds });
     },

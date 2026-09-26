@@ -264,6 +264,7 @@ const validateStep = (raw, options) => {
  * @param {object} options
  * @param {Set<string>} options.allowedTokens токены, выданные ЭТОМУ запросу
  * @param {string[]} options.allowedDistricts
+ * @param {Map<string, string>} [options.allowedServices] нижний регистр → название услуги
  * @returns {{ok: true, value: object} | {ok: false, error: {code: string, detail: string|null}}}
  */
 export const validatePlan = (raw, options) => {
@@ -346,6 +347,17 @@ export const validatePlan = (raw, options) => {
     if (services.length !== plan.services.length) {
       return fail(VALIDATION_ERROR.BAD_CONSTRAINT, 'services');
     }
+    /*
+     * Услуга — только из справочника. Строка модели иначе попадала в поле
+     * поиска у пользователя и в адрес страницы: «Запись только по тел
+     * 8-800-… звоните» проходила очистку от разметки как обычный текст.
+     * Неизвестные услуги отбрасываются молча: это подсказка, а не шаг плана.
+     */
+    const known = options.allowedServices;
+    services = known
+      ? services.map((item) => known.get(item.toLowerCase())).filter(Boolean)
+      : [];
+    if (services.length === 0) services = null;
   }
 
   return {

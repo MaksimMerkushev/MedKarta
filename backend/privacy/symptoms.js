@@ -87,7 +87,7 @@ const RULES = [
  * токены в правила не попадают, иначе «Ближайший травмпункт» считался
  * описанием травмы и не уходил планировщику.
  */
-const NOT_A_COMPLAINT = /^(?:травмпункт|травматолог|эколог|экономи|экобез|рака[тк]|раков|ракурс|вичуг|спидом)/u;
+const NOT_A_COMPLAINT = /^(?:травмпункт|травматолог|эколог|экономи|экобез|рака[тк]|раков|ракурс|вичуг|спидометр)/u;
 
 /** Указатели на то, что речь идёт о ребёнке. */
 const CHILD_STEMS = ['ребенок', 'ребенк', 'дет', 'малыш', 'грудничк', 'сын', 'доч', 'подростк', 'младенц'];
@@ -95,7 +95,7 @@ const CHILD_STEMS = ['ребенок', 'ребенк', 'дет', 'малыш', '
 /** Лексика, выдающая описание состояния здоровья независимо от специальности. */
 const MEDICAL_MARKERS = [
   'болит', 'больно', 'боль', 'беспокоит', 'мучает', 'чувствую', 'самочувств',
-  'симптом', 'жалоб', 'болею', 'заболел', 'ноет', 'колет', 'тянет', 'ломит',
+  'симптом', 'болею', 'заболел', 'ноет', 'колет', 'тянет', 'ломит',
   'приступ', 'обострени', 'хроническ', 'диагноз',
   'нехорошо', 'дурно', 'тошно', 'кружится', 'знобит', 'температур', 'давлени',
   'мне плохо', 'стало плохо', 'плохо себя', 'недомогани',
@@ -113,7 +113,20 @@ const compactPhrase = (value) =>
 
 const PRECOMPILED = RULES.map((rule) => ({ ...rule, stems: rule.stems.map((stem) => normalizeRu(stem)) }));
 const CHILD_NORMALIZED = CHILD_STEMS.map((stem) => normalizeRu(stem));
+/*
+ * Маркер ищется с начала слова, а не как подстрока: «боль» сидела внутри
+ * «больше», «больница» и «больничный», и «рейтинг больше 4.5» или «ближайшая
+ * больница» считались жалобой. Эти продолжения исключены явно.
+ */
+const NOT_MARKER_TAIL = /^(?:больш|больниц|больничн|побольш)/u;
 const MARKERS_NORMALIZED = MEDICAL_MARKERS.map((marker) => normalizeRu(marker));
+const hasMarker = (normalized) => {
+  const words = normalized.split(' ');
+  return MARKERS_NORMALIZED.some((marker) => {
+    if (marker.includes(' ')) return ` ${normalized} `.includes(` ${marker}`);
+    return words.some((word) => word.startsWith(marker) && !NOT_MARKER_TAIL.test(word));
+  });
+};
 const RED_FLAGS_NORMALIZED = RED_FLAGS.map((flag) => ({
   id: flag.id,
   words: flag.words.map((word) => normalizeRu(word)),
@@ -194,7 +207,7 @@ export const classifySymptoms = (text) => {
 
   const hasMedicalText =
     matchedRules.length > 0 ||
-    MARKERS_NORMALIZED.some((marker) => normalized.includes(marker)) ||
+    hasMarker(normalized) ||
     Boolean(emergency);
 
   /*
