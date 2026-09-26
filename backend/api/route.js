@@ -17,7 +17,7 @@
  */
 
 import { readBody, respondJson, verifyOrigin } from '../http/request.js';
-import { checkRouteRateLimit } from '../http/rateLimit.js';
+import { checkRouteRateLimit, routeCpuLimiter } from '../http/rateLimit.js';
 import { getClientIp } from '../http/rateLimit.js';
 import { getDefaultRoutingEngine } from '../routing/engine.js';
 import { ROUTING_ERROR } from '../routing/engine.js';
@@ -50,12 +50,16 @@ const parseWaypoints = (raw) => {
 
   const points = [];
   for (const item of raw) {
-    const lat = Number(item?.lat);
-    const lng = Number(item?.lng ?? item?.lon);
+    // Только числа: «"55.79"», «[[55.79]]» и «"0x37"» раньше приводились Number().
+    const lat = item?.lat;
+    const lng = item?.lng ?? item?.lon;
+    if (typeof lat !== 'number' || typeof lng !== 'number') return null;
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
 
     const point = { lat, lng };
-    if (!inRegion(point)) return null;
+    // Отдельный код: пользователь с геолокацией в другом городе видел
+    // «маршрут для этого транспорта не найден» вместо настоящей причины.
+    if (!inRegion(point)) return { outside: true };
     points.push(point);
   }
   return points;
@@ -80,7 +84,8 @@ export default async function handler(req, res) {
     return;
   }
 
-  const limit = checkRouteRateLimit(getClientIp(req));
+  const clientIp = getClientIp(req);
+  const limit = checkRouteRateLimit(clientIp);
   if (!limit.allowed) {
     res.setHeader('Retry-After', String(limit.retryAfterSeconds));
     respondJson(res, 429, { error: 'Слишком много запросов маршрута.' });
@@ -92,13 +97,18 @@ export default async function handler(req, res) {
   try {
     const body = await readBody(req);
     waypoints = parseWaypoints(body?.waypoints);
-    profile = PROFILES.has(body?.profile) ? body.profile : 'driving';
+    // Неизвестный профиль — ошибка клиента, а не молчаливая машина.
+    profile = body?.profile === undefined ? 'driving' : PROFILES.has(body.profile) ? body.profile : null;
   } catch (error) {
     respondJson(res, error.status || 400, { error: 'Некорректный запрос.' });
     return;
   }
 
-  if (!waypoints) {
+  if (waypoints?.outside) {
+    respondJson(res, 400, { error: 'Точка вне зоны обслуживания.', code: 'outside_region' });
+    return;
+  }
+  if (!waypoints || !profile) {
     respondJson(res, 400, { error: 'Некорректный список точек.' });
     return;
   }
@@ -115,9 +125,22 @@ export default async function handler(req, res) {
     return;
   }
 
+  /*
+   * Бюджет процессора проверяется непосредственно перед расчётом, а не при
+   * входе: одновременные запросы одного адреса иначе все проходили проверку,
+   * пока первый ещё считался.
+   */
+  const cpu = routeCpuLimiter.check(clientIp);
+  if (!cpu.allowed) {
+    res.setHeader('Retry-After', String(cpu.retryAfterSeconds));
+    respondJson(res, 429, { error: 'Слишком много запросов маршрута.', code: 'rate_limited' });
+    return;
+  }
+
   const started = Date.now();
   const result = engine.route({ waypoints, profile });
   const latency = Date.now() - started;
+  routeCpuLimiter.charge(clientIp, latency);
 
   metrics.observe('routing.latency_ms', latency, { provider: 'local' });
   logger.event('routing.request', {

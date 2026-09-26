@@ -15,7 +15,7 @@
 
 import { validateChatMessages } from '../../shared/contract.js';
 import { readBody, respondJson, verifyOrigin } from '../http/request.js';
-import { checkRateLimit, getClientIp } from '../http/rateLimit.js';
+import { checkRateLimit, getClientIp, takeExternalBudget } from '../http/rateLimit.js';
 import { getDefaultPipeline } from '../pipeline.js';
 import { logger } from '../observability/safeLogger.js';
 import { metrics } from '../observability/metrics.js';
@@ -90,7 +90,7 @@ export default async function handler(req, res) {
 
   try {
     const pipeline = await getDefaultPipeline();
-    const { action } = await pipeline.handle({ messages, sessionId, origin });
+    const { action } = await pipeline.handle({ messages, sessionId, origin, takeExternalBudget });
 
     res.setHeader('X-RateLimit-Remaining', String(limit.remaining));
     respondJson(res, 200, action);

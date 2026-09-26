@@ -15,6 +15,21 @@ const MAX_TRACKED_IPS = 5000;
 
 const prune = (list, now, windowMs) => list.filter((timestamp) => now - timestamp < windowMs);
 
+/*
+ * Ключ лимита. IPv6-адрес считается по сети /64: провайдер выдаёт клиенту
+ * целую подсеть, и перебор адресов внутри неё обходил лимит «на адрес».
+ */
+export const rateLimitKey = (ip) => {
+  const value = String(ip || 'unknown').toLowerCase().replace(/^::ffff:(?=\d+\.\d+\.\d+\.\d+$)/, '');
+  if (!value.includes(':')) return value;
+  const [head, tail = ''] = value.split('::');
+  const left = head ? head.split(':') : [];
+  const right = tail ? tail.split(':') : [];
+  const missing = Math.max(0, 8 - left.length - right.length);
+  const full = [...left, ...Array(missing).fill('0'), ...right];
+  return `${full.slice(0, 4).map((part) => part.replace(/^0+(?=.)/, '')).join(':')}::/64`;
+};
+
 /**
  * Независимый ограничитель со своим счётчиком.
  *
@@ -32,7 +47,8 @@ export const createRateLimiter = ({
   const hits = new Map();
   let instanceHits = [];
 
-  return (ip, now = Date.now()) => {
+  return (address, now = Date.now()) => {
+    const ip = rateLimitKey(address);
     instanceHits = prune(instanceHits, now, windowMs);
     if (instanceHits.length >= maxPerInstance) {
       return { allowed: false, retryAfterSeconds: 60, remaining: 0 };
@@ -59,12 +75,54 @@ export const createRateLimiter = ({
 };
 
 /**
+ * Лимит по ЗАТРАЧЕННОМУ ВРЕМЕНИ процессора, а не по числу запросов.
+ *
+ * У сервера одно ядро, и расчёт маршрута идёт в основном потоке. 110
+ * запросов по шесть точек укладывались в лимит «120 на адрес», но держали
+ * сервер занятым так, что главная страница отвечала 16 секунд. Теперь у
+ * адреса «ведро» миллисекунд: полное — 1,5 с, пополняется на 50 мс в секунду.
+ * Обычный пользователь тратит 5–30 мс на маршрут и лимита не замечает.
+ */
+export const createCostLimiter = ({
+  capacityMs = 1_500,
+  refillMsPerSecond = 50,
+  maxTrackedIps = MAX_TRACKED_IPS,
+} = {}) => {
+  const buckets = new Map();
+
+  const level = (key, now) => {
+    const bucket = buckets.get(key);
+    if (!bucket) return capacityMs;
+    return Math.min(capacityMs, bucket.level + ((now - bucket.at) / 1000) * refillMsPerSecond);
+  };
+
+  return Object.freeze({
+    check(address, now = Date.now()) {
+      const key = rateLimitKey(address);
+      const available = level(key, now);
+      if (available > 0) return { allowed: true, retryAfterSeconds: 0 };
+      return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil(-available / refillMsPerSecond) + 1) };
+    },
+    charge(address, costMs, now = Date.now()) {
+      const key = rateLimitKey(address);
+      if (buckets.size > maxTrackedIps) buckets.clear();
+      buckets.set(key, { level: level(key, now) - Math.max(0, costMs), at: now });
+    },
+  });
+};
+
+export const routeCpuLimiter = createCostLimiter();
+
+/**
  * Бюджет маршрутизации отдельный и заметно шире: расчёт идёт локально,
  * денег не стоит, но вызывается при каждом изменении набора точек.
  */
 export const checkRouteRateLimit = createRateLimiter({
   maxPerIp: 120,
-  maxPerInstance: 1500,
+  // Общий потолок на инстанс убран по той же причине, что и у чата: его
+  // выбирали 13 адресов, и маршруты переставали строиться у всех. Нагрузку
+  // на процессор ограничивает routeCpuLimiter.
+  maxPerInstance: Number.POSITIVE_INFINITY,
 });
 
 /**
@@ -106,8 +164,29 @@ export const getClientIp = (req) => {
 };
 
 /**
+ * Лимит на адрес. Общего потолка на инстанс здесь больше нет: он
+ * расходовался ещё до проверки тела и позволял немногим адресам закрыть
+ * ассистента для всех. Деньги на модель теперь защищает takeExternalBudget.
+ *
  * @returns {{ allowed: boolean, retryAfterSeconds: number, remaining: number }}
  */
-export const checkRateLimit = createRateLimiter();
+export const checkRateLimit = createRateLimiter({ maxPerInstance: Number.POSITIVE_INFINITY });
+
+/**
+ * Бюджет обращений к внешней модели на инстанс. Расходуется только когда
+ * запрос действительно уходит к модели; когда он исчерпан, ассистент
+ * отвечает по локальному плану.
+ */
+export const createBudget = ({ windowMs = WINDOW_MS, max = MAX_PER_INSTANCE } = {}) => {
+  let taken = [];
+  return (now = Date.now()) => {
+    taken = prune(taken, now, windowMs);
+    if (taken.length >= max) return false;
+    taken.push(now);
+    return true;
+  };
+};
+
+export const takeExternalBudget = createBudget();
 
 export const RATE_LIMIT_CONFIG = { WINDOW_MS, MAX_PER_IP, MAX_PER_INSTANCE };

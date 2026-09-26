@@ -87,7 +87,9 @@ const sendFile = (res, filePath, status = 200) => {
   // Хэшированные ассеты кэшируются надолго, HTML — никогда.
   res.setHeader(
     'Cache-Control',
-    filePath.includes(`${path.sep}assets${path.sep}`)
+    // «Навсегда» — только файлы с хэшем в имени (index-BCrIjYhY.js): иначе
+    // исправление в main.js не дошло бы до вернувшихся пользователей.
+    filePath.includes(`${path.sep}assets${path.sep}`) && /[-.][A-Za-z0-9_-]{8,}\.[a-z0-9]+$/.test(filePath)
       ? 'public, max-age=31536000, immutable'
       : 'no-cache',
   );
@@ -159,7 +161,12 @@ const handleRequest = async (req, res) => {
   });
 };
 
-const server = http.createServer((req, res) => {
+/*
+ * Проверка «висящих» соединений раз в 5 с вместо 30 по умолчанию: иначе
+ * клиент, открывший 512 сокетов с недописанными заголовками, держал бы
+ * сервер закрытым для остальных до 45 с за раз.
+ */
+const server = http.createServer({ connectionsCheckingInterval: 5_000 }, (req, res) => {
   // Последний рубеж: любое исключение в разборе запроса — это 500 для одного
   // клиента, а не остановка сервера для всех.
   handleRequest(req, res).catch((error) => {
@@ -184,6 +191,33 @@ server.headersTimeout = 15_000;
 server.requestTimeout = 20_000;
 server.keepAliveTimeout = 5_000;
 server.maxConnections = Number(process.env.MAX_CONNECTIONS) || 512;
+
+/*
+ * Потолок соединений с ОДНОГО адреса. Без него один клиент открывал 512
+ * сокетов с недописанными заголовками и закрывал сервер для остальных на
+ * время headersTimeout, а потом переподключался. За прокси (TRUST_PROXY > 0)
+ * все соединения приходят с адреса nginx — там эту работу делает limit_conn,
+ * и здесь проверка отключена.
+ */
+const MAX_CONNECTIONS_PER_IP = Number(process.env.MAX_CONNECTIONS_PER_IP) || 32;
+const behindProxy = Number.parseInt(process.env.TRUST_PROXY ?? '0', 10) > 0;
+const connectionsByIp = new Map();
+if (!behindProxy) {
+  server.on('connection', (socket) => {
+    const address = socket.remoteAddress || 'unknown';
+    const count = (connectionsByIp.get(address) || 0) + 1;
+    if (count > MAX_CONNECTIONS_PER_IP) {
+      socket.destroy();
+      return;
+    }
+    connectionsByIp.set(address, count);
+    socket.once('close', () => {
+      const left = (connectionsByIp.get(address) || 1) - 1;
+      if (left <= 0) connectionsByIp.delete(address);
+      else connectionsByIp.set(address, left);
+    });
+  });
+}
 
 process.on('unhandledRejection', (error) => {
   logger.error('process.unhandled_rejection', error);
