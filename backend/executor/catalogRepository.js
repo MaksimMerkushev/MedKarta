@@ -20,6 +20,7 @@
 
 import { SPECIALTY_CANON } from '../privacy/catalog.js';
 import { normalizeRu } from '../privacy/normalize.js';
+import { scheduleIntervals } from '../../shared/openingHours.js';
 
 const DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 
@@ -30,10 +31,14 @@ const parseMinutes = (value) => {
 };
 
 /**
- * Проверяет, что приём заканчивается не раньше заданного времени.
+ * Проверяет, что приём идёт и ПОСЛЕ заданного времени.
  * Отсутствие расписания трактуется как «не подтверждено»: запись НЕ проходит
  * фильтр по времени. Обратное поведение показывало бы пользователю врача,
  * которого может не быть на месте.
+ *
+ * Граница строгая: клиника, закрывающаяся в 18:00, «после 18:00» не
+ * принимает (раньше проходила — 15 клиник справочника). Интервалы — все
+ * интервалы дня, с переходом через полночь (см. scheduleIntervals).
  */
 const worksAfter = (schedule, time) => {
   const threshold = parseMinutes(time);
@@ -42,34 +47,18 @@ const worksAfter = (schedule, time) => {
     return false;
   }
 
-  return DAY_KEYS.some((day) => {
-    const raw = schedule[day];
-    if (typeof raw !== 'string') return false;
-    const interval = /^(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})$/.exec(raw.trim());
-    if (!interval) return false;
-    const open = parseMinutes(interval[1]);
-    let close = parseMinutes(interval[2]);
-    if (close === null || open === null) return false;
-    // «00:00-00:00» — круглосуточно, «20:00-08:00» — через полночь: закрытие
-    // на следующие сутки. Раньше такие учреждения не проходили «после 18:00».
-    if (close <= open) close += 24 * 60;
-    return close >= threshold;
-  });
+  return DAY_KEYS.some((day) =>
+    (scheduleIntervals(schedule[day]) || []).some((interval) => interval.end > threshold));
 };
 
+/** Приём начинается раньше заданного времени (граница строгая). */
 const worksBefore = (schedule, time) => {
   const threshold = parseMinutes(time);
   if (threshold === null) return true;
   if (!schedule || typeof schedule !== 'object') return false;
 
-  return DAY_KEYS.some((day) => {
-    const raw = schedule[day];
-    if (typeof raw !== 'string') return false;
-    const interval = /^(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})$/.exec(raw.trim());
-    if (!interval) return false;
-    const open = parseMinutes(interval[1]);
-    return open !== null && open <= threshold;
-  });
+  return DAY_KEYS.some((day) =>
+    (scheduleIntervals(schedule[day]) || []).some((interval) => interval.start < threshold));
 };
 
 const worksWeekend = (schedule) => {

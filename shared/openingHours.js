@@ -13,8 +13,8 @@
  * «24/7», «08:00-20:00», «Mo-Fr 08:00-20:00; Sa 09:00-15:00; Su off»,
  * списки и диапазоны дней («Mo,We,Fr», «Mo-Tu,Th-Sa»), «PH» (праздники —
  * игнорируются), несколько интервалов в день («08:00-12:00,13:00-17:00» —
- * берётся общий охват). Всё прочее возвращает null, и тогда используется
- * расписание из данных как есть.
+ * сохраняются все: перерыв — это «закрыто»). Всё прочее возвращает null,
+ * и тогда используется расписание из данных как есть.
  */
 
 const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
@@ -48,12 +48,55 @@ const parseTimes = (spec) => {
   if (value === 'off' || value === 'closed') return CLOSED;
   const intervals = [...value.matchAll(/(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/g)];
   if (intervals.length === 0) return null;
+  // «25:00-99:99» — не время; такое правило не принимается целиком.
+  if (intervals.some((item) => Number(item[1]) > 24 || Number(item[3]) > 24 || Number(item[2]) > 59 || Number(item[4]) > 59)) {
+    return null;
+  }
   const leftover = value.replace(/(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/g, '').replace(/[\s,]/g, '');
   if (leftover) return null;
-  const first = intervals[0];
-  const last = intervals[intervals.length - 1];
+  /*
+   * Все интервалы, а не общий охват: «09:00-12:30,13:00-17:30» раньше
+   * становилось «09:00-17:30», и в обед учреждение показывалось открытым.
+   */
   const pad = (hours, minutes) => `${String(Number(hours)).padStart(2, '0')}:${minutes}`;
-  return `${pad(first[1], first[2])}-${pad(last[3], last[4])}`;
+  return intervals.map((item) => `${pad(item[1], item[2])}-${pad(item[3], item[4])}`).join(',');
+};
+
+const DAY_MINUTES = 24 * 60;
+
+/**
+ * Интервалы работы из строки расписания одного дня, в минутах от полуночи.
+ *
+ * «09:00-12:30,13:00-17:30» → два интервала; «20:00-08:00» → конец на
+ * следующих сутках (> 1440); «00:00-00:00» и «Круглосуточно» — весь день.
+ * Выходной, пустая строка и нераспознанный текст — null.
+ *
+ * @param {string} value
+ * @returns {null | Array<{start: number, end: number}>}
+ */
+export const scheduleIntervals = (value) => {
+  if (typeof value !== 'string') return null;
+  const text = value.trim().toLowerCase();
+  if (!text || /выход|closed|\boff\b/u.test(text)) return null;
+  if (text.includes('круглосуточ') || text === '24/7') return [{ start: 0, end: DAY_MINUTES }];
+
+  const intervals = [];
+  const pattern = /(\d{1,2}):(\d{2})\s*[-–—]\s*(\d{1,2}):(\d{2})/gu;
+  let match;
+  while ((match = pattern.exec(text)) !== null) {
+    const [, h1, m1, h2, m2] = match.map(Number);
+    if (h1 > 24 || h2 > 24 || m1 > 59 || m2 > 59) return null;
+    const start = h1 * 60 + m1;
+    let end = h2 * 60 + m2;
+    if (end === 23 * 60 + 59) end = DAY_MINUTES;
+    if (start === end || (start === 0 && end === DAY_MINUTES)) {
+      intervals.push({ start: 0, end: DAY_MINUTES });
+      continue;
+    }
+    if (end < start) end += DAY_MINUTES;
+    intervals.push({ start, end });
+  }
+  return intervals.length > 0 ? intervals : null;
 };
 
 /**
@@ -80,8 +123,10 @@ export const parseOpeningHours = (hours) => {
   for (const rawRule of rules) {
     const rule = rawRule.trim();
     if (!rule) continue;
-    // Праздничные дни в недельное расписание не входят.
-    if (/^PH\b/i.test(rule)) continue;
+    // Праздничные дни в недельное расписание не входят. Но «PH,Su off» —
+    // это ещё и воскресенье: пропускается только правило для одних
+    // праздников, а «ph» внутри списка дней отбрасывает parseDays.
+    if (/^PH\s/i.test(rule)) continue;
 
     // «08:00-20:00» без дней — каждый день.
     const bare = parseTimes(rule);
