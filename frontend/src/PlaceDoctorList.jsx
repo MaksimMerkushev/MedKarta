@@ -125,7 +125,7 @@ export default function PlaceDoctorList({ items, onAddToRoute, onRemoveFromRoute
               onKeyDown={onKeyDown}
               placeholder="Фамилия, специальность, отделение"
               aria-label="Поиск врача в этом учреждении"
-              className="w-full rounded-lg border border-slate-200 bg-slate-50 py-1.5 pl-8 pr-7 text-[13px] text-slate-800 outline-none placeholder:text-slate-400 focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100 dark:border-slate-600 dark:bg-slate-900 dark:text-white dark:focus:ring-blue-900 [&::-webkit-search-cancel-button]:hidden"
+              className="w-full rounded-lg border border-slate-200 bg-slate-50 py-1.5 pl-8 pr-7 text-[13px] text-slate-800 outline-none placeholder:text-slate-400 focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100 dark:border-slate-600 dark:bg-slate-900 dark:text-white dark:focus:bg-slate-900 dark:focus:ring-blue-900 [&::-webkit-search-cancel-button]:hidden"
             />
             {query && (
               <button
@@ -149,7 +149,16 @@ export default function PlaceDoctorList({ items, onAddToRoute, onRemoveFromRoute
           )}
 
           {chips.length > 1 && (
-            <div className="mb-2 flex flex-wrap gap-1" role="group" aria-label="Фильтр по специальности">
+            /*
+              Раскрытые чипы прокручиваются внутри своей полосы: иначе окно
+              на телефоне росло вверх, и заголовок, крестик и поиск уходили
+              за верхний край экрана.
+            */
+            <div
+              className={`mb-2 flex flex-wrap gap-1 ${allChips ? 'max-h-24 overflow-y-auto overscroll-contain' : ''}`}
+              role="group"
+              aria-label="Фильтр по специальности"
+            >
               <button type="button" className={chipClass(specialty === null)} onClick={() => setSpecialty(null)}>
                 Все
               </button>
@@ -189,7 +198,9 @@ export default function PlaceDoctorList({ items, onAddToRoute, onRemoveFromRoute
 
       <div
         ref={listRef}
-        className="-mx-1 max-h-72 overflow-y-auto overscroll-contain px-1 scrollbar-thin"
+        // Раскрытые чипы занимают место — список на телефоне становится ниже,
+        // чтобы окно целиком оставалось на экране.
+        className={`-mx-1 max-h-72 overflow-y-auto overscroll-contain px-1 scrollbar-thin ${allChips ? 'max-sm:max-h-[24vh]' : 'max-sm:max-h-[36vh]'}`}
         data-testid="place-doctor-list"
       >
         {result.shown === 0 ? (
@@ -239,7 +250,7 @@ export default function PlaceDoctorList({ items, onAddToRoute, onRemoveFromRoute
                           onClick={() => (doc.isRouteTarget ? onRemoveFromRoute(doc.id) : onAddToRoute(doc))}
                           title={doc.isRouteTarget ? 'Убрать из маршрута' : 'Добавить в маршрут'}
                           aria-label={`${doc.isRouteTarget ? 'Убрать из маршрута' : 'Добавить в маршрут'}: ${doc.name}`}
-                          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-colors ${
+                          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-colors pointer-coarse:h-11 pointer-coarse:w-11 ${
                             doc.isRouteTarget
                               ? 'bg-red-100 text-red-600 hover:bg-red-200 dark:bg-red-900 dark:text-red-200'
                               : 'bg-blue-600 text-white hover:bg-blue-700'
@@ -253,7 +264,7 @@ export default function PlaceDoctorList({ items, onAddToRoute, onRemoveFromRoute
                           title={doc.isFavorite ? 'Убрать из избранного' : 'В избранное'}
                           aria-label={`${doc.isFavorite ? 'Убрать из избранного' : 'В избранное'}: ${doc.name}`}
                           aria-pressed={Boolean(doc.isFavorite)}
-                          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border transition-colors ${
+                          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border transition-colors pointer-coarse:h-11 pointer-coarse:w-11 ${
                             doc.isFavorite
                               ? 'border-amber-200 bg-amber-50 text-amber-600 dark:border-amber-800 dark:bg-amber-900/40'
                               : 'border-slate-200 bg-white text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:border-slate-600 dark:bg-slate-700'

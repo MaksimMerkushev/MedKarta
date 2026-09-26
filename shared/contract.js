@@ -29,6 +29,25 @@ export const SORT_MODES = ['recommendation', 'rating', 'experience', 'distance',
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g;
 
+/**
+ * Как cleanText, но сохраняет переводы строк (не больше одной пустой
+ * строки подряд): нумерованный список в ответе ассистента иначе
+ * склеивался в одну строку.
+ */
+export const cleanMultilineText = (value, maxLength) => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const cleaned = value
+    .replace(/\r\n?/g, '\n')
+    .replace(CONTROL_CHARS, '')
+    .replace(/[^\S\n]+/g, ' ')
+    .replace(/ *\n */g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return cleaned ? cleaned.slice(0, maxLength) : null;
+};
+
 export const cleanText = (value, maxLength) => {
   if (typeof value !== 'string') {
     return null;
@@ -157,7 +176,7 @@ export const sanitizeAiAction = (raw) => {
     minExperience: boundedNumber(source.minExperience, 0, 40),
     maxDistance: boundedNumber(source.maxDistance, 0, 50),
 
-    replyText: cleanText(source.replyText, LIMITS.MAX_REPLY_CHARS) || DEFAULT_REPLY,
+    replyText: cleanMultilineText(source.replyText, LIMITS.MAX_REPLY_CHARS) || DEFAULT_REPLY,
   };
 };
 

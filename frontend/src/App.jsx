@@ -3,7 +3,7 @@
  * Этот код является интеллектуальной собственностью автора.
  */
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import { AttributionControl, MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import MarkerClusterGroup from 'react-leaflet-cluster';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -52,7 +52,7 @@ import Toast, { useToast } from './Toast';
 import SearchFilters from './SearchFilters';
 import PlaceDoctorList from './PlaceDoctorList';
 import { SORT_MODES } from '@shared/contract.js';
-import { parseOpeningHours } from '@shared/openingHours.js';
+import { parseOpeningHours, scheduleIntervals } from '@shared/openingHours.js';
 import { useDebouncedValue } from './hooks/useDebouncedValue';
 import { isBoolean, isStringIdArray, useLocalStorageState } from './hooks/useLocalStorageState';
 
@@ -105,6 +105,9 @@ const createBeautifulArrow = (rawColor, isUser = false, rawLabel = null) => {
 const dayKeys = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const FAVORITES_STORAGE_KEY = 'med-navigator-favorites';
 const DARK_MODE_STORAGE_KEY = 'med-navigator-dark-mode';
+// Без сохранённого выбора тема следует системной (см. public/theme-init.js).
+const PREFERS_DARK = typeof window !== 'undefined'
+  && window.matchMedia?.('(prefers-color-scheme: dark)').matches === true;
 const MAX_ROUTE_STOPS = 5;
 const PAGE_SIZE = 30;
 const EMPTY_SERVICES = [];
@@ -212,7 +215,9 @@ const mapClinicsToFacilities = (payload) => {
         hours: hoursRaw,
         phone,
         website,
-        services: [clinic.facility_type, specialty].filter(Boolean),
+        // Без повторов: specialty по умолчанию равна типу учреждения, и
+        // карточка показывала «Клиника» дважды (и дублирующиеся ключи React).
+        services: [...new Set([clinic.facility_type, specialty].filter(Boolean))],
         features: {
           onlineBooking: Boolean(booking || website),
           wheelchair: false,
@@ -249,16 +254,66 @@ const InitialCenterMap = ({ location }) => {
 };
 
 // Animate map transition to coordinates
-const FlyToPoint = ({ target, onDone }) => {
+/*
+ * Открытое окно маркера и панель маршрута. Если окно уже открыто, а панель
+ * появляется (нажали «в маршрут» прямо в окне), окно оставалось под ней.
+ * Здесь окну задаётся отступ справа и оно заново вписывается в видимую часть.
+ */
+const PopupPanGuard = ({ rightPadding }) => {
+  const map = useMap();
+  const popupRef = useRef(null);
+  const paddingRef = useRef(rightPadding);
+
+  // Параметры окна react-leaflet задаёт один раз, при создании маркера, —
+  // тогда маршрута ещё не было. Поэтому отступ выставляется при каждом
+  // открытии окна и при каждом изменении панели.
+  const fit = useCallback((popup) => {
+    if (!popup?.isOpen()) return;
+    popup.options.autoPanPaddingBottomRight = L.point(paddingRef.current, 24);
+    popup.update();
+  }, []);
+
+  useEffect(() => {
+    const onOpen = (event) => {
+      popupRef.current = event.popup;
+      fit(event.popup);
+    };
+    const onClose = (event) => {
+      if (popupRef.current === event.popup) popupRef.current = null;
+    };
+    map.on('popupopen', onOpen);
+    map.on('popupclose', onClose);
+    return () => {
+      map.off('popupopen', onOpen);
+      map.off('popupclose', onClose);
+    };
+  }, [map, fit]);
+
+  useEffect(() => {
+    paddingRef.current = rightPadding;
+    fit(popupRef.current);
+  }, [rightPadding, fit]);
+
+  return null;
+};
+
+const FlyToPoint = ({ target, onDone, offsetRatio = 0 }) => {
   const map = useMap();
   const prevTarget = useRef(null);
   useEffect(() => {
     if (target && target !== prevTarget.current) {
       prevTarget.current = target;
-      map.flyTo(target, map.getZoom() < 14 ? 15 : map.getZoom(), { duration: 1.0 });
+      const zoom = map.getZoom() < 14 ? 15 : map.getZoom();
+      let center = target;
+      if (offsetRatio > 0) {
+        // Центр сдвигается вниз — точка оказывается выше середины экрана.
+        const shifted = map.project(target, zoom).add([0, map.getSize().y * offsetRatio]);
+        center = map.unproject(shifted, zoom);
+      }
+      map.flyTo(center, zoom, { duration: 1.0 });
       if (onDone) setTimeout(onDone, 1100);
     }
-  }, [target, map, onDone]);
+  }, [target, map, onDone, offsetRatio]);
   return null;
 };
 
@@ -318,7 +373,28 @@ const ROUTE_ERROR_TEXT = {
   no_route_between_points: 'Для этого транспорта пути по дорогам нет',
   route_too_complex: 'Маршрут слишком длинный для расчёта',
   routing_graph_unavailable: 'Карта дорог не загружена на сервере',
+  outside_region: 'Точка вне Казани и окрестностей — маршрут здесь не строится',
+  rate_limited: 'Слишком много запросов маршрута — попробуйте через минуту',
+  bad_request: 'Не удалось построить маршрут по этим точкам',
+  server_error: 'Сервер маршрутов временно недоступен',
+  timeout: 'Сервер маршрутов не ответил вовремя',
+  offline: 'Нет соединения с интернетом',
+  network: 'Нет связи с сервером маршрутов — проверьте интернет',
 };
+
+/* Ошибки, после которых имеет смысл просто повторить запрос. */
+const RETRYABLE_ROUTE_ERRORS = new Set([null, undefined, 'rate_limited', 'server_error', 'timeout', 'offline', 'network', 'route_too_complex']);
+
+/** Код ответа сервера маршрутов → причина для интерфейса. */
+const routeFailureReason = (status, code) => {
+  if (code) return code;
+  if (status === 429) return 'rate_limited';
+  if (status === 400) return 'bad_request';
+  if (status >= 500) return 'server_error';
+  return null;
+};
+
+const ROUTE_TIMEOUT_MS = 15_000;
 const routeErrorText = (routeData, targets, fallback) => {
   if (routeData?.reason === 'point_far_from_road_network' && Number.isInteger(routeData.point)) {
     if (routeData.point === 0) return 'Точка старта слишком далеко от дорог';
@@ -329,9 +405,36 @@ const routeErrorText = (routeData, targets, fallback) => {
   return ROUTE_ERROR_TEXT[routeData?.reason] || fallback;
 };
 
-const RoutingMachine = ({ originLocation, routeTargets, travelMode, setRouteData }) => {
+/** Причина, по которой маршрут не построен, и «Повторить» для временных сбоев. */
+const RouteErrorNotice = ({ routeData, routeTargets, fallback, onRetry }) => (
+  <div className="flex flex-col items-center gap-2" role="alert">
+    <div className="text-sm font-medium text-red-500">{routeErrorText(routeData, routeTargets, fallback)}</div>
+    {RETRYABLE_ROUTE_ERRORS.has(routeData?.reason) && (
+      <button
+        type="button"
+        onClick={onRetry}
+        className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-semibold text-blue-600 transition-colors hover:bg-blue-50 dark:border-slate-600 dark:text-blue-400 dark:hover:bg-slate-700"
+      >
+        Повторить
+      </button>
+    )}
+  </div>
+);
+
+const RoutingMachine = ({ originLocation, routeTargets, travelMode, routeData, setRouteData }) => {
   const map = useMap();
   const layerRef = useRef(null);
+  /*
+   * Повторный запрос при неизменном наборе точек. Многие действия
+   * интерфейса сбрасывают результат (setRouteData(null)) — выбор того же
+   * транспорта, «к моему местоположению», перестановка точек одной клиники,
+   * — но ключ маршрута при этом не меняется, и эффект не перезапускался:
+   * панель вечно показывала «Строим маршрут...». Теперь сброшенный
+   * результат без запроса в полёте означает «построй заново»; так же
+   * работает кнопка «Повторить».
+   */
+  const [attempt, setAttempt] = useState(0);
+  const inFlightRef = useRef(false);
 
   // Стабилизация: округляем координаты до 4 знаков (~11 метров), чтобы
   // дрожание геолокации не перестраивало маршрут на каждом обновлении.
@@ -365,6 +468,13 @@ const RoutingMachine = ({ originLocation, routeTargets, travelMode, setRouteData
 
     const controller = new AbortController();
     let cancelled = false;
+    let timedOut = false;
+    inFlightRef.current = true;
+    // Без предела ожидания зависший сервер оставлял «Строим маршрут...» навсегда.
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, ROUTE_TIMEOUT_MS);
 
     /*
      * Маршрут строит НАШ сервер (backend/routing), а не сторонний сервис.
@@ -394,7 +504,7 @@ const RoutingMachine = ({ originLocation, routeTargets, travelMode, setRouteData
             distance: 0,
             time: 0,
             error: true,
-            reason: failure?.code || null,
+            reason: routeFailureReason(response.status, failure?.code),
             point: Number.isInteger(failure?.point) ? failure.point : null,
           });
           return;
@@ -434,8 +544,14 @@ const RoutingMachine = ({ originLocation, routeTargets, travelMode, setRouteData
 
         setRouteData({ distance: payload.distance, time: payload.time, error: false });
       } catch (error) {
-        if (cancelled || error?.name === 'AbortError') return;
-        setRouteData({ distance: 0, time: 0, error: true });
+        if (cancelled) return;
+        if (error?.name === 'AbortError' && !timedOut) return;
+        clear();
+        const reason = timedOut ? 'timeout' : typeof navigator !== 'undefined' && navigator.onLine === false ? 'offline' : 'network';
+        setRouteData({ distance: 0, time: 0, error: true, reason });
+      } finally {
+        clearTimeout(timer);
+        if (!cancelled) inFlightRef.current = false;
       }
     };
 
@@ -443,34 +559,26 @@ const RoutingMachine = ({ originLocation, routeTargets, travelMode, setRouteData
 
     return () => {
       cancelled = true;
+      inFlightRef.current = false;
+      clearTimeout(timer);
       controller.abort();
       clear();
     };
     // routeKey намеренно заменяет собой список зависимостей: он и есть
     // огрублённый снимок входных данных.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [map, routeKey]);
+  }, [map, routeKey, attempt]);
+
+  // Объявлен ПОСЛЕ эффекта запроса: если ключ сменился в том же рендере,
+  // запрос уже в полёте, и повтор не нужен.
+  useEffect(() => {
+    if (routeData === null && !inFlightRef.current && originLocation && routeTargets?.length > 0) {
+      setAttempt((value) => value + 1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeData]);
 
   return null;
-};
-
-const timeToMinutes = (value) => {
-  if (!value || typeof value !== 'string') {
-    return null;
-  }
-
-  const parts = value.trim().split(':');
-  if (parts.length !== 2) {
-    return null;
-  }
-
-  const hours = Number(parts[0]);
-  const minutes = Number(parts[1]);
-  if (Number.isNaN(hours) || Number.isNaN(minutes)) {
-    return null;
-  }
-
-  return hours * 60 + minutes;
 };
 
 const normalizeText = (value) => (value ? value.toString().toLowerCase() : '');
@@ -483,39 +591,20 @@ const normalizeClinicKey = (value) =>
     .replace(/\s+/g, ' ')
     .trim();
 
+/*
+ * Охват дня: начало первого интервала и конец последнего — для сортировки
+ * и фильтра «вечерний приём». Для «открыто сейчас» охват не годится: у
+ * «09:00-12:30,13:00-17:30» он закрывает обеденный перерыв. Там
+ * используются сами интервалы (scheduleIntervals из shared/openingHours.js:
+ * круглосуточно, переход через полночь, перерывы).
+ */
 const scheduleTextToRange = (value) => {
-  if (!value || /выход/i.test(value) || /closed/i.test(value)) {
-    return null;
-  }
-
-  const normalized = value.toLowerCase();
-  if (normalized.includes('круглосуточ')) {
-    return { start: 0, end: 24 * 60 };
-  }
-
-  const rangePart = value.split(';')[0].split(',')[0].trim();
-  const dashIndex = rangePart.indexOf('-');
-  if (dashIndex === -1) {
-    return null;
-  }
-
-  const start = timeToMinutes(rangePart.slice(0, dashIndex).trim());
-  let end = timeToMinutes(rangePart.slice(dashIndex + 1).trim());
-  if (start === null || end === null) {
-    return null;
-  }
-
-  /*
-   * «00:00-00:00» в данных OSM означает круглосуточно, «20:00-08:00» —
-   * работу через полночь. Раньше и то и другое давало пустой интервал:
-   * круглосуточный травмпункт показывался «Закрыто», ночные — никогда не
-   * «Открыто». Конец за полночь хранится как минуты следующих суток (> 1440).
-   */
-  if (end === 23 * 60 + 59) end = 24 * 60;
-  if (start === end) return { start: 0, end: 24 * 60 };
-  if (end < start) end += 24 * 60;
-
-  return { start, end };
+  const intervals = scheduleIntervals(value);
+  if (!intervals) return null;
+  return {
+    start: Math.min(...intervals.map((interval) => interval.start)),
+    end: Math.max(...intervals.map((interval) => interval.end)),
+  };
 };
 
 // Расписание бывает трёх видов, и раньше два последних не различались.
@@ -576,14 +665,14 @@ const resolveOpenState = (schedule, now) => {
   }
 
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
-  const today = scheduleTextToRange(schedule[dayKeys[now.getDay()]]);
-  if (today && currentMinutes >= today.start && currentMinutes < today.end) {
+  const today = scheduleIntervals(schedule[dayKeys[now.getDay()]]) || [];
+  if (today.some((interval) => currentMinutes >= interval.start && currentMinutes < interval.end)) {
     return OPEN_STATE.OPEN;
   }
 
   // Вчерашняя смена, перешедшая за полночь: «пт 20:00-08:00» в субботу в 03:00.
-  const yesterday = scheduleTextToRange(schedule[dayKeys[(now.getDay() + 6) % 7]]);
-  if (yesterday && yesterday.end > 24 * 60 && currentMinutes + 24 * 60 < yesterday.end) {
+  const yesterday = scheduleIntervals(schedule[dayKeys[(now.getDay() + 6) % 7]]) || [];
+  if (yesterday.some((interval) => interval.end > 24 * 60 && currentMinutes + 24 * 60 < interval.end)) {
     return OPEN_STATE.OPEN;
   }
 
@@ -615,8 +704,10 @@ const getTodaySchedule = (schedule, now) => {
   }
 
   const today = schedule[dayKeys[now.getDay()]];
-  if (today === '00:00-00:00') return 'Круглосуточно';
-  return today || 'График уточняется';
+  const intervals = scheduleIntervals(today);
+  if (intervals?.length === 1 && intervals[0].start === 0 && intervals[0].end === 24 * 60) return 'Круглосуточно';
+  // «09:00-12:30,13:00-17:30» — с пробелом, чтобы перерыв читался.
+  return today ? today.replace(/,(?=\d)/g, ', ') : 'График уточняется';
 };
 
 const WEEK_DAY_LABELS = {
@@ -905,13 +996,21 @@ export default function App() {
   // Избранное и тема читаются из localStorage через валидатор: испорченное или
   // подменённое значение раньше роняло приложение на favorites.includes(...).
   const [favorites, setFavorites] = useLocalStorageState(FAVORITES_STORAGE_KEY, [], isStringIdArray);
+  // Сохранённый список мог разрастись повторами (или быть подменён):
+  // он пересохраняется при каждом нажатии на сердечко.
+  useEffect(() => {
+    setFavorites((current) => {
+      const unique = [...new Set(current)].slice(0, 500);
+      return unique.length === current.length ? current : unique;
+    });
+  }, [setFavorites]);
   const [now, setNow] = useState(() => kazanWallClock());
   const [isLocationReady, setIsLocationReady] = useState(!hasGeolocationSupport);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
   const [mobileSheetDragOffset, setMobileSheetDragOffset] = useState(0);
-  const [isDarkMode, setIsDarkMode] = useLocalStorageState(DARK_MODE_STORAGE_KEY, false, isBoolean);
+  const [isDarkMode, setIsDarkMode] = useLocalStorageState(DARK_MODE_STORAGE_KEY, PREFERS_DARK, isBoolean);
   const { toast, showToast, dismiss: dismissToast } = useToast();
 
   const [isAIAssistantOpen, setIsAIAssistantOpen] = useState(false);
@@ -1748,10 +1847,28 @@ export default function App() {
     return byDistance.find((doc) => doc.openNow) || null;
   }, [enrichedDoctors]);
   const doctorCards = useMemo(() => sortedDoctors.filter((item) => item.entityKind === 'doctor'), [sortedDoctors]);
+
+  /*
+   * Ссылка вида ?doc=<id> раньше разбиралась и тут же терялась: параметр
+   * читался, но нигде не использовался и пропадал из адреса. Теперь карта
+   * летит к этому врачу или учреждению, а список сужается до него.
+   */
+  const deepLinkHandledRef = useRef(false);
+  useEffect(() => {
+    if (deepLinkHandledRef.current || !INITIAL_URL_STATE.focus || enrichedDoctors.length === 0) return;
+    deepLinkHandledRef.current = true;
+    const target = enrichedDoctors.find((doc) => String(doc.id) === INITIAL_URL_STATE.focus);
+    if (!target) return;
+    setSearchQuery(target.name);
+    if (Number.isFinite(target.lat) && Number.isFinite(target.lng)) {
+      setFlyToTarget([target.lat, target.lng]);
+    }
+  }, [enrichedDoctors]);
   const facilityCards = useMemo(() => sortedDoctors.filter((item) => item.entityKind === 'facility'), [sortedDoctors]);
 
   useEffect(() => {
     if (targetStopsTrigger && targetStopsTrigger.length > 0 && enrichedDoctors.length > 0) {
+      const requested = targetStopsTrigger.length;
       const foundTargets = [];
       targetStopsTrigger.forEach(stop => {
         const candidates = enrichedDoctors.filter(doc => {
@@ -1779,6 +1896,27 @@ export default function App() {
         }
       });
 
+      /*
+       * Честно говорим, сколько точек реально добавлено. Раньше ответ
+       * ассистента «построил маршрут: 3 точки» мог сопровождаться пустым
+       * маршрутом (точек нет в данных карты) или молча обрезанным до пяти.
+       */
+      const room = Math.max(0, MAX_ROUTE_STOPS - routeTargets.length);
+      const fresh = foundTargets.filter((ft) => !routeTargets.some((t) => t.id === ft.id));
+      const added = Math.min(fresh.length, room);
+      const alreadyThere = foundTargets.length - fresh.length;
+      if (added + alreadyThere < requested) {
+        const reason = fresh.length > room || requested > MAX_ROUTE_STOPS
+          ? `в маршруте не больше ${MAX_ROUTE_STOPS} точек`
+          : 'остальные не найдены на карте';
+        showToast(
+          added === 0
+            ? `Точки из ответа не добавлены: ${reason}.`
+            : `Добавлено точек: ${added} из ${requested} — ${reason}.`,
+          'warning',
+        );
+      }
+
       if (foundTargets.length > 0) {
         setRouteTargets(prev => {
           const merged = [...prev];
@@ -1804,7 +1942,7 @@ export default function App() {
       }
       setBuildRouteTrigger(false);
     }
-  }, [buildRouteTrigger, targetStopsTrigger, enrichedDoctors, sortedDoctors, routeTargets]);
+  }, [buildRouteTrigger, targetStopsTrigger, enrichedDoctors, sortedDoctors, routeTargets, showToast]);
 
   // Toggle favorite status
   const toggleFavorite = useCallback((id) => {
@@ -1946,6 +2084,7 @@ export default function App() {
   }, []);
 
   const markerNodes = useMemo(() => {
+    const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 390;
     // Группируем врачей и клиники по координатам, чтобы избежать наложения
     // десятков одинаковых маркеров друг на друга (что вызывало черный ореол из теней)
     const groupsMap = new Map();
@@ -2004,7 +2143,18 @@ export default function App() {
 
       return (
         <Marker key={`group-${key}`} position={stablePosition(key, lat, lng)} icon={icon}>
-          <Popup maxWidth={isSingle ? 300 : 360} minWidth={isSingle ? 240 : 300}>
+          <Popup
+            // На телефоне окно не шире экрана: раньше CSS ограничивал обёртку
+            // 280 px при содержимом 300 px, и поиск, сердечки и счётчики
+            // вылезали за край. Высоту держат полосы прокрутки внутри списка
+            // (PlaceDoctorList); maxHeight самого окна не используется —
+            // с ним прокрутка списка пальцем сдвигала карту.
+            maxWidth={isMobile ? Math.min(320, viewportWidth - 48) : isSingle ? 300 : 360}
+            minWidth={isMobile ? Math.min(260, viewportWidth - 64) : isSingle ? 240 : 300}
+            // Открытая панель маршрута (справа) не должна закрывать окно.
+            // У Leaflet отступ справа задаётся парой «снизу-справа».
+            autoPanPaddingBottomRight={!isMobile && routeTargets.length > 0 ? [360, 24] : [24, 24]}
+          >
             {/*
               Клик внутри окна не должен доходить до карты. Leaflet отличает
               клик по окну от клика по карте, поднимаясь по DOM от цели события.
@@ -2095,7 +2245,7 @@ export default function App() {
         </Marker>
       );
     });
-  }, [sortedDoctors, routeTargets, cardDisplayMode, routeStarted, removeFromRoute, handleRouteClick, toggleFavorite]);
+  }, [sortedDoctors, routeTargets, cardDisplayMode, routeStarted, removeFromRoute, handleRouteClick, toggleFavorite, isMobile]);
 
   const resetToGPS = () => {
     setIsManualOrigin(false);
@@ -2392,7 +2542,8 @@ export default function App() {
         </div>
 
         <div className="mt-4 flex flex-wrap gap-2">
-          {(doc.services || []).map((service) => (
+          {/* Тип учреждения уже показан отдельной меткой выше — не повторяем. */}
+          {(doc.services || []).filter((service) => isDoctorCard || service !== (doc.facilityType || doc.specialty)).map((service) => (
             <span key={service} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
               {service}
             </span>
@@ -2508,11 +2659,16 @@ export default function App() {
               {isSidebarCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
             </button>
           )}
+          {/*
+            На телефоне панель — «шторка» с position: fixed. Раньше у неё были
+            и relative, и fixed; Tailwind выводит .relative позже, он побеждал,
+            и шторка вставала в поток вверху экрана, а карта сжималась до нуля.
+          */}
           <aside
             ref={sidebarRef}
             aria-label="Поиск врачей и учреждений"
             inert={isSidebarCollapsed && !isMobile}
-            className={`search-sidebar ${isMobile ? 'mobile-bottom-sheet' : ''} z-[1000] relative flex shrink-0 flex-col bg-white shadow-2xl overflow-hidden dark:bg-slate-800 transition-all duration-300 ease-in-out ${isSidebarCollapsed && !isMobile ? 'border-r-0' : ''} ${isMobile ? 'fixed inset-x-0 bottom-0 max-h-[85vh] w-full rounded-t-3xl' : ''}`}
+            className={`search-sidebar ${isMobile ? 'mobile-bottom-sheet' : 'relative'} z-[1000] flex shrink-0 flex-col bg-white shadow-2xl overflow-hidden dark:bg-slate-800 transition-all duration-300 ease-in-out ${isSidebarCollapsed && !isMobile ? 'border-r-0' : ''} ${isMobile ? 'fixed inset-x-0 bottom-0 max-h-[85vh] w-full rounded-t-3xl' : ''}`}
             style={
               isMobile
                 ? { transform: `translateY(${mobileSheetDragOffset}px)` }
@@ -2772,6 +2928,8 @@ export default function App() {
                   <div className="text-[11px] font-bold uppercase tracking-wider text-blue-100">Smart-маршрут · {routeTargets.length} {routeTargets.length === 1 ? 'точка' : routeTargets.length < 5 ? 'точки' : 'точек'}</div>
                   {routeData && !routeData.error ? (
                     <div className="mt-0.5 text-[15px] font-extrabold text-white">{formatTime(routeData.time)} <span className="font-medium text-blue-200">· {formatDistance(routeData.distance)}</span></div>
+                  ) : routeData?.error ? (
+                    <div className="mt-0.5 truncate text-sm font-semibold text-red-100">Маршрут не построен — нажмите, чтобы узнать почему</div>
                   ) : (
                     <div className="mt-0.5 text-sm font-medium text-blue-200">Построение маршрута...</div>
                   )}
@@ -2783,7 +2941,7 @@ export default function App() {
 
           {/* Expanded route panel */}
           {routeTargets.length > 0 && !isRoutePanelCollapsed && (
-            <div className="mx-2 mb-2 max-h-[55vh] overflow-hidden overflow-y-auto rounded-2xl border border-slate-100 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-800">
+            <div className="mx-2 mb-2 max-h-[50vh] overflow-hidden overflow-y-auto rounded-2xl border border-slate-100 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-800">
               <div className="sticky top-0 z-10 border-b border-slate-100 bg-gradient-to-r from-blue-50 to-white px-4 py-3 dark:border-slate-700 dark:from-slate-700 dark:to-slate-800">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -2841,7 +2999,7 @@ export default function App() {
               <div className="p-4 text-center">
                 {routeData ? (
                   routeData.error ? (
-                    <div className="text-sm font-medium text-red-500">{routeErrorText(routeData, routeTargets, 'Маршрут не найден')}</div>
+                    <RouteErrorNotice routeData={routeData} routeTargets={routeTargets} fallback="Маршрут не найден" onRetry={() => setRouteData(null)} />
                   ) : (
                     <>
                       <div className="text-3xl font-extrabold tracking-tight text-slate-800 dark:text-white">{formatTime(routeData.time)}</div>
@@ -2858,7 +3016,7 @@ export default function App() {
 
               <div className="flex flex-col gap-2 border-t border-slate-100 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-700/50">
                 {!routeStarted ? (
-                  <button type="button" onClick={() => setIsRouteStarted(true)} className="w-full rounded-xl bg-blue-600 py-3 font-semibold text-white transition-colors active:bg-blue-700 dark:bg-blue-600 dark:active:bg-blue-500">
+                  <button type="button" onClick={() => setIsRouteStarted(true)} disabled={!routeData || routeData.error} className="w-full rounded-xl bg-blue-600 py-3 font-semibold text-white transition-colors active:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-600 dark:active:bg-blue-500">
                     Начать маршрут
                   </button>
                 ) : (
@@ -2917,6 +3075,8 @@ export default function App() {
                 <div className="text-[11px] font-bold uppercase tracking-wider text-blue-100">Smart-маршрут · {routeTargets.length} {routeTargets.length === 1 ? 'точка' : routeTargets.length < 5 ? 'точки' : 'точек'}</div>
                 {routeData && !routeData.error ? (
                   <div className="mt-0.5 text-[15px] font-extrabold text-white">{formatTime(routeData.time)} <span className="font-medium text-blue-200">· {formatDistance(routeData.distance)}</span></div>
+                ) : routeData?.error ? (
+                  <div className="mt-0.5 truncate text-sm font-semibold text-red-100">Маршрут не построен — нажмите, чтобы узнать почему</div>
                 ) : (
                   <div className="mt-0.5 text-sm font-medium text-blue-200">Построение маршрута...</div>
                 )}
@@ -2928,8 +3088,13 @@ export default function App() {
 
         {!isMobile && routeTargets.length > 0 && !isRoutePanelCollapsed && (
           <div
-            className={`route-panel-slide-in absolute z-[1000] overflow-hidden border border-slate-100 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-800 ${isMobile ? 'left-2 right-2 rounded-2xl' : 'right-6 top-6 w-80 rounded-3xl'}`}
-            style={isMobile ? { bottom: 'calc(80px + env(safe-area-inset-bottom, 0px))', maxHeight: '55vh' } : undefined}
+            className={`route-panel-slide-in absolute z-[1000] flex flex-col overflow-hidden border border-slate-100 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-800 ${isMobile ? 'left-2 right-2 rounded-2xl' : 'right-6 top-6 w-80 rounded-3xl'}`}
+            /*
+             * Высота ограничена: с пятью точками панель уходила за нижний край
+             * окна, и «Начать маршрут», время и «Очистить» становились
+             * недоступны. Снизу оставлено место под кнопки ИИ и геолокации.
+             */
+            style={isMobile ? { bottom: 'calc(80px + env(safe-area-inset-bottom, 0px))', maxHeight: '55vh' } : { maxHeight: 'calc(100% - 184px)' }}
           >
             <div className={`border-b border-slate-100 bg-gradient-to-r from-blue-50 to-white dark:border-slate-700 dark:from-slate-700 dark:to-slate-800 ${isMobile ? 'px-4 py-3' : 'px-5 py-4'}`}>
               <div className="flex items-center justify-between">
@@ -2944,7 +3109,7 @@ export default function App() {
             </div>
 
             {/* Route targets list */}
-            <div className={`${isMobile ? 'px-3 py-2 max-h-[30vh] overflow-y-auto' : 'px-5 py-3'}`}>
+            <div className={`${isMobile ? 'px-3 py-2 max-h-[30vh] overflow-y-auto' : 'min-h-0 flex-1 overflow-y-auto px-5 py-3'}`}>
               <div className="flex flex-col gap-2">
                 {routeTargets.map((target, idx) => (
                   <div
@@ -3023,7 +3188,7 @@ export default function App() {
             <div className={`${isMobile ? 'p-4' : 'p-6'} text-center`}>
               {routeData ? (
                 routeData.error ? (
-                  <div className="text-sm font-medium text-red-500">{routeErrorText(routeData, routeTargets, 'Маршрут для этого транспорта не найден')}</div>
+                  <RouteErrorNotice routeData={routeData} routeTargets={routeTargets} fallback="Маршрут для этого транспорта не найден" onRetry={() => setRouteData(null)} />
                 ) : (
                   <>
                     <div className={`${isMobile ? 'text-3xl' : 'text-4xl'} font-extrabold tracking-tight text-slate-800 dark:text-white`}>{formatTime(routeData.time)}</div>
@@ -3040,7 +3205,7 @@ export default function App() {
 
             <div className="flex flex-col gap-2 border-t border-slate-100 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-700/50">
               {!routeStarted ? (
-                <button type="button" onClick={() => setIsRouteStarted(true)} className="w-full rounded-xl bg-blue-600 py-3 font-semibold text-white transition-colors hover:bg-blue-700 dark:bg-blue-600 dark:hover:bg-blue-500">
+                <button type="button" onClick={() => setIsRouteStarted(true)} disabled={!routeData || routeData.error} className="w-full rounded-xl bg-blue-600 py-3 font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-600 dark:hover:bg-blue-500">
                   Начать маршрут
                 </button>
               ) : (
@@ -3057,6 +3222,13 @@ export default function App() {
         )}
 
         <MapContainer center={activeOrigin} zoom={13} className="h-full w-full" zoomControl attributionControl={false}>
+          {/*
+            Подпись «© OpenStreetMap» обязательна по лицензии ODbL и правилам
+            использования тайлов. Раньше она была отключена целиком; теперь
+            стоит там, где её не закрывают панели и нижнее меню.
+          */}
+          <AttributionControl position={isMobile ? 'topright' : 'bottomleft'} prefix={false} />
+          <PopupPanGuard rightPadding={!isMobile && routeTargets.length > 0 && !isRoutePanelCollapsed ? 360 : 24} />
           <TileLayer
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -3090,11 +3262,19 @@ export default function App() {
             {markerNodes}
           </MarkerClusterGroup>
 
-          <RoutingMachine originLocation={activeOrigin} routeTargets={routeTargets} travelMode={travelMode} setRouteData={stableSetRouteData} />
+          <RoutingMachine originLocation={activeOrigin} routeTargets={routeTargets} travelMode={travelMode} routeData={routeData} setRouteData={stableSetRouteData} />
           <InvalidateMapSize />
 
           <InitialCenterMap location={userLocation} />
-          {flyToTarget && <FlyToPoint target={flyToTarget} onDone={() => setFlyToTarget(null)} />}
+          {flyToTarget && (
+            <FlyToPoint
+              target={flyToTarget}
+              onDone={() => setFlyToTarget(null)}
+              // На телефоне развёрнутая панель маршрута закрывает нижнюю
+              // половину карты: точку ставим выше центра, в видимую часть.
+              offsetRatio={isMobile && routeTargets.length > 0 && !isRoutePanelCollapsed ? 0.3 : 0}
+            />
+          )}
         </MapContainer>
 
         {/* Кнопки на карте — скрываем на мобильных (есть bottom bar) */}
@@ -3130,6 +3310,7 @@ export default function App() {
               onClose={() => setIsAIAssistantOpen(false)}
               onApplyTriage={handleApplyTriage}
               isMobile={isMobile}
+              avoidRoutePanel={!isMobile && routeTargets.length > 0 && !isRoutePanelCollapsed}
             />
           </Suspense>
         )}
@@ -3139,4 +3320,3 @@ export default function App() {
     </div>
   );
 }
-// [GitHub Actions] Simulated map route stabilization

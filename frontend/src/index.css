@@ -20,6 +20,17 @@ body {
   padding-top: env(safe-area-inset-top);
 }
 
+/* Фон до отрисовки приложения и под картой в тёмной теме: без него
+   тёмная тема начиналась с белой вспышки, а пустая карта была светло-серой. */
+html.dark,
+html.dark body {
+  background-color: #0f172a;
+}
+
+html.dark .leaflet-container {
+  background-color: #1e293b;
+}
+
 /* ============ LEAFLET ============ */
 .leaflet-container {
   width: 100%;
@@ -41,9 +52,10 @@ html.dark .leaflet-control-attribution {
 
 /* Мобильные popup'ы Leaflet */
 @media (max-width: 767px) {
+  /* Ширину задают maxWidth/minWidth окна (App.jsx): жёсткие 280 px здесь
+     были уже содержимого, и элементы вылезали за край. */
   .leaflet-popup-content-wrapper {
     border-radius: 16px !important;
-    max-width: 280px !important;
     font-size: 13px !important;
   }
 

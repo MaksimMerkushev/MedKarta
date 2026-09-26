@@ -30,7 +30,7 @@ const friendlyError = (error) => {
   }
 };
 
-export default function AIAssistant({ isOpen, onClose, onApplyTriage, isMobile }) {
+export default function AIAssistant({ isOpen, onClose, onApplyTriage, isMobile, avoidRoutePanel = false }) {
   const [messages, setMessages] = useState([GREETING]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -49,6 +49,16 @@ export default function AIAssistant({ isOpen, onClose, onApplyTriage, isMobile }
       inputRef.current.focus();
     }
   }, [isOpen, isMobile]);
+
+  // Пока идёт запрос, поле ввода отключено, и фокус уходил на <body>:
+  // после ответа приходилось снова щёлкать в поле. Возвращаем его.
+  const wasLoadingRef = useRef(false);
+  useEffect(() => {
+    if (wasLoadingRef.current && !isLoading && isOpen && !isMobile) {
+      inputRef.current?.focus();
+    }
+    wasLoadingRef.current = isLoading;
+  }, [isLoading, isOpen, isMobile]);
 
   // Закрытие окна не должно оставлять висящий запрос и обновлять состояние
   // размонтированного диалога.
@@ -241,6 +251,9 @@ export default function AIAssistant({ isOpen, onClose, onApplyTriage, isMobile }
   return (
     <div
       className="absolute bottom-20 right-6 z-[1050] w-[350px] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl transition-all dark:border-slate-700 dark:bg-slate-800"
+      // Открытая панель маршрута занимает правый верхний угол (320 px + отступы):
+      // окно встаёт левее, а не поверх точек маршрута.
+      style={avoidRoutePanel ? { right: 360 } : undefined}
       role="dialog"
       aria-label="AI-помощник МедКарты"
     >

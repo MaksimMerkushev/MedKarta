@@ -104,7 +104,10 @@ export const analyzeSymptoms = async (chatMessages, { signal } = {}) => {
 
   // Ответ 200 без JSON — не «готово»: раньше пользователь видел
   // «я применил подходящие фильтры», хотя ничего не применялось.
-  if (response.ok && (bodyUnreadable || !payload || typeof payload !== 'object')) {
+  // Массив или объект без текста ответа — тоже не «готово»: наш сервер
+  // всегда присылает replyText.
+  if (response.ok && (bodyUnreadable || !payload || typeof payload !== 'object' || Array.isArray(payload)
+    || typeof payload.replyText !== 'string' || !payload.replyText.trim())) {
     throw new AiError('Некорректный ответ сервера.', { code: 'server', status: response.status });
   }
 
@@ -120,4 +123,3 @@ export const analyzeSymptoms = async (chatMessages, { signal } = {}) => {
   // состояние UI не должно зависеть от того, что вернула сеть.
   return sanitizeAiAction(payload);
 };
-// [GitHub Actions] Simulated thematic bounds enforcement
