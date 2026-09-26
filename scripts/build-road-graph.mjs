@@ -22,7 +22,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -61,17 +61,25 @@ const USER_AGENT = 'MedKarta-graph-builder/1.0 (https://github.com/MaksimMerkush
 const parseArgs = (argv) => {
   const args = {
     tiles: 3, out: DEFAULT_OUT, bbox: null, input: [], endpoint: null, printQuery: false, noCache: false, keepCache: false,
+    allowMissing: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const [key, inline] = argv[i].split('=');
     const value = inline ?? argv[i + 1];
     if (key === '--bbox') { args.bbox = value.split(',').map(Number); if (!inline) i += 1; }
-    else if (key === '--tiles') { args.tiles = Math.max(1, Number(value)); if (!inline) i += 1; }
+    else if (key === '--tiles') {
+      // Целое 1…8: «abc» давало ноль тайлов, «2.5» — тайлы за пределами рамки.
+      const tiles = Number(value);
+      if (!Number.isInteger(tiles) || tiles < 1 || tiles > 8) throw new Error('--tiles ожидает целое число от 1 до 8');
+      args.tiles = tiles;
+      if (!inline) i += 1;
+    }
     else if (key === '--out') { args.out = value; if (!inline) i += 1; }
     else if (key === '--input') { args.input.push(...value.split(',')); if (!inline) i += 1; }
     else if (key === '--print-query') { args.printQuery = true; }
     else if (key === '--no-cache') { args.noCache = true; }
     else if (key === '--keep-cache') { args.keepCache = true; }
+    else if (key === '--allow-missing') { args.allowMissing = true; }
     else if (key === '--endpoint') { args.endpoint = value; if (!inline) i += 1; }
   }
   if (args.bbox && (args.bbox.length !== 4 || args.bbox.some((n) => !Number.isFinite(n)))) {
@@ -154,9 +162,14 @@ const CACHE_DIR = path.join(ROOT, 'data/graph/.overpass-cache');
 const cacheFile = (bbox) =>
   path.join(CACHE_DIR, `${createHash('sha1').update(buildOverpassQuery(bbox)).digest('hex').slice(0, 20)}.json`);
 
+/* Выгрузка старше недели считается устаревшей: дороги меняются. */
+const CACHE_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
+
 const readCache = async (bbox) => {
   try {
-    return JSON.parse(await readFile(cacheFile(bbox), 'utf8'));
+    const file = cacheFile(bbox);
+    if (Date.now() - (await stat(file)).mtimeMs > CACHE_MAX_AGE_MS) return null;
+    return JSON.parse(await readFile(file, 'utf8'));
   } catch {
     return null;
   }
@@ -408,21 +421,34 @@ const main = async () => {
 
   const buffer = encodeGraph(graph);
   const outPath = path.resolve(ROOT, args.out);
-  await mkdir(path.dirname(outPath), { recursive: true });
-  // Запись через временный файл: работающий сервер следит за графом
-  // и не должен прочитать его наполовину записанным.
-  await writeFile(`${outPath}.tmp`, buffer);
-  await rename(`${outPath}.tmp`, outPath);
 
+  /*
+   * Покрытие проверяется ДО публикации. Раньше граф сначала заменял рабочий
+   * файл (сервер подхватывает его за 30 секунд), а потом печаталось «450 из
+   * 493 адресов без дороги» — и сборка завершалась успехом. Теперь неполный
+   * граф не публикуется, код выхода — 1. Осознанно принять пропуски можно
+   * флагом --allow-missing.
+   */
   const coverage = checkCoverage(buffer, points);
+  const rejected = coverage.missing.length > 0 && !args.allowMissing;
 
-  if (args.input.length === 0 && !args.keepCache) {
-    await rm(CACHE_DIR, { recursive: true, force: true });
+  if (!rejected) {
+    await mkdir(path.dirname(outPath), { recursive: true });
+    // Запись через временный файл: работающий сервер следит за графом
+    // и не должен прочитать его наполовину записанным.
+    await writeFile(`${outPath}.tmp`, buffer);
+    await rename(`${outPath}.tmp`, outPath);
+
+    // Кеш удаляется только после успешной публикации: при отказе он
+    // понадобится для следующей попытки. С --no-cache он не трогается вовсе.
+    if (args.input.length === 0 && !args.keepCache && !args.noCache) {
+      await rm(CACHE_DIR, { recursive: true, force: true });
+    }
   }
 
   const mib = (bytes) => (bytes / 1048576).toFixed(1);
   process.stdout.write(
-    `\nГотово: ${args.out}\n` +
+    `\n${rejected ? 'Граф НЕ опубликован (см. покрытие ниже)' : `Готово: ${args.out}`}\n` +
     `  узлов:  ${stats.nodeCount.toLocaleString('ru')}\n` +
     `  рёбер:  ${stats.edgeCount.toLocaleString('ru')}\n` +
     `  дорог:  ${stats.acceptedWays.toLocaleString('ru')} из ${stats.osmWays.toLocaleString('ru')}\n` +
@@ -437,6 +463,13 @@ const main = async () => {
     process.stdout.write(`\n  ВНИМАНИЕ: ${coverage.missing.length} из ${coverage.checked} адресов без дороги рядом — маршрут к ним не построится:\n`);
     for (const { point, profiles } of coverage.missing.slice(0, 20)) {
       process.stdout.write(`    ${point.lat.toFixed(5)},${point.lng.toFixed(5)}  ${profiles.join('/')}  ${point.label || ''}\n`);
+    }
+    if (rejected) {
+      process.stdout.write(
+        '\n  Рабочий граф не изменён. Расширьте рамку (--bbox) или, если пропуски ожидаемы,\n' +
+        `  повторите с --allow-missing.${args.input.length === 0 ? ' Выгрузка сохранена в кеше, повторная сборка её не скачивает.' : ''}\n`,
+      );
+      process.exitCode = 1;
     }
   }
   process.stdout.write('\nДанные © участники OpenStreetMap, лицензия ODbL.\n');

@@ -159,13 +159,32 @@ export const decodeGraph = (source) => {
   const view = (Type, start, length) =>
     new Type(buffer.buffer, buffer.byteOffset + start, length);
 
+  const offsets = view(Uint32Array, layout.offsets, nodeCount + 1);
+  const targets = view(Uint32Array, layout.targets, edgeCount);
+
+  /*
+   * Структура CSR проверяется целиком. Одно испорченное число в таблице
+   * смещений (последнее = 50 млн) раньше принималось, и первая же
+   * операция над графом шла по несуществующим рёбрам секундами,
+   * блокируя сервер. Проверка — один линейный проход, миллисекунды.
+   */
+  if (offsets[0] !== 0 || offsets[nodeCount] !== edgeCount) {
+    throw new Error('graph offsets are inconsistent');
+  }
+  for (let node = 0; node < nodeCount; node += 1) {
+    if (offsets[node + 1] < offsets[node]) throw new Error('graph offsets are not monotonic');
+  }
+  for (let edge = 0; edge < edgeCount; edge += 1) {
+    if (targets[edge] >= nodeCount) throw new Error('graph edge points outside the node table');
+  }
+
   return {
     nodeCount,
     edgeCount,
     lat: view(Int32Array, layout.lat, nodeCount),
     lon: view(Int32Array, layout.lon, nodeCount),
-    offsets: view(Uint32Array, layout.offsets, nodeCount + 1),
-    targets: view(Uint32Array, layout.targets, edgeCount),
+    offsets,
+    targets,
     lengths: view(Uint32Array, layout.lengths, edgeCount),
     speeds: view(Uint8Array, layout.speeds, edgeCount),
     access: view(Uint8Array, layout.access, edgeCount),

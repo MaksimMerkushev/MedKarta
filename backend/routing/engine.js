@@ -47,6 +47,15 @@ const MAX_SNAP_DISTANCE_M = 2000;
 /** Сколько результатов держать в кеше. Запись — путь в Uint32Array, килобайты. */
 const CACHE_LIMIT = 256;
 
+/*
+ * Потолок работы на ОДИН запрос, суммарно по всем участкам. Потолок на
+ * участок (400 тыс.) больше самого графа и не срабатывал никогда; шесть точек
+ * по краям покрытия занимали единственное ядро сервера на секунду. Миллион
+ * раскрытий — с запасом для любого маршрута по городу (типичный участок —
+ * 30–150 тыс.), около 0,4 с в худшем случае.
+ */
+export const MAX_REQUEST_EXPANSIONS = 1_000_000;
+
 const EMPTY_ESTIMATE = Object.freeze({ distanceKm: null, durationSeconds: null, approximate: true });
 
 /**
@@ -68,9 +77,11 @@ export const createRoutingEngine = ({ graph, maxExpansions = DEFAULT_MAX_EXPANSI
 
   const cached = (key, compute) => {
     const hit = cache.get(key);
-    if (hit) return hit;
+    if (hit) return { ...hit, expanded: 0 };
 
     const value = compute();
+    // Отказ по бюджету зависит от остатка бюджета запроса — его не кешируем.
+    if (value.status === SEARCH_RESULT.BUDGET_EXCEEDED) return value;
     if (cache.size >= CACHE_LIMIT) {
       cache.delete(cache.keys().next().value);
     }
@@ -131,25 +142,45 @@ export const createRoutingEngine = ({ graph, maxExpansions = DEFAULT_MAX_EXPANSI
     return best;
   };
 
+  /*
+   * Для точек на одном отрезке в ключ входит направление: позиции
+   * округляются до тысячной, и на длинном одностороннем отрезке P→Q и Q→P
+   * давали один ключ — обратный маршрут брался из кеша и шёл против
+   * движения.
+   */
   const legKey = (a, b, profile) =>
-    `${profile}|${a.edge}|${Math.round(a.t * 1000)}|${b.edge}|${Math.round(b.t * 1000)}`;
+    `${profile}|${a.edge}|${Math.round(a.t * 1000)}|${b.edge}|${Math.round(b.t * 1000)}`
+    + (a.edge === b.edge ? `|${a.t <= b.t ? 'f' : 'r'}` : '');
 
   /** Один участок маршрута между двумя точками привязки. */
-  const leg = (a, b, profile) =>
+  const leg = (a, b, profile, budget = maxExpansions) =>
     cached(legKey(a, b, profile), () => {
       const settings = PROFILES[profile];
       const direct = directAlong(a, b, settings);
-      if (direct) {
-        return { status: SEARCH_RESULT.FOUND, durationS: direct.cost, distanceM: direct.metres, path: null };
-      }
 
-      return search.run({
+      const found = search.run({
         sources: departures(a, settings),
         goals: arrivals(b, settings),
         goalPoint: [Math.round(b.lat * COORD_SCALE), Math.round(b.lon * COORD_SCALE)],
         profile,
-        maxExpansions,
+        maxExpansions: Math.min(maxExpansions, budget),
       });
+
+      /*
+       * Прямо по отрезку — не всегда быстрее: 700 м по двору на 20 км/ч
+       * дольше, чем объезд по улицам. Раньше поиск для таких точек не
+       * запускался вовсе, и route() расходился с travelTimes().
+       */
+      if (direct && (found.status !== SEARCH_RESULT.FOUND || direct.cost <= found.durationS)) {
+        return {
+          status: SEARCH_RESULT.FOUND,
+          durationS: direct.cost,
+          distanceM: direct.metres,
+          path: null,
+          expanded: found.expanded || 0,
+        };
+      }
+      return found;
     });
 
   return Object.freeze({
@@ -193,11 +224,13 @@ export const createRoutingEngine = ({ graph, maxExpansions = DEFAULT_MAX_EXPANSI
       const legs = [];
       let distanceM = 0;
       let durationS = 0;
+      let budget = MAX_REQUEST_EXPANSIONS;
 
       for (let i = 0; i + 1 < snapped.length; i += 1) {
         const a = snapped[i];
         const b = snapped[i + 1];
-        const result = leg(a, b, name);
+        const result = leg(a, b, name, budget);
+        budget -= result.expanded || 0;
 
         if (result.status === SEARCH_RESULT.BUDGET_EXCEEDED) {
           return { ok: false, error: ROUTING_ERROR.TOO_COMPLEX };
@@ -322,7 +355,7 @@ const modifiedAt = async (filePath) => {
  * пути к файлу и без текста исключения; раньше она глоталась молча, и понять,
  * почему маршруты не строятся, было нельзя.
  */
-const loadEngine = async (filePath, event) => {
+const loadEngine = async (filePath, event, failureEvent = 'routing.graph_unavailable') => {
   const started = Date.now();
   try {
     const graph = await loadGraph(filePath);
@@ -338,7 +371,7 @@ const loadEngine = async (filePath, event) => {
     });
     return engine;
   } catch (error) {
-    logger.warn('routing.graph_unavailable', {
+    logger.warn(failureEvent, {
       status: 'failed',
       provider: 'local',
       // ENOENT — файла нет (соберите: npm run build:graph); иначе — повреждён.
@@ -365,15 +398,17 @@ export const getDefaultRoutingEngine = async (filePath = defaultGraphPath()) => 
   const key = String(filePath);
 
   if (!current || current.key !== key) {
-    const mtimeMs = await modifiedAt(filePath);
-    current = {
-      key,
-      mtimeMs,
-      checkedAt: Date.now(),
-      reloading: null,
-      promise: loadEngine(filePath, 'routing.graph_loaded'),
-    };
-    return current.promise;
+    /*
+     * Состояние создаётся ДО первого await: иначе несколько одновременных
+     * первых запросов каждый начинали свою загрузку графа.
+     */
+    const state = { key, mtimeMs: null, checkedAt: Date.now(), reloading: null, promise: null };
+    current = state;
+    state.promise = (async () => {
+      state.mtimeMs = await modifiedAt(filePath);
+      return loadEngine(filePath, 'routing.graph_loaded');
+    })();
+    return state.promise;
   }
 
   const state = current;
@@ -382,11 +417,17 @@ export const getDefaultRoutingEngine = async (filePath = defaultGraphPath()) => 
     state.reloading = (async () => {
       const mtimeMs = await modifiedAt(filePath);
       if (mtimeMs !== null && mtimeMs !== state.mtimeMs) {
-        const fresh = await loadEngine(filePath, 'routing.graph_reloaded');
+        // Неудача перезагрузки — не «маршрутизация недоступна»: старый граф работает.
+        const fresh = await loadEngine(filePath, 'routing.graph_reloaded', 'routing.graph_reload_failed');
         if (fresh) {
           state.promise = Promise.resolve(fresh);
-          state.mtimeMs = mtimeMs;
         }
+        /*
+         * Время запоминается и при неудаче: испорченный файл не будет
+         * перечитываться (и журналироваться) каждые 30 секунд, пока его не
+         * заменят. Старый граф продолжает работать.
+         */
+        state.mtimeMs = mtimeMs;
       }
       state.reloading = null;
     })();

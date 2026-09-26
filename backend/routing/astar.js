@@ -152,7 +152,12 @@ export const createSearch = (graph) => {
         if ((access[edge] & settings.access) === 0) continue;
         if (speeds[edge] > observed) observed = speeds[edge];
       }
-      ceilings[name] = Math.min(settings.maxSpeedKmh, observed);
+      /*
+       * Потолок — самая быстрая дорога, реально встреченная в графе. Раньше
+       * он ограничивался 90 км/ч, а в графе есть участки на 100: эвристика
+       * переоценивала остаток, и A* мог вернуть не кратчайший маршрут.
+       */
+      ceilings[name] = observed;
     }
     return ceilings;
   })();
