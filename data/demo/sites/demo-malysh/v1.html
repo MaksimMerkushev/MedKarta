@@ -1,0 +1,32 @@
+<!doctype html>
+<!-- ДЕМО-СТРАНИЦА. Вымышленная детская клиника для проверки сборщика данных. -->
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Детская клиника Демо-Малыш в Горках — демонстрационная страница</title>
+  <script type="application/ld+json">
+  [
+    {
+      "@context": "https://schema.org",
+      "@type": "MedicalClinic",
+      "name": "Детская клиника Демо-Малыш",
+      "telephone": "+7 (843) 000-02-01",
+      "openingHours": "Mo-Su 08:00-21:00",
+      "address": "Казань, ул. Рихарда Зорге, 999 (демо-адрес)",
+      "employee": [
+        { "@type": "Physician", "name": "Мингазова Алсу Ренатовна", "medicalSpecialty": "Педиатр" },
+        { "@type": "Physician", "name": "Фаткуллин Ильназ Рамилевич", "jobTitle": "Детский ЛОР" }
+      ]
+    }
+  ]
+  </script>
+  <script type="application/ld+json">{ это не JSON — сборщик должен пропустить блок }</script>
+</head>
+<body>
+  <table>
+    <tr><td>Приём педиатра первичный</td><td>1 800 ₽</td></tr>
+    <tr><td>Приём детского ЛОРа</td><td>2 100 ₽</td></tr>
+    <tr><td>Приём педиатра на дому</td><td>3 500 ₽</td></tr>
+  </table>
+</body>
+</html>

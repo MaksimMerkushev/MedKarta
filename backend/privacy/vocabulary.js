@@ -88,7 +88,7 @@ const SYSTEM_WORDS = `
 текст запроса заменён заменен описанием исходные слова передаются профиль не указан
 therapist neurologist cardiologist lor ophthalmologist surgeon orthopedist dermatologist gynecologist pediatrician
 dentist endocrinologist gastroenterologist urologist psychiatrist traumatologist
-availableafter availablebefore evening weekend opennow onlinebooking wheelchair ownership selection nearest maxtravelminutes
+availableafter availablebefore evening weekend opennow onlinebooking wheelchair ownership selection nearest maxtravelminutes dmsonly
 best rated best_rated minrating minexperience true false route slots clear service clinic государственная частная
 `;
 

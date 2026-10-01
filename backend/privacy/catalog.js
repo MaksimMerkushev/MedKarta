@@ -14,6 +14,8 @@
  * обрабатывается тем же механизмом токенизации, что и данные пациента.
  */
 
+import { readFile } from 'node:fs/promises';
+
 import { parseOpeningHours } from '../../shared/openingHours.js';
 import { isPediatricRecord, SPECIALTY_CANON } from '../../shared/specialties.js';
 
@@ -199,10 +201,43 @@ export const loadCatalog = async () => {
     // Полной базы нет — работаем на публичном срезе. Это штатный режим.
   }
 
+  /*
+   * Демо-набор (вымышленные частные клиники) — только по явному флагу.
+   * Без него ассистент не нашёл бы демо-дерматолога, которого интерфейс
+   * показывает в демо-режиме, и ответы расходились бы с картой.
+   */
+  /*
+   * Частные клиники, собранные сборщиком (npm run data:build). Файл
+   * проверен при сборке; если его нет или он битый — справочник без них.
+   */
+  let collectedDoctors = [];
+  let collectedFacilities = [];
+  try {
+    const { flattenPrivateCatalog } = await import('../../shared/privateCatalog.js');
+    const raw = JSON.parse(await readFile(new URL('../../data/private/catalog.json', import.meta.url), 'utf8'));
+    const items = flattenPrivateCatalog(raw);
+    collectedDoctors = items.filter((item) => item.doctorId);
+    collectedFacilities = items.filter((item) => !item.doctorId);
+  } catch {
+    // Собранного справочника нет — штатный режим.
+  }
+
+  let demoDoctors = [];
+  let demoFacilities = [];
+  if (process.env.DEMO_DATA === 'on') {
+    const [{ demoPrivateCatalog }, { flattenPrivateCatalog }] = await Promise.all([
+      import('../../data/demo/index.js'),
+      import('../../shared/privateCatalog.js'),
+    ]);
+    const items = flattenPrivateCatalog(demoPrivateCatalog);
+    demoDoctors = items.filter((item) => item.doctorId);
+    demoFacilities = items.filter((item) => !item.doctorId);
+  }
+
   cached = buildCatalog({
-    doctors,
+    doctors: [...doctors, ...collectedDoctors, ...demoDoctors],
     clinics: clinicsModule.ClinicsData?.clinics || [],
-    facilities: facilitiesModule.kazanFacilities || [],
+    facilities: [...(facilitiesModule.kazanFacilities || []), ...collectedFacilities, ...demoFacilities],
   });
 
   return cached;

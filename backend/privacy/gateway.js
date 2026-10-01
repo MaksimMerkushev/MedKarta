@@ -132,6 +132,10 @@ export const extractConstraints = (text) => {
     if (value >= 0 && value <= 60) constraints.minExperience = value;
   }
 
+  // «Есть ДМС», «по ДМС», «полис ДМС». «Нет ДМС» — не ставить.
+  // «ДМС нет» — отрицание после слова, findTrigger его не видит.
+  if (findTrigger(lower, 'дмс') === 'affirmed' && !/(?<!\p{L})дмс\s+(?:нет|не\s)/u.test(lower)) constraints.dmsOnly = true;
+
   const maxTravel = extractMaxTravelMinutes(lower);
   if (maxTravel !== null) constraints.maxTravelMinutes = maxTravel;
 

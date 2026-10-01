@@ -21,7 +21,7 @@ export const LIMITS = {
 export const OWNERSHIPS = ['Государственная', 'Частная'];
 export const TRAVEL_MODES = ['driving', 'foot', 'bike'];
 export const CARD_MODES = ['all', 'doctor', 'facility'];
-export const SORT_MODES = ['recommendation', 'rating', 'experience', 'distance', 'schedule', 'name', 'clinic'];
+export const SORT_MODES = ['recommendation', 'rating', 'experience', 'distance', 'schedule', 'name', 'clinic', 'price'];
 
 // Управляющие символы, невидимые разделители и bidi-оверрайды: ими маскируют
 // инъекции в тексте и ломают отображение. Оставляем только печатаемое.
@@ -180,6 +180,7 @@ export const sanitizeAiAction = (raw) => {
     maxTravelMinutes: Number.isInteger(source.maxTravelMinutes) && source.maxTravelMinutes >= 5 && source.maxTravelMinutes <= 120
       ? source.maxTravelMinutes
       : null,
+    dmsOnly: triState(source.dmsOnly) === true,
 
     replyText: cleanMultilineText(source.replyText, LIMITS.MAX_REPLY_CHARS) || DEFAULT_REPLY,
   };

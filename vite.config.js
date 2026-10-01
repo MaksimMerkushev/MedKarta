@@ -12,6 +12,7 @@ const CHAT_HANDLER_URL = new URL('./backend/api/chat.js', import.meta.url)
 const ROUTE_HANDLER_URL = new URL('./backend/api/route.js', import.meta.url)
 const TRAVEL_TIMES_HANDLER_URL = new URL('./backend/api/travelTimes.js', import.meta.url)
 const EVENTS_HANDLER_URL = new URL('./backend/api/events.js', import.meta.url)
+const CONFIG_HANDLER_URL = new URL('./backend/api/config.js', import.meta.url)
 const FULL_DB_PATH = fileURLToPath(new URL('./data/doctors.full.js', import.meta.url))
 const PUBLIC_DB_PATH = fileURLToPath(new URL('./data/doctors.js', import.meta.url))
 const HAS_FULL_DB = fs.existsSync(FULL_DB_PATH)
@@ -31,10 +32,16 @@ const devApiPlugin = (env) => ({
   name: 'medkarta-dev-api',
   apply: 'serve',
   configureServer(server) {
-    for (const key of ['OPENROUTER_API_KEY', 'AI_API_KEY', 'AI_UPSTREAM_URL', 'AI_MODEL', 'ALLOWED_ORIGINS', 'PRIVACY_TOKEN_SECRET', 'ANALYTICS', 'ANALYTICS_DIR']) {
+    for (const key of ['OPENROUTER_API_KEY', 'AI_API_KEY', 'AI_UPSTREAM_URL', 'AI_MODEL', 'ALLOWED_ORIGINS', 'PRIVACY_TOKEN_SECRET', 'ANALYTICS', 'ANALYTICS_DIR', 'DEMO_DATA']) {
       if (env[key] && !process.env[key]) {
         process.env[key] = env[key]
       }
+    }
+
+    // В режиме разработки демо-набор включён, если в .env не сказано иное:
+    // иначе ассистент и карта показывали бы разные данные.
+    if (!process.env.DEMO_DATA) {
+      process.env.DEMO_DATA = 'on'
     }
 
     if (!process.env.OPENROUTER_API_KEY && !process.env.AI_API_KEY) {
@@ -50,6 +57,7 @@ const devApiPlugin = (env) => ({
       ['/api/route', ROUTE_HANDLER_URL, 'маршрута'],
       ['/api/travel-times', TRAVEL_TIMES_HANDLER_URL, 'времени в пути'],
       ['/api/events', EVENTS_HANDLER_URL, 'аналитики'],
+      ['/api/config', CONFIG_HANDLER_URL, 'конфигурации'],
     ]) {
       try {
         server.watcher?.add(fileURLToPath(handlerUrl))

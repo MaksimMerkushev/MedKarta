@@ -143,6 +143,7 @@ const validateConstraints = (raw, allowedDistricts) => {
       case 'weekend':
       case 'evening':
       case 'children':
+      case 'dms_only':
       case 'wheelchair':
       case 'online_booking': {
         if (typeof value !== 'boolean') {

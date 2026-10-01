@@ -35,7 +35,7 @@ export const SEARCH_SOURCES = Object.freeze(['filters', 'assistant', 'url']);
 export const ENTITY_KINDS = Object.freeze(['doctor', 'facility']);
 export const OWNERSHIP_CODES = Object.freeze(['state', 'private', 'unknown']);
 export const OWNERSHIP_FILTERS = Object.freeze(['any', 'state', 'private']);
-export const CONTACT_CHANNELS = Object.freeze(['phone', 'website', 'gosuslugi', 'source']);
+export const CONTACT_CHANNELS = Object.freeze(['phone', 'website', 'gosuslugi', 'source', 'pult']);
 export const EXTERNAL_MAP_PROVIDERS = Object.freeze(['yandex', '2gis']);
 export const EXTERNAL_MAP_MODES = Object.freeze(['auto', 'transit', 'foot', 'bike']);
 export const ROUTE_MODES = Object.freeze(['driving', 'foot', 'bike']);
@@ -83,6 +83,7 @@ export const FILTER_KEYS = Object.freeze([
   'minExperience',
   'maxDistance',
   'maxTravel',
+  'dms',
 ]);
 
 export const SPECIALTY_CODES = Object.freeze([...SPECIALTY_KEYS, 'other']);
@@ -134,6 +135,9 @@ const FIELDS = {
     ['results', (v) => integerIn(v, 0, ANALYTICS_LIMITS.MAX_RESULTS), true],
     ['hasLocation', (v) => (typeof v === 'boolean' ? v : null), false],
     ['maxTravel', (v) => integerIn(v, ANALYTICS_LIMITS.MIN_TRAVEL_MINUTES, ANALYTICS_LIMITS.MAX_TRAVEL_MINUTES), false],
+    // Выбрана ли программа ДМС — да/нет. Какая именно, в событие не попадает:
+    // по программе можно узнать работодателя.
+    ['dmsPlan', (v) => (typeof v === 'boolean' ? v : null), false],
   ],
   result_open: [
     ['surface', (v) => pick(v, OPEN_SURFACES), true],

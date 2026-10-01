@@ -95,6 +95,8 @@ export const CONSTRAINT_KEYS = Object.freeze([
   'max_distance_km',
   // Потолок времени в пути, мин. Фильтрует интерфейс: координаты остаются в браузере.
   'max_travel_minutes',
+  // «Есть ДМС»: программа выбирается и проверяется в браузере, серверу она не нужна.
+  'dms_only',
   'min_rating',
   'min_experience_years',
 ]);

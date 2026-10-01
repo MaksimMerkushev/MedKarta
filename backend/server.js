@@ -19,6 +19,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import chatHandler from './api/chat.js';
+import configHandler from './api/config.js';
 import eventsHandler from './api/events.js';
 import routeHandler from './api/route.js';
 import travelTimesHandler from './api/travelTimes.js';
@@ -114,6 +115,7 @@ const API_HANDLERS = new Map([
   ['/api/route', routeHandler],
   ['/api/travel-times', travelTimesHandler],
   ['/api/events', eventsHandler],
+  ['/api/config', configHandler],
 ]);
 
 const apiPathOf = (url) => {

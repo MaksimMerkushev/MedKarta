@@ -35,6 +35,7 @@ const toPlanConstraints = (constraints = {}, isChild = false) => {
   if (typeof constraints.minRating === 'number') result.min_rating = constraints.minRating;
   if (typeof constraints.minExperience === 'number') result.min_experience_years = constraints.minExperience;
   if (typeof constraints.maxTravelMinutes === 'number') result.max_travel_minutes = constraints.maxTravelMinutes;
+  if (constraints.dmsOnly) result.dms_only = true;
   if (isChild) result.children = true;
   return result;
 };

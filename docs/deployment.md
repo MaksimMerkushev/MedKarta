@@ -35,6 +35,12 @@ data/             справочники; это данные, а не код
   clinics.js
   facilities.js
 
+tools/data/       сборщик данных: загрузка, разбор, сравнение, очередь (docs/data-pipeline.md)
+
+data/demo/        вымышленные клиники и программы ДМС для демо-режима
+data/private/     справочник частных клиник, собранный npm run data:build
+data/sources.json источники сборщика
+
 tests/  docs/  scripts/
 ```
 

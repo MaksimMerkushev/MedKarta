@@ -71,6 +71,7 @@ const buildReplyText = (execution, context) => {
   const parts = [];
   const { stops, notes } = execution;
   const found = stops.filter((stop) => stop.kind !== 'location');
+  const dmsOnly = execution.constraints?.dms_only === true;
   const travelLimit = Number.isInteger(execution.constraints?.max_travel_minutes)
     ? execution.constraints.max_travel_minutes
     : null;
@@ -114,11 +115,13 @@ const buildReplyText = (execution, context) => {
       break;
 
     case 'FIND_DOCTOR':
-      if (travelLimit && found.length > 0 && !found.some((stop) => stop.token)) {
+      if ((travelLimit || dmsOnly) && found.length > 0 && !found.some((stop) => stop.token)) {
         const labels = [...new Set(found.map((stop) => stop.specialty).filter(Boolean))];
         parts.push(
-          `Показываю ${labels.length > 0 ? `врачей профиля: ${labels.join(', ')}` : 'подходящих врачей'} — ` +
-            `только тех, до кого не дольше ${travelLimit} мин пути от вашей точки на карте (без учёта пробок).`,
+          `Показываю ${labels.length > 0 ? `врачей профиля: ${labels.join(', ')}` : 'подходящих врачей'}` +
+            (travelLimit
+              ? ` — только тех, до кого не дольше ${travelLimit} мин пути от вашей точки на карте (без учёта пробок).`
+              : '.'),
         );
         // Список в интерфейсе по часам приёма не сужается: расписание есть не
         // у всех врачей, и молча обещать «после 18:00» нельзя.
@@ -158,6 +161,14 @@ const buildReplyText = (execution, context) => {
     );
   }
 
+  /*
+   * Программу ДМС сервер не знает и знать не должен: она выбрана в браузере.
+   * Поэтому ответ не обещает «входит в ваш ДМС», а говорит, где это видно.
+   */
+  if (execution.constraints?.dms_only && ['FIND_DOCTOR', 'FIND_CLINIC', 'SEARCH_SERVICE'].includes(execution.action)) {
+    parts.push('Что входит в вашу программу ДМС, отмечу в списке — программу можно выбрать в «Мой ДМС», она хранится только в этом браузере.');
+  }
+
   if (notes.ambiguous.length > 0) {
     parts.push('По фамилии нашлось несколько врачей — выбрал одного. Уточните имя или клинику, если нужен другой.');
   }
@@ -177,6 +188,7 @@ const applyConstraints = (target, constraints = {}) => {
   if (typeof constraints.min_experience_years === 'number') target.minExperience = constraints.min_experience_years;
   if (typeof constraints.max_distance_km === 'number') target.maxDistance = constraints.max_distance_km;
   if (Number.isInteger(constraints.max_travel_minutes)) target.maxTravelMinutes = constraints.max_travel_minutes;
+  if (constraints.dms_only) target.dmsOnly = true;
   if (constraints.open_now) target.openOnly = true;
   if (constraints.weekend) target.weekendOnly = true;
   if (constraints.evening) target.eveningOnly = true;
@@ -222,6 +234,7 @@ export const buildUiAction = (execution, context = {}) => {
     minExperience: null,
     maxDistance: null,
     maxTravelMinutes: null,
+    dmsOnly: null,
     replyText: DEFAULT_REPLY,
   };
 
@@ -255,7 +268,8 @@ export const buildUiAction = (execution, context = {}) => {
    * остаются в браузере. Поэтому выдача не сужается до одного врача по
    * фамилии — интерфейс покажет всех врачей профиля и сам отсечёт дальних.
    */
-  const travelLimited = Number.isInteger(execution.constraints?.max_travel_minutes);
+  // То же для ДМС: программа выбрана в браузере, фильтрует интерфейс.
+  const travelLimited = Number.isInteger(execution.constraints?.max_travel_minutes) || execution.constraints?.dms_only === true;
 
   if (execution.action === 'FIND_DOCTOR' && entities.length > 0) {
     const first = entities[0];

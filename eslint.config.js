@@ -48,6 +48,7 @@ export default defineConfig([
       'shared/**/*.js',
       'data/**/*.js',
       'scripts/**/*.{js,mjs}',
+      'tools/**/*.js',
       'vite.config.js',
       'eslint.config.js',
       'postcss.config.js',
