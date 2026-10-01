@@ -1,4 +1,4 @@
-import { Baby, Building2, ChevronDown, Clock, LayoutGrid, Navigation, SlidersHorizontal, Timer, UserRound, X } from 'lucide-react';
+import { Baby, Building2, ChevronDown, Clock, LayoutGrid, Navigation, ShieldCheck, SlidersHorizontal, Timer, UserRound, X } from 'lucide-react';
 import './SearchFilters.css';
 
 const MODES = [
@@ -46,7 +46,15 @@ const travelHint = (travel, active) => {
   return `По дорогам ${travel.modeLabel}, без учёта пробок.`;
 };
 
-export default function SearchFilters({ filters, options, travel = { modeLabel: '', originKnown: true, state: 'off' }, onChange, onReset, onNearest }) {
+export default function SearchFilters({
+  filters,
+  options,
+  travel = { modeLabel: '', originKnown: true, state: 'off' },
+  dms = { available: false, planName: null },
+  onChange,
+  onReset,
+  onNearest,
+}) {
   const isFacility = filters.cardDisplayMode === 'facility';
   const activeFilters = [];
   const add = (field, label, emptyValue = 'all') => {
@@ -67,6 +75,7 @@ export default function SearchFilters({ filters, options, travel = { modeLabel: 
   EXTRA_OPTIONS.forEach(({ field, label }) => add(field, label, false));
   add('maxDistance', `До ${filters.maxDistance} км`, 0);
   add('maxTravelMinutes', `До ${filters.maxTravelMinutes} мин в пути`, 0);
+  if (dms.available && dms.planName) add('dmsOnly', `По ДМС «${dms.planName}»`, false);
 
   // Старые ссылки и AI могут задавать условия, которых больше нет в форме.
   // Они остаются видимыми, чтобы ни один фильтр не скрывал выдачу незаметно.
@@ -122,6 +131,11 @@ export default function SearchFilters({ filters, options, travel = { modeLabel: 
         {filters.cardDisplayMode !== 'doctor' && (
           <FilterPill active={filters.openOnly} onClick={() => onChange('openOnly', !filters.openOnly)}>
             <Clock size={15} aria-hidden="true" /> Открыто сейчас
+          </FilterPill>
+        )}
+        {dms.available && (
+          <FilterPill active={Boolean(filters.dmsOnly && dms.planName)} onClick={() => onChange('dmsOnly', !(filters.dmsOnly && dms.planName))}>
+            <ShieldCheck size={15} aria-hidden="true" /> {dms.planName ? 'По моему ДМС' : 'По ДМС…'}
           </FilterPill>
         )}
       </div>

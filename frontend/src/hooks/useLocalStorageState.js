@@ -46,3 +46,6 @@ export const isStringIdArray = (value) =>
   Array.isArray(value) && value.every((item) => typeof item === 'string' || typeof item === 'number');
 
 export const isBoolean = (value) => typeof value === 'boolean';
+
+/** Идентификатор программы ДМС или null — больше о страховке ничего не храним. */
+export const isPlanIdOrNull = (value) => value === null || (typeof value === 'string' && /^[a-z0-9][a-z0-9-]{1,63}$/.test(value));

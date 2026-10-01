@@ -46,15 +46,23 @@ import {
   Timer,
   Bus,
   CalendarCheck,
+  ShieldPlus,
+  FlaskConical,
 } from 'lucide-react';
 import { doctorsData } from '@data/doctors.legacy.js';
 import { verifiedDoctors } from '@data/doctors';
 import { kazanFacilities } from '@data/facilities.js';
 import { ClinicsData } from '@data/clinics.js';
+import collectedCatalog from '@data/private/catalog.json';
+import verificationData from '@data/verification.json';
+import { flattenPrivateCatalog } from '@shared/privateCatalog.js';
 import Toast, { useToast } from './Toast';
 import SearchFilters from './SearchFilters';
 import PlaceDoctorList from './PlaceDoctorList';
 import { DataReportButton, SearchFeedbackPrompt } from './FeedbackWidgets';
+import DmsPanel from './DmsPanel';
+import { fetchServerDemoFlag, loadDemoData, readDemoPreference, setDemoPreference } from './demoMode';
+import { coverageBadge, coverageFor, findPlan, findProvider } from '@shared/dms.js';
 import { track } from './services/analytics';
 import { buildExternalRouteUrl, EXTERNAL_MODE_BY_TRAVEL_MODE } from './externalMaps';
 import { GOSUSLUGI_APPOINTMENT_URL, omsHint, withReferral } from './booking';
@@ -64,7 +72,7 @@ import { ownershipCode } from '@shared/analytics.js';
 import { isPediatricRecord, specialtyCode } from '@shared/specialties.js';
 import { parseOpeningHours, scheduleIntervals } from '@shared/openingHours.js';
 import { useDebouncedValue } from './hooks/useDebouncedValue';
-import { isBoolean, isStringIdArray, useLocalStorageState } from './hooks/useLocalStorageState';
+import { isBoolean, isPlanIdOrNull, isStringIdArray, useLocalStorageState } from './hooks/useLocalStorageState';
 
 // Помощник и его зависимости грузятся отдельным чанком: большинство сессий
 // открывается ради карты, а не чата, — нет смысла тянуть его в первый байт.
@@ -784,10 +792,12 @@ const formatPriceRange = (entry) => {
   if (!Number.isFinite(min) && !Number.isFinite(max)) return null;
 
   const format = (value) => new Intl.NumberFormat('ru-RU').format(Math.round(value));
+  // «от 1 000 ₽» — нижняя граница из прайса, показывать её как точную цену нельзя.
+  const prefix = entry.from ? 'от ' : '';
   if (Number.isFinite(min) && Number.isFinite(max) && min !== max) {
-    return `${format(min)}–${format(max)} ₽`;
+    return `${prefix}${format(min)}–${format(max)} ₽`;
   }
-  return `${format(Number.isFinite(min) ? min : max)} ₽`;
+  return `${prefix}${format(Number.isFinite(min) ? min : max)} ₽`;
 };
 
 // --- Внешние карты, запись и время в пути ---------------------------------
@@ -848,7 +858,16 @@ const URL_KEYS = {
   focus: 'doc',
 };
 
-const FLAG_KEYS = ['open', 'fav', 'weekend', 'evening', 'online', 'wheelchair', 'children'];
+const FLAG_KEYS = ['open', 'fav', 'weekend', 'evening', 'online', 'wheelchair', 'children', 'dms'];
+
+const DMS_PLAN_STORAGE_KEY = 'medkarta.dms.plan';
+
+// Частные клиники, собранные сборщиком (npm run data:build), и результаты
+// проверки госврачей на сайтах учреждений (npm run data:verify).
+const COLLECTED_FACILITIES = flattenPrivateCatalog(collectedCatalog);
+const VERIFICATION = verificationData?.results && typeof verificationData.results === 'object' ? verificationData.results : {};
+const EMPTY_LIST = Object.freeze([]);
+const EMPTY_DEMO = Object.freeze({ enabled: false, items: EMPTY_LIST, insurance: null });
 
 /** Варианты фильтра «не дольше N минут в пути». */
 const TRAVEL_LIMIT_OPTIONS = [10, 15, 20, 30, 45, 60];
@@ -1009,6 +1028,13 @@ export default function App() {
   const [minExperience, setMinExperience] = useState(INITIAL_URL_STATE.minExperience ?? 0);
   const [maxDistance, setMaxDistance] = useState(INITIAL_URL_STATE.maxDistance ?? 0);
   const [maxTravelMinutes, setMaxTravelMinutes] = useState(INITIAL_URL_STATE.maxTravel ?? 0);
+  // Демо-набор (вымышленные частные клиники и ДМС) и выбранная программа ДМС.
+  // В браузере хранится только id программы — см. DmsPanel.
+  const [demoState, setDemoState] = useState(EMPTY_DEMO);
+  const [dmsPlanId, setDmsPlanId] = useLocalStorageState(DMS_PLAN_STORAGE_KEY, null, isPlanIdOrNull);
+  const [dmsOnly, setDmsOnly] = useState(() => Boolean(INITIAL_URL_STATE.flags?.has('dms')));
+  const [isDmsPanelOpen, setIsDmsPanelOpen] = useState(false);
+  const [dmsPromptPending, setDmsPromptPending] = useState(false);
   // Время в пути от точки отправления до каждого адреса — для фильтра
   // «не дольше N минут». Считает сервер по графу дорог.
   const [travelTimes, setTravelTimes] = useState({ key: null, status: 'idle', byPoint: null });
@@ -1087,6 +1113,7 @@ export default function App() {
       setMinExperience(0);
       setMaxDistance(0);
       setMaxTravelMinutes(0);
+      setDmsOnly(false);
       setSortBy('recommendation');
     }
 
@@ -1133,6 +1160,12 @@ export default function App() {
     }
     if (typeof result.maxDistance === 'number' && !Number.isNaN(result.maxDistance)) {
       setMaxDistance(Math.max(0, Math.min(50, result.maxDistance)));
+    }
+    if (result.dmsOnly) {
+      // Есть ли справочник и выбрана ли программа, проверит эффект ниже:
+      // здесь их значения могли устареть.
+      setDmsOnly(true);
+      setDmsPromptPending(true);
     }
     if (Number.isInteger(result.maxTravelMinutes)) {
       // Ближайший вариант из списка не меньше запрошенного: «25 минут» → 30.
@@ -1237,7 +1270,7 @@ export default function App() {
   const sourceFacilities = useMemo(() => {
     // Источники: проверенные врачи с официальных сайтов больниц,
     // учреждения из OpenStreetMap и данные по клиникам.
-    const base = [...verifiedDoctors, ...doctorsData, ...kazanFacilities.map(withOsmSchedule), ...clinicsFacilities];
+    const base = [...verifiedDoctors, ...doctorsData, ...kazanFacilities.map(withOsmSchedule), ...clinicsFacilities, ...COLLECTED_FACILITIES, ...demoState.items];
     const clinicAddressMap = new Map();
     const clinicCoordsMap = new Map();
 
@@ -1291,7 +1324,7 @@ export default function App() {
         const hasCoords = typeof item.lat === 'number' && typeof item.lng === 'number';
         return Boolean(address) && !/уточняется/i.test(address) && hasCoords;
       });
-  }, [clinicsFacilities]);
+  }, [clinicsFacilities, demoState.items]);
 
   const activeOrigin = isManualOrigin && customOrigin ? customOrigin : userLocation;
   // Поле ввода обновляется мгновенно, тяжёлая фильтрация — с задержкой.
@@ -1486,6 +1519,17 @@ export default function App() {
         const features = { ...(doc.features || {}), children: isPediatricRecord(doc) };
         const services = Array.isArray(doc.services) ? doc.services : EMPTY_SERVICES;
 
+        /*
+         * Проверка на сайте учреждения (npm run data:verify): «на месте» —
+         * свежая дата проверки; «не найден» — предупреждение в карточке.
+         */
+        const check = VERIFICATION[doc.id];
+        const verifiedAt = check?.status === 'present' && typeof check.verifiedAt === 'string'
+          && (!doc.verifiedAt || check.verifiedAt > doc.verifiedAt)
+          ? check.verifiedAt
+          : doc.verifiedAt;
+        const missingSince = check?.status === 'missing' && typeof check.checkedAt === 'string' ? check.checkedAt : null;
+
         // Бейджи раньше дублировали друг друга: врач со стажем 20+ получал
         // сразу «Опытный врач» и «Высший стаж», а с рейтингом 4.9 — ещё
         // «Топ-врач» и «Популярный». Оставляем по одному, самому сильному.
@@ -1523,6 +1567,8 @@ export default function App() {
           doctorProfile,
           entityKind,
           trustBadges,
+          verifiedAt,
+          missingSince,
         };
       }),
     [activeOrigin, now, sourceFacilities],
@@ -1536,6 +1582,74 @@ export default function App() {
     () => baseEnrichedDoctors.map((doc) => ({ ...doc, isFavorite: favoriteIds.has(doc.id) })),
     [baseEnrichedDoctors, favoriteIds],
   );
+
+  // --- Демо-режим и ДМС ---------------------------------------------------
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const preference = readDemoPreference();
+      const enabled = preference ?? (await fetchServerDemoFlag());
+      if (!enabled || cancelled) return;
+      try {
+        const data = await loadDemoData();
+        if (!cancelled) setDemoState({ enabled: true, ...data });
+      } catch {
+        // Демо-набор необязателен: без него работает обычный справочник.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const insurance = demoState.insurance;
+  const dmsPlan = insurance && dmsPlanId ? findPlan(insurance, dmsPlanId) : null;
+  const dmsProvider = dmsPlan ? findProvider(insurance, dmsPlan.providerId) : null;
+  // «Сегодня» по Казани — из того же часового сдвига, что и «открыто сейчас».
+  const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const dmsFilterActive = dmsOnly && Boolean(dmsPlan);
+
+  /*
+   * Покрытие считается в браузере: программа никуда не отправляется,
+   * а справочник ДМС — публичный (какие клиники входят в какую программу).
+   */
+  const dmsAnnotatedDoctors = useMemo(() => {
+    if (!insurance || !dmsPlan) return enrichedDoctors;
+    return enrichedDoctors.map((doc) => ({
+      ...doc,
+      dmsCoverage: coverageFor(insurance, dmsPlan.id, {
+        clinicId: doc.clinicId,
+        branchId: doc.branchId,
+        entityKind: doc.entityKind,
+        specialtyKey: specialtyCode(doc.doctorProfile || doc.specialty),
+        pediatric: Boolean(doc.features?.children),
+      }, { today: todayKey }),
+    }));
+  }, [enrichedDoctors, insurance, dmsPlan, todayKey]);
+
+  useEffect(() => {
+    if (!dmsPromptPending) return undefined;
+    // Отложено на кадр: состояние меняется не в теле эффекта.
+    const timerId = setTimeout(() => {
+      setDmsPromptPending(false);
+      if (!insurance) {
+        showToast('Справочника программ ДМС пока нет — показываю все варианты.', 'info', 5000);
+      } else if (!dmsPlan) {
+        setIsDmsPanelOpen(true);
+        setIsMobileFiltersOpen(true);
+        showToast('Выберите свою программу ДМС — отмечу, что в неё входит.', 'info', 5000);
+      }
+    }, 0);
+    return () => clearTimeout(timerId);
+  }, [dmsPromptPending, insurance, dmsPlan, showToast]);
+
+  const disableDemo = useCallback(() => {
+    setDemoPreference(false);
+    setDemoState(EMPTY_DEMO);
+    setDmsOnly(false);
+    setIsDmsPanelOpen(false);
+  }, []);
 
   useEffect(() => {
     enrichedDoctorsRef.current = enrichedDoctors;
@@ -1619,7 +1733,7 @@ export default function App() {
     const selectedServiceList = selectedServices;
     const knownDoctorProfileQuery = doctorProfiles.find((profile) => normalizeText(profile) === query);
 
-    return enrichedDoctors.filter((doc) => {
+    return dmsAnnotatedDoctors.filter((doc) => {
       // Keep route targets visible
       if (routeTargetIds.has(doc.id)) return true;
 
@@ -1657,8 +1771,10 @@ export default function App() {
       const matchesChildren = !childrenOnly || doc.features.children;
       const matchesServices =
         selectedServiceList.length === 0 || selectedServiceList.every((service) => doc.services.includes(service));
+      const matchesDms = !dmsFilterActive || doc.dmsCoverage?.status === 'covered';
 
       return (
+        matchesDms &&
         matchesQuery &&
         matchesClinic &&
         matchesFacilityType &&
@@ -1680,7 +1796,8 @@ export default function App() {
       );
     });
   }, [
-    enrichedDoctors,
+    dmsAnnotatedDoctors,
+    dmsFilterActive,
     deferredSearchQuery,
     doctorProfiles,
     selectedFacilityType,
@@ -1833,6 +1950,10 @@ export default function App() {
         return leftDistance - rightDistance || Number(right.openNow) - Number(left.openNow);
       },
       schedule: compareBySchedule,
+      // Цена первичного приёма; без цены — в конце, а не «бесплатно».
+      price: (left, right) =>
+        (left.consultPrice ?? Number.POSITIVE_INFINITY) - (right.consultPrice ?? Number.POSITIVE_INFINITY)
+        || compareByRecommendation(left, right),
       name: (left, right) => left.name.localeCompare(right.name, 'ru'),
       clinic: (left, right) => left.clinic.localeCompare(right.clinic, 'ru'),
     };
@@ -1883,6 +2004,7 @@ export default function App() {
           onlineOnly && 'online',
           wheelchairOnly && 'wheelchair',
           childrenOnly && 'children',
+          dmsOnly && 'dms',
         ].filter(Boolean),
       }),
     [
@@ -1906,6 +2028,7 @@ export default function App() {
       onlineOnly,
       wheelchairOnly,
       childrenOnly,
+      dmsOnly,
     ],
   );
 
@@ -1959,6 +2082,8 @@ export default function App() {
     minExperience,
     maxDistance,
     maxTravelMinutes,
+    dmsOnly,
+    dmsPlanId,
     sortBy,
   ]);
 
@@ -1988,11 +2113,12 @@ export default function App() {
     if (minExperience > 0) keys.push('minExperience');
     if (maxDistance > 0) keys.push('maxDistance');
     if (maxTravelMinutes > 0) keys.push('maxTravel');
+    if (dmsFilterActive) keys.push('dms');
     return keys;
   }, [
     deferredSearchQuery, selectedDoctorProfile, selectedFacilityType, selectedOwnership, selectedClinic,
     selectedDistrict, selectedServices, childrenOnly, openOnly, weekendOnly, eveningOnly, onlineOnly,
-    wheelchairOnly, favoritesOnly, minRating, minExperience, maxDistance, maxTravelMinutes,
+    wheelchairOnly, favoritesOnly, minRating, minExperience, maxDistance, maxTravelMinutes, dmsFilterActive,
   ]);
 
   // Подпись поиска — только для сравнения внутри вкладки, наружу не уходит.
@@ -2002,7 +2128,7 @@ export default function App() {
       normalizeText(deferredSearchQuery).trim(), selectedDoctorProfile, selectedFacilityType, selectedOwnership,
       selectedClinic, selectedDistrict, selectedServices, cardDisplayMode, childrenOnly, openOnly, weekendOnly,
       eveningOnly, onlineOnly, wheelchairOnly, favoritesOnly, minRating, minExperience, maxDistance,
-      maxTravelMinutes, maxTravelMinutes > 0 ? travelMode : null,
+      maxTravelMinutes, maxTravelMinutes > 0 ? travelMode : null, dmsFilterActive ? dmsPlanId : null,
     ]);
 
   /*
@@ -2042,10 +2168,11 @@ export default function App() {
         results: Math.min(resultCount, 5000),
         hasLocation: travelOriginKnown,
         maxTravel: maxTravelMinutes || undefined,
+        dmsPlan: insurance ? Boolean(dmsPlan) : undefined,
       });
     }, 1500);
     return () => clearTimeout(timerId);
-  }, [searchSignature, resultsSettled, resultCount, searchSpecialty, selectedOwnership, activeFilterKeys, travelOriginKnown, maxTravelMinutes]);
+  }, [searchSignature, resultsSettled, resultCount, searchSpecialty, selectedOwnership, activeFilterKeys, travelOriginKnown, maxTravelMinutes, insurance, dmsPlan]);
 
   // Вопрос «Нашли, куда обратиться?»: после целевого действия или через
   // 45 секунд на выдаче. Не чаще трёх раз за сессию и один раз на поиск.
@@ -2117,6 +2244,8 @@ export default function App() {
   }, [routeData, routeTargets.length, travelMode, requestFeedback, searchSignature]);
 
   const favoritesCount = enrichedDoctors.filter((doc) => doc.isFavorite).length;
+  // Сортировка «сначала дешевле» имеет смысл, только когда в справочнике есть цены.
+  const hasPrices = useMemo(() => sourceFacilities.some((doc) => Number.isFinite(doc.consultPrice)), [sourceFacilities]);
   // Сколько записей фильтр «Открытые сейчас» прячет не потому, что они закрыты,
   // а потому, что графика нет в данных. Молча терять половину базы нечестно.
   const unknownScheduleCount = enrichedDoctors.filter((doc) => doc.openState === OPEN_STATE.UNKNOWN).length;
@@ -2595,6 +2724,7 @@ export default function App() {
     setMinExperience(0);
     setMaxDistance(0);
     setMaxTravelMinutes(0);
+    setDmsOnly(false);
     setSortBy('recommendation');
     setVisibleCount(PAGE_SIZE);
   };
@@ -2693,6 +2823,8 @@ export default function App() {
     const verifiedLabel = formatVerifiedAt(doc.verifiedAt);
     const verifiedDays = daysSince(doc.verifiedAt, now);
     const isOsm = /^osm$/i.test(String(doc.source || '')) || /^osm-/.test(String(doc.id || ''));
+    const dmsBadge = dmsPlan && doc.dmsCoverage ? coverageBadge(doc.dmsCoverage, dmsPlan) : null;
+    const pultHref = dmsProvider ? toTelHref(dmsProvider.pultPhone) : null;
 
     return (
       <div
@@ -2707,6 +2839,11 @@ export default function App() {
               <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.18em] ${isDoctorCard ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-100' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-100'}`}>
                 {isDoctorCard ? 'Врач' : 'Учреждение'}
               </span>
+              {doc.demo && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.12em] text-amber-800 dark:bg-amber-900 dark:text-amber-100" title="Вымышленная запись для проверки сценариев">
+                  <FlaskConical size={12} aria-hidden="true" /> Демо
+                </span>
+              )}
               {doc.openState === OPEN_STATE.OPEN && (
                 <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.18em] text-emerald-700 dark:bg-emerald-900 dark:text-emerald-100">
                   Открыто сейчас
@@ -2769,11 +2906,20 @@ export default function App() {
             {verifiedLabel ? `Официальный сайт · проверено ${verifiedLabel}` : 'Проверено по официальному сайту'}
             <ExternalLink size={11} className="opacity-60" aria-hidden="true" />
           </a>
+        ) : doc.demo ? (
+          <p className="mt-3 text-[11px] leading-4 text-amber-700 dark:text-amber-300">
+            Демо-данные: вымышленная клиника для проверки сценариев. Сайт и телефон не настоящие.
+          </p>
         ) : isOsm ? (
           <p className="mt-3 text-[11px] leading-4 text-slate-400 dark:text-slate-500" title="Открытые данные OpenStreetMap: адрес и часы работы могут быть неточны">
             Данные: OpenStreetMap · часы и телефон уточняйте
           </p>
         ) : null}
+        {doc.missingSince && (
+          <p className="mt-1.5 text-[11px] leading-4 text-amber-700 dark:text-amber-300">
+            При проверке {formatVerifiedAt(doc.missingSince)} врача не нашли на странице учреждения — уточните по телефону, принимает ли он.
+          </p>
+        )}
         {verifiedDays != null && verifiedDays > STALE_AFTER_DAYS && (
           <p className="mt-1.5 text-[11px] leading-4 text-amber-700 dark:text-amber-300">
             Сведения проверялись {verifiedDays} дн. назад — перед визитом уточните расписание.
@@ -2857,7 +3003,7 @@ export default function App() {
               ))}
             </ul>
             <p className="mt-2 text-[11px] leading-4 text-slate-400 dark:text-slate-500">
-              Ориентировочные цены. Уточняйте в учреждении.
+              {doc.demo ? 'Демо-цены, вымышленные.' : 'Ориентировочные цены. Уточняйте в учреждении.'}
             </p>
           </div>
         )}
@@ -2901,6 +3047,33 @@ export default function App() {
         </div>
 
         {hasVisibleDescription && <p className="mt-4 text-sm leading-6 text-slate-600 dark:text-slate-400">{doc.description}</p>}
+
+        {/*
+          ДМС: покрытие выбранной программой. Считается в браузере, программа
+          никуда не отправляется. Через пульт — кнопка звонка на пульт.
+        */}
+        {dmsBadge && dmsBadge.tone === 'covered' && (
+          <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-3 text-xs leading-5 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-100">
+            <p className="inline-flex items-center gap-1.5 font-bold"><ShieldCheck size={14} aria-hidden="true" /> {dmsBadge.text}</p>
+            {dmsBadge.detail && <p className="mt-0.5">Как попасть: {dmsBadge.detail}.</p>}
+            {doc.dmsCoverage.notes && <p className="mt-0.5">{doc.dmsCoverage.notes}</p>}
+            {doc.dmsCoverage.access === 'direct' && <p className="mt-0.5">Назовите в регистратуре номер полиса и программу.</p>}
+            {pultHref && ['via_pult', 'approval_required'].includes(doc.dmsCoverage.access) && (
+              <a
+                href={pultHref}
+                onClick={() => trackContact(doc, 'pult')}
+                className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-emerald-700"
+              >
+                <Phone size={13} aria-hidden="true" /> Позвонить на пульт {dmsProvider.name}
+              </a>
+            )}
+          </div>
+        )}
+        {dmsBadge && dmsBadge.tone === 'not_covered' && (
+          <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+            {dmsBadge.text}{dmsBadge.detail ? `: ${dmsBadge.detail}` : ''}.
+          </p>
+        )}
 
         {/*
           Переход к записи. Своей записи у МедКарты нет: ведём туда, где
@@ -3000,7 +3173,7 @@ export default function App() {
     clinic: selectedClinic, district: selectedDistrict, services: selectedServices,
     childrenOnly, openOnly, favoritesOnly, weekendOnly, eveningOnly,
     onlineOnly, wheelchairOnly, minRating, minExperience, maxDistance,
-    maxTravelMinutes,
+    maxTravelMinutes, dmsOnly,
   };
   const filterSetters = {
     searchQuery: setSearchQuery, doctorProfile: setSelectedDoctorProfile,
@@ -3011,8 +3184,15 @@ export default function App() {
     onlineOnly: setOnlineOnly, wheelchairOnly: setWheelchairOnly,
     minRating: setMinRating, minExperience: setMinExperience, maxDistance: setMaxDistance,
     maxTravelMinutes: setMaxTravelMinutes,
+    dmsOnly: setDmsOnly,
   };
   const handleFilterChange = (field, value) => {
+    // «По моему ДМС» без выбранной программы — сначала выбрать программу.
+    if (field === 'dmsOnly' && value && !dmsPlan) {
+      setIsDmsPanelOpen(true);
+      setDmsOnly(true);
+      return;
+    }
     if (field === 'cardDisplayMode') {
       setCardDisplayMode(value);
       // При смене раздела убираем условия, относящиеся только к другому типу.
@@ -3086,6 +3266,19 @@ export default function App() {
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
+                  {insurance && (
+                    <button
+                      type="button"
+                      className="sidebar-icon-button relative"
+                      onClick={() => setIsDmsPanelOpen((current) => !current)}
+                      aria-label={dmsPlan ? `Мой ДМС: ${dmsPlan.name}` : 'Мой ДМС: выбрать программу'}
+                      aria-expanded={isDmsPanelOpen}
+                      title={dmsPlan ? `ДМС: ${dmsProvider?.name || ''} «${dmsPlan.name}»` : 'Мой ДМС'}
+                    >
+                      <ShieldPlus size={19} aria-hidden="true" />
+                      {dmsPlan && <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-emerald-500" aria-hidden="true" />}
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="sidebar-icon-button relative"
@@ -3164,6 +3357,31 @@ export default function App() {
             </header>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+              {demoState.enabled && (
+                <div className="mb-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-100" role="note">
+                  <FlaskConical size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
+                  <p>
+                    <b>Демо-режим.</b> Частные клиники с пометкой «Демо», их цены и программы ДМС вымышлены — для проверки сценариев.{' '}
+                    <button type="button" onClick={disableDemo} className="font-semibold underline underline-offset-2">Выключить</button>
+                  </p>
+                </div>
+              )}
+              {insurance && isDmsPanelOpen && (
+                <DmsPanel
+                  insurance={insurance}
+                  planId={dmsPlan?.id || null}
+                  today={todayKey}
+                  isDemo={demoState.enabled}
+                  onCallPult={() => track('contact_click', { channel: 'pult', kind: 'facility' })}
+                  onClose={() => setIsDmsPanelOpen(false)}
+                  onSave={(planId) => {
+                    setDmsPlanId(planId);
+                    setIsDmsPanelOpen(false);
+                    if (!planId) setDmsOnly(false);
+                    else showToast('Программа сохранена в этом браузере. Карточки отмечены по ней.', 'success');
+                  }}
+                />
+              )}
               <SearchFilters
                 filters={filters}
                 options={{ doctorProfiles, facilityTypes, clinics, services: allServices, travelLimits: TRAVEL_LIMIT_OPTIONS }}
@@ -3172,6 +3390,7 @@ export default function App() {
                   originKnown: travelOriginKnown,
                   state: travelEstimateState,
                 }}
+                dms={{ available: Boolean(insurance), planName: dmsPlan?.name || null }}
                 onChange={handleFilterChange}
                 onReset={clearFilters}
                 onNearest={handleGoToNearest}
@@ -3187,6 +3406,7 @@ export default function App() {
                       <option value="schedule">Сначала открытые</option>
                       <option value="name">По имени</option>
                       <option value="clinic">По клинике</option>
+                      {(hasPrices || sortBy === 'price') && <option value="price">Сначала дешевле</option>}
                       {sortBy === 'rating' && <option value="rating">По рейтингу</option>}
                       {sortBy === 'experience' && <option value="experience">По стажу</option>}
                     </select>
