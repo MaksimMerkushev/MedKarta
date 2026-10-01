@@ -93,6 +93,8 @@ export const CONSTRAINT_KEYS = Object.freeze([
   'ownership',
   'district',
   'max_distance_km',
+  // Потолок времени в пути, мин. Фильтрует интерфейс: координаты остаются в браузере.
+  'max_travel_minutes',
   'min_rating',
   'min_experience_years',
 ]);

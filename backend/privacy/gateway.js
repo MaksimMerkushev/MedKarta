@@ -69,8 +69,12 @@ export const extractConstraints = (text) => {
    * давала availableAfter=12:00 — предлог «с» находился в конце слова
    * «снилс», а «12» откусывалось от номера документа.
    */
-  const TIME_AFTER = /(?<![\p{L}\p{N}])(?:после|позже|начиная\s+с|с)\s+(\d{1,2})(?::(\d{2}))?(?![\d.:-])/u;
-  const TIME_BEFORE = /(?<![\p{L}\p{N}])(?:до|раньше|ранее)\s+(\d{1,2})(?::(\d{2}))?(?![\d.:-])/u;
+  /*
+   * «До 20 минут от дома» — это время в пути, а не «приём до 20:00»:
+   * без проверки хвоста число перед «мин» уходило в availableBefore.
+   */
+  const TIME_AFTER = /(?<![\p{L}\p{N}])(?:после|позже|начиная\s+с|с)\s+(\d{1,2})(?::(\d{2}))?(?![\d.:-])(?!\s*(?:мин|час))/u;
+  const TIME_BEFORE = /(?<![\p{L}\p{N}])(?:до|раньше|ранее)\s+(\d{1,2})(?::(\d{2}))?(?![\d.:-])(?!\s*(?:мин|час))/u;
 
   const after = lower.match(TIME_AFTER);
   if (after) {
@@ -128,7 +132,41 @@ export const extractConstraints = (text) => {
     if (value >= 0 && value <= 60) constraints.minExperience = value;
   }
 
+  const maxTravel = extractMaxTravelMinutes(lower);
+  if (maxTravel !== null) constraints.maxTravelMinutes = maxTravel;
+
   return constraints;
+};
+
+/*
+ * Время в пути: «максимум 20 минут от дома», «не дольше 15 мин пешком»,
+ * «в пределах получаса», «до 30 минут езды», «20 минут от работы».
+ * Голое «через 20 минут» — это не потолок дороги, поэтому число без
+ * признака ограничения засчитывается только рядом со словами о дороге.
+ */
+const TRAVEL_LIMIT_WORDS = '(?:максимум|не\\s+дольше|не\\s+больше|не\\s+более|не\\s+далее|в\\s+пределах|до|за)';
+const TRAVEL_CONTEXT = '(?:от\\s+(?:дома|работы|меня|офиса)|езды|ехать|пути|в\\s+пути|дороги|пешком|ходьбы|на\\s+машине|на\\s+велосипеде)';
+const TRAVEL_PATTERNS = [
+  new RegExp(`${TRAVEL_LIMIT_WORDS}\\s+(\\d{1,3})\\s*мин\\p{L}*`, 'u'),
+  new RegExp(`(?<![\\p{L}\\p{N}])(\\d{1,3})\\s*мин\\p{L}*\\s+${TRAVEL_CONTEXT}`, 'u'),
+];
+
+export const extractMaxTravelMinutes = (lower) => {
+  const text = String(lower || '').toLowerCase();
+  if (new RegExp(`${TRAVEL_LIMIT_WORDS}\\s+получаса`, 'u').test(text) || new RegExp(`полчаса\\s+${TRAVEL_CONTEXT}`, 'u').test(text)) {
+    return 30;
+  }
+  if (new RegExp(`${TRAVEL_LIMIT_WORDS}\\s+(?:часа|одного\\s+часа)(?![\\p{L}])`, 'u').test(text)) {
+    return 60;
+  }
+  for (const pattern of TRAVEL_PATTERNS) {
+    const match = text.match(pattern);
+    if (match) {
+      const value = Number(match[1]);
+      if (value >= 5 && value <= 120) return value;
+    }
+  }
+  return null;
 };
 
 /** Грубое определение намерения по ключевым словам — для локального планировщика. */

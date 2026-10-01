@@ -15,26 +15,10 @@
  */
 
 import { parseOpeningHours } from '../../shared/openingHours.js';
+import { isPediatricRecord, SPECIALTY_CANON } from '../../shared/specialties.js';
 
-/** Канонические специальности. Значение — ключ, используемый в плане. */
-export const SPECIALTY_CANON = Object.freeze({
-  therapist: 'Терапевт',
-  neurologist: 'Невролог',
-  cardiologist: 'Кардиолог',
-  lor: 'ЛОР',
-  ophthalmologist: 'Офтальмолог',
-  surgeon: 'Хирург',
-  orthopedist: 'Ортопед',
-  dermatologist: 'Дерматолог',
-  gynecologist: 'Гинеколог',
-  pediatrician: 'Педиатр',
-  dentist: 'Стоматолог',
-  endocrinologist: 'Эндокринолог',
-  gastroenterologist: 'Гастроэнтеролог',
-  urologist: 'Уролог',
-  psychiatrist: 'Психиатр',
-  traumatologist: 'Травматолог',
-});
+// Список живёт в shared/: на него ссылаются и интерфейс, и аналитика.
+export { SPECIALTY_CANON };
 
 /** Обратное соответствие: русское название → ключ плана. */
 export const SPECIALTY_BY_LABEL = Object.freeze(
@@ -112,7 +96,9 @@ const toDoctorRecord = (raw, index) => ({
   schedule: raw.schedule || null,
   hoursText: raw.hours || null,
   services: asArray(raw.services).map(String),
-  features: raw.features || {},
+  // «Детский ЛОР» и «Педиатр» — детский приём, даже если флаг в источнике
+  // не проставлен (а в справочнике он не проставлен ни у кого).
+  features: { ...(raw.features || {}), children: isPediatricRecord(raw) },
   facilityType: raw.facilityType || null,
 });
 

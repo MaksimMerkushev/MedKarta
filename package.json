@@ -12,6 +12,7 @@
     "build": "vite build",
     "start": "node backend/server.js",
     "build:graph": "node scripts/build-road-graph.mjs",
+    "report:searches": "node scripts/search-report.mjs",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test": "node --test tests/*.test.js",

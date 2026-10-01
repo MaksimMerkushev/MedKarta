@@ -383,6 +383,10 @@ export const createSearch = (graph) => {
     goals,
     profile = 'driving',
     maxExpansions = DEFAULT_MAX_EXPANSIONS,
+    // Потолок времени, с: «всё, до чего не больше 20 минут». Обход
+    // останавливается, когда ближайший неосевший узел дальше потолка, —
+    // дальние цели всё равно не прошли бы фильтр, а считать их незачем.
+    maxCost = Number.POSITIVE_INFINITY,
   }) => {
     const settings = PROFILES[profile] || PROFILES.driving;
     const fallbackMps = settings.fallbackSpeedKmh / 3.6;
@@ -416,6 +420,8 @@ export const createSearch = (graph) => {
     while (heap.size > 0 && pending > 0) {
       const current = heap.pop();
       if (settled[current] === generation) continue;
+      // Узлы выходят из кучи по возрастанию времени: дальше будет только дольше.
+      if (gScore[current] > maxCost) break;
       settled[current] = generation;
       expanded += 1;
 

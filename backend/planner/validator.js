@@ -172,6 +172,13 @@ const validateConstraints = (raw, allowedDistricts) => {
         result[key] = value;
         break;
       }
+      case 'max_travel_minutes': {
+        if (!Number.isInteger(value) || value < 5 || value > 120) {
+          return fail(VALIDATION_ERROR.BAD_CONSTRAINT, key);
+        }
+        result[key] = value;
+        break;
+      }
       case 'min_rating': {
         if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 5) {
           return fail(VALIDATION_ERROR.BAD_CONSTRAINT, key);

@@ -48,6 +48,13 @@ const MAX_SNAP_DISTANCE_M = 2000;
 const CACHE_LIMIT = 256;
 
 /*
+ * Привязки к дороге для повторяющихся точек. Фильтр «не дольше N минут»
+ * каждый раз присылает одни и те же ~500 адресов клиник, и их привязка
+ * занимала половину времени запроса. Размер — с запасом на весь справочник.
+ */
+const SNAP_CACHE_LIMIT = 4096;
+
+/*
  * Потолок работы на ОДИН запрос, суммарно по всем участкам. Потолок на
  * участок (400 тыс.) больше самого графа и не срабатывал никогда; шесть точек
  * по краям покрытия занимали единственное ядро сервера на секунду. Миллион
@@ -89,6 +96,8 @@ export const createRoutingEngine = ({ graph, maxExpansions = DEFAULT_MAX_EXPANSI
     return value;
   };
 
+  const snapCache = new Map();
+
   const snapPoint = (point, profile) => {
     if (
       !point ||
@@ -101,7 +110,14 @@ export const createRoutingEngine = ({ graph, maxExpansions = DEFAULT_MAX_EXPANSI
     ) {
       return null;
     }
-    return graph.snapToRoad(point.lat, point.lng, profile, MAX_SNAP_DISTANCE_M);
+    const key = `${profile}|${point.lat}|${point.lng}`;
+    if (snapCache.has(key)) return snapCache.get(key);
+    const hit = graph.snapToRoad(point.lat, point.lng, profile, MAX_SNAP_DISTANCE_M);
+    if (snapCache.size >= SNAP_CACHE_LIMIT) {
+      snapCache.delete(snapCache.keys().next().value);
+    }
+    snapCache.set(key, hit);
+    return hit;
   };
 
   /** Цена и длина части отрезка привязки. */
@@ -276,7 +292,7 @@ export const createRoutingEngine = ({ graph, maxExpansions = DEFAULT_MAX_EXPANSI
      * Совместима по контракту с RoutingProvider из executor/routing.js,
      * поэтому выбор ближайшего кандидата работает без изменений выше по стеку.
      */
-    async travelTimes(origin, destinations, mode = 'driving') {
+    async travelTimes(origin, destinations, mode = 'driving', { maxSeconds = Number.POSITIVE_INFINITY } = {}) {
       const profile = PROFILE_NAMES.includes(mode) ? mode : 'driving';
       const settings = PROFILES[profile];
       const from = snapPoint(origin, profile);
@@ -300,6 +316,7 @@ export const createRoutingEngine = ({ graph, maxExpansions = DEFAULT_MAX_EXPANSI
         goals: hits.map((hit) => (hit ? arrivals(hit, settings) : null)),
         profile,
         maxExpansions,
+        maxCost: maxSeconds,
       });
 
       return hits.map((hit, index) => {
@@ -313,7 +330,9 @@ export const createRoutingEngine = ({ graph, maxExpansions = DEFAULT_MAX_EXPANSI
           distance = direct.metres;
         }
 
-        if (!Number.isFinite(duration)) return { ...EMPTY_ESTIMATE };
+        // Хвост от узла до здания добавляется после обхода и может вывести
+        // цель за потолок — такая цель за потолком и считается.
+        if (!Number.isFinite(duration) || duration > maxSeconds) return { ...EMPTY_ESTIMATE };
 
         return {
           distanceKm: Number((distance / 1000).toFixed(3)),

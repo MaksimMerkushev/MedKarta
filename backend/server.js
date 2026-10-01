@@ -19,7 +19,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import chatHandler from './api/chat.js';
+import eventsHandler from './api/events.js';
 import routeHandler from './api/route.js';
+import travelTimesHandler from './api/travelTimes.js';
 import { applySecurityHeaders } from './http/securityHeaders.js';
 import { getDefaultRoutingEngine } from './routing/engine.js';
 import { logger } from './observability/safeLogger.js';
@@ -103,14 +105,27 @@ const sendFile = (res, filePath, status = 200) => {
   stream.pipe(res);
 };
 
+/*
+ * Сопоставление по точному пути, а не по префиксу: с префиксом
+ * «/api/route» запрос на «/api/routeXYZ» тоже уходил бы в обработчик.
+ */
+const API_HANDLERS = new Map([
+  ['/api/chat', chatHandler],
+  ['/api/route', routeHandler],
+  ['/api/travel-times', travelTimesHandler],
+  ['/api/events', eventsHandler],
+]);
+
+const apiPathOf = (url) => {
+  const raw = String(url || '');
+  const end = raw.search(/[?#]/);
+  return end === -1 ? raw : raw.slice(0, end);
+};
+
 const handleRequest = async (req, res) => {
   applySecurityHeaders(res, { api: req.url?.startsWith('/api/') });
 
-  const apiHandler = req.url?.startsWith('/api/chat')
-    ? chatHandler
-    : req.url?.startsWith('/api/route')
-      ? routeHandler
-      : null;
+  const apiHandler = API_HANDLERS.get(apiPathOf(req.url)) || null;
 
   if (apiHandler) {
     try {
@@ -128,7 +143,8 @@ const handleRequest = async (req, res) => {
     return;
   }
 
-  if (!SERVE_STATIC) {
+  // Неизвестный API-путь — 404 в JSON, а не index.html от SPA с кодом 200.
+  if (!SERVE_STATIC || apiPathOf(req.url).startsWith('/api/')) {
     res.statusCode = 404;
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.end(JSON.stringify({ error: 'Not found' }));

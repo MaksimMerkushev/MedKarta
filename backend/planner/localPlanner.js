@@ -34,6 +34,7 @@ const toPlanConstraints = (constraints = {}, isChild = false) => {
   if (constraints.ownership) result.ownership = constraints.ownership;
   if (typeof constraints.minRating === 'number') result.min_rating = constraints.minRating;
   if (typeof constraints.minExperience === 'number') result.min_experience_years = constraints.minExperience;
+  if (typeof constraints.maxTravelMinutes === 'number') result.max_travel_minutes = constraints.maxTravelMinutes;
   if (isChild) result.children = true;
   return result;
 };
@@ -109,7 +110,14 @@ export const planLocally = (context) => {
    */
   let stepsAreSequence = steps.length > 0;
 
-  if (steps.length === 0 && (context.specialties || []).length > 0) {
+  /*
+   * Точка «дом» или «работа» сама по себе — не цель поиска. «Максимум
+   * 20 минут от дома» давало единственный шаг-локацию, профили из жалобы
+   * не добавлялись, и запрос превращался в пустой поиск учреждений.
+   */
+  const hasTarget = steps.some((step) => step.type !== 'location');
+
+  if (!hasTarget && (context.specialties || []).length > 0) {
     // Это АЛЬТЕРНАТИВЫ («терапевт или гастроэнтеролог»), а не последовательность
     // посещений: превращать их в маршрут из двух точек было бы неверно.
     stepsAreSequence = false;

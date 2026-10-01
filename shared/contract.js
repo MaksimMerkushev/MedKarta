@@ -175,6 +175,11 @@ export const sanitizeAiAction = (raw) => {
     minRating: boundedNumber(source.minRating, 0, 5),
     minExperience: boundedNumber(source.minExperience, 0, 40),
     maxDistance: boundedNumber(source.maxDistance, 0, 50),
+    // Потолок времени в пути: целое число минут или null. Ноль и мусор — null,
+    // а не «5 минут»: незаданный фильтр не должен превращаться в заданный.
+    maxTravelMinutes: Number.isInteger(source.maxTravelMinutes) && source.maxTravelMinutes >= 5 && source.maxTravelMinutes <= 120
+      ? source.maxTravelMinutes
+      : null,
 
     replyText: cleanMultilineText(source.replyText, LIMITS.MAX_REPLY_CHARS) || DEFAULT_REPLY,
   };

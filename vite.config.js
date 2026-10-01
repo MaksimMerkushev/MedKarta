@@ -10,6 +10,8 @@ const DATA = fileURLToPath(new URL('./data', import.meta.url))
 
 const CHAT_HANDLER_URL = new URL('./backend/api/chat.js', import.meta.url)
 const ROUTE_HANDLER_URL = new URL('./backend/api/route.js', import.meta.url)
+const TRAVEL_TIMES_HANDLER_URL = new URL('./backend/api/travelTimes.js', import.meta.url)
+const EVENTS_HANDLER_URL = new URL('./backend/api/events.js', import.meta.url)
 const FULL_DB_PATH = fileURLToPath(new URL('./data/doctors.full.js', import.meta.url))
 const PUBLIC_DB_PATH = fileURLToPath(new URL('./data/doctors.js', import.meta.url))
 const HAS_FULL_DB = fs.existsSync(FULL_DB_PATH)
@@ -29,7 +31,7 @@ const devApiPlugin = (env) => ({
   name: 'medkarta-dev-api',
   apply: 'serve',
   configureServer(server) {
-    for (const key of ['OPENROUTER_API_KEY', 'AI_API_KEY', 'AI_UPSTREAM_URL', 'AI_MODEL', 'ALLOWED_ORIGINS', 'PRIVACY_TOKEN_SECRET']) {
+    for (const key of ['OPENROUTER_API_KEY', 'AI_API_KEY', 'AI_UPSTREAM_URL', 'AI_MODEL', 'ALLOWED_ORIGINS', 'PRIVACY_TOKEN_SECRET', 'ANALYTICS', 'ANALYTICS_DIR']) {
       if (env[key] && !process.env[key]) {
         process.env[key] = env[key]
       }
@@ -41,11 +43,13 @@ const devApiPlugin = (env) => ({
       )
     }
 
-    // Оба обработчика API: без /api/route в dev-режиме маршрут не строился
+    // Все обработчики API: без /api/route в dev-режиме маршрут не строился
     // вовсе, и казалось, что сломан движок.
     for (const [mount, handlerUrl, label] of [
       ['/api/chat', CHAT_HANDLER_URL, 'чата'],
       ['/api/route', ROUTE_HANDLER_URL, 'маршрута'],
+      ['/api/travel-times', TRAVEL_TIMES_HANDLER_URL, 'времени в пути'],
+      ['/api/events', EVENTS_HANDLER_URL, 'аналитики'],
     ]) {
       try {
         server.watcher?.add(fileURLToPath(handlerUrl))

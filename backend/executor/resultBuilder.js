@@ -71,6 +71,9 @@ const buildReplyText = (execution, context) => {
   const parts = [];
   const { stops, notes } = execution;
   const found = stops.filter((stop) => stop.kind !== 'location');
+  const travelLimit = Number.isInteger(execution.constraints?.max_travel_minutes)
+    ? execution.constraints.max_travel_minutes
+    : null;
 
   switch (execution.action) {
     case 'CLEAR_FILTERS':
@@ -111,6 +114,19 @@ const buildReplyText = (execution, context) => {
       break;
 
     case 'FIND_DOCTOR':
+      if (travelLimit && found.length > 0 && !found.some((stop) => stop.token)) {
+        const labels = [...new Set(found.map((stop) => stop.specialty).filter(Boolean))];
+        parts.push(
+          `Показываю ${labels.length > 0 ? `врачей профиля: ${labels.join(', ')}` : 'подходящих врачей'} — ` +
+            `только тех, до кого не дольше ${travelLimit} мин пути от вашей точки на карте (без учёта пробок).`,
+        );
+        // Список в интерфейсе по часам приёма не сужается: расписание есть не
+        // у всех врачей, и молча обещать «после 18:00» нельзя.
+        if (execution.constraints?.available_after || execution.constraints?.available_before) {
+          parts.push('Часы приёма уточняйте при записи: расписание в справочнике есть не у всех врачей.');
+        }
+        break;
+      }
       parts.push(
         found.length > 0
           ? `Нашёл: ${found.map(describeStop).join(', ')}.`
@@ -160,6 +176,7 @@ const applyConstraints = (target, constraints = {}) => {
   if (typeof constraints.min_rating === 'number') target.minRating = constraints.min_rating;
   if (typeof constraints.min_experience_years === 'number') target.minExperience = constraints.min_experience_years;
   if (typeof constraints.max_distance_km === 'number') target.maxDistance = constraints.max_distance_km;
+  if (Number.isInteger(constraints.max_travel_minutes)) target.maxTravelMinutes = constraints.max_travel_minutes;
   if (constraints.open_now) target.openOnly = true;
   if (constraints.weekend) target.weekendOnly = true;
   if (constraints.evening) target.eveningOnly = true;
@@ -204,6 +221,7 @@ export const buildUiAction = (execution, context = {}) => {
     minRating: null,
     minExperience: null,
     maxDistance: null,
+    maxTravelMinutes: null,
     replyText: DEFAULT_REPLY,
   };
 
@@ -232,14 +250,21 @@ export const buildUiAction = (execution, context = {}) => {
     draft.openOnly = true;
   }
 
+  /*
+   * С потолком времени в пути сервер не знает, кто ближе: координаты
+   * остаются в браузере. Поэтому выдача не сужается до одного врача по
+   * фамилии — интерфейс покажет всех врачей профиля и сам отсечёт дальних.
+   */
+  const travelLimited = Number.isInteger(execution.constraints?.max_travel_minutes);
+
   if (execution.action === 'FIND_DOCTOR' && entities.length > 0) {
     const first = entities[0];
     draft.specialty = first.specialty || null;
-    draft.searchQuery = first.name || null;
+    draft.searchQuery = travelLimited && !first.token ? null : first.name || null;
     draft.cardDisplayMode = 'doctor';
   }
 
-  if (execution.action === 'FIND_CLINIC' && entities.length > 0) {
+  if (execution.action === 'FIND_CLINIC' && entities.length > 0 && !(travelLimited && !entities[0].token)) {
     draft.clinic = entities[0].name || null;
     draft.searchQuery = entities[0].name || null;
     draft.cardDisplayMode = 'facility';

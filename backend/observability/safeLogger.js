@@ -38,6 +38,8 @@ export const ALLOWED_FIELDS = new Set([
   'specialties', 'constraint_keys', 'constraintKeys', 'steps', 'count',
   // Размер графа дорог: числа, к пользователю отношения не имеют.
   'nodes', 'edges', 'memory_mb',
+  // Время в пути и аналитика: профиль, потолок, число отброшенных событий.
+  'profile', 'max_minutes', 'dropped',
 ]);
 
 /**

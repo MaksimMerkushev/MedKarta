@@ -202,9 +202,17 @@ export const createCatalogRepository = (catalog) => {
       const exact = bySpecialty.get(label) || [];
       // «Детский ЛОР» содержит «лор»: подстрочное совпадение расширяет выборку
       // на профильные и детские варианты той же специальности.
-      const pool = exact.length > 0
-        ? exact
-        : catalog.doctors.filter((doctor) => normalizeRu(doctor.specialty || '').includes(label));
+      const related = catalog.doctors.filter((doctor) => normalizeRu(doctor.specialty || '').includes(label));
+      /*
+       * Для ребёнка точного совпадения мало: взрослый «ЛОР» не принимает
+       * детей, а «Детский ЛОР» в точную выборку не входил — и запрос
+       * «у ребёнка болит ухо» не находил никого, хотя детские ЛОРы есть.
+       */
+      const pool = constraints.children
+        ? related
+        : exact.length > 0
+          ? exact
+          : related;
 
       if (pool.length === 0) {
         // Специальности нет в справочнике. Выдумывать врача нельзя —

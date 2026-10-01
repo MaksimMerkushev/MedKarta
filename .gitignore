@@ -44,3 +44,6 @@ data/*.graph
 # Private proprietary databases
 *.full.js
 data/*.full.js
+
+# Журнал аналитики и прочие данные сервера во время работы
+var/

@@ -28,12 +28,30 @@ import { stemWord } from './morphology.js';
 const RED_FLAGS = [
   { id: 'chest_pain', words: ['боль груд', 'болит груд', 'давит груд', 'жжет груд', 'сжимает груд'] },
   { id: 'breathing', words: ['не могу дышать', 'нечем дышать', 'задыхаюсь', 'удушье', 'остановка дыхания'] },
-  { id: 'consciousness', words: ['потерял сознание', 'потеря сознания', 'без сознания', 'обморок', 'не приходит в себя'] },
+  { id: 'consciousness', words: ['потерял сознание', 'потеря сознания', 'без сознания', 'обморок', 'не приходит в себя', 'не могу разбудить', 'не просыпается'] },
   { id: 'bleeding', words: ['сильное кровотечение', 'кровотечение не останавливается', 'рвота кровью', 'кровь изо рта'] },
   { id: 'stroke', words: ['перекосило лицо', 'онемела половина', 'не могу говорить', 'речь пропала', 'инсульт'] },
   { id: 'seizure', words: ['судороги', 'припадок', 'конвульсии'] },
-  { id: 'anaphylaxis', words: ['отек горла', 'отек гортани', 'анафилакт', 'отек квинке'] },
+  { id: 'anaphylaxis', words: ['отек горла', 'отек гортани', 'анафилакт', 'отек квинке', 'отекло лицо', 'отекли губы', 'опух язык', 'отек языка'] },
   { id: 'trauma', words: ['открытый перелом', 'сильное отравление', 'ожог большой'] },
+  /*
+   * Ситуации, о которых педиатры просят звонить сразу, не дожидаясь приёма.
+   * Список намеренно короткий и консервативный: каждое ложное «звоните 103»
+   * отучает доверять предупреждению.
+   */
+  { id: 'poisoning', words: ['проглотил батарейк', 'проглотила батарейк', 'проглотил магнит', 'проглотила магнит', 'выпил таблетки', 'выпила таблетки', 'наглотался таблеток', 'выпил уксус', 'выпила уксус'] },
+  { id: 'abdomen', words: ['острая боль в живот', 'резкая боль в живот', 'сильная боль в живот', 'нестерпимая боль в живот', 'кинжальная боль'] },
+  { id: 'rash', words: ['сыпь не исчезает при надавливании', 'сыпь не проходит при надавливании', 'сыпь не бледнеет', 'сыпь не пропадает при надавливании'] },
+  { id: 'fever_high', words: ['температура 40', 'температура 41', 'температура под 40', 'температура выше 40', 'температура не сбивается', 'температура не снижается', 'жар не сбивается'] },
+  // Сочетания: каждая группа должна найтись в тексте хотя бы одним словом.
+  { id: 'infant_fever', allOf: [['грудничк', 'грудной ребен', 'младенц', 'младенец', 'новорожден'], ['температур', 'жар']] },
+  {
+    id: 'head_injury',
+    allOf: [
+      ['ударился головой', 'ударилась головой', 'удар головой', 'ударил головой', 'травма головы', 'упал с высоты', 'упала с высоты'],
+      ['рвет', 'рвота', 'вырвало', 'тошнит', 'сознан', 'сонлив', 'кровь из уха', 'судорог'],
+    ],
+  },
   {
     id: 'self_harm',
     words: [
@@ -129,8 +147,16 @@ const hasMarker = (normalized) => {
 };
 const RED_FLAGS_NORMALIZED = RED_FLAGS.map((flag) => ({
   id: flag.id,
-  words: flag.words.map((word) => normalizeRu(word)),
+  words: (flag.words || []).map((word) => normalizeRu(word)),
+  allOf: (flag.allOf || []).map((group) => group.map((word) => normalizeRu(word))),
 }));
+
+const containsPhrase = (normalized, compact, word) => normalized.includes(word) || compact.includes(compactPhrase(word));
+
+const matchesRedFlag = (flag, normalized, compact) =>
+  flag.allOf.length > 0
+    ? flag.allOf.every((group) => group.some((word) => containsPhrase(normalized, compact, word)))
+    : flag.words.some((word) => containsPhrase(normalized, compact, word));
 
 /**
  * Проверка «основа слова из текста начинается с основы из правила».
@@ -176,9 +202,7 @@ export const classifySymptoms = (text) => {
    * тот случай, где цена пропуска максимальна.
    */
   const compact = compactPhrase(normalized);
-  const emergency = RED_FLAGS_NORMALIZED.find((flag) =>
-    flag.words.some((word) => normalized.includes(word) || compact.includes(compactPhrase(word))),
-  );
+  const emergency = RED_FLAGS_NORMALIZED.find((flag) => matchesRedFlag(flag, normalized, compact));
 
   const scores = new Map();
   const matchedRules = [];
