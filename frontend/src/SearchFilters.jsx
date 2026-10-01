@@ -1,4 +1,4 @@
-import { Baby, Building2, ChevronDown, Clock, LayoutGrid, Navigation, SlidersHorizontal, UserRound, X } from 'lucide-react';
+import { Baby, Building2, ChevronDown, Clock, LayoutGrid, Navigation, SlidersHorizontal, Timer, UserRound, X } from 'lucide-react';
 import './SearchFilters.css';
 
 const MODES = [
@@ -37,7 +37,16 @@ function FilterPill({ active, onClick, children }) {
   );
 }
 
-export default function SearchFilters({ filters, options, onChange, onReset, onNearest }) {
+/** Подпись под фильтром времени: честно говорит, что именно посчитано. */
+const travelHint = (travel, active) => {
+  if (!travel.originKnown) return 'Нужна геолокация или точка отправления на карте — без неё время не считается.';
+  if (!active) return `По дорогам ${travel.modeLabel}, от вашей точки на карте.`;
+  if (travel.state === 'loading') return 'Считаем время по дорогам…';
+  if (travel.state === 'approximate') return 'Сервер недоступен — пока оценка по расстоянию.';
+  return `По дорогам ${travel.modeLabel}, без учёта пробок.`;
+};
+
+export default function SearchFilters({ filters, options, travel = { modeLabel: '', originKnown: true, state: 'off' }, onChange, onReset, onNearest }) {
   const isFacility = filters.cardDisplayMode === 'facility';
   const activeFilters = [];
   const add = (field, label, emptyValue = 'all') => {
@@ -57,6 +66,7 @@ export default function SearchFilters({ filters, options, onChange, onReset, onN
   add('favoritesOnly', 'Избранное', false);
   EXTRA_OPTIONS.forEach(({ field, label }) => add(field, label, false));
   add('maxDistance', `До ${filters.maxDistance} км`, 0);
+  add('maxTravelMinutes', `До ${filters.maxTravelMinutes} мин в пути`, 0);
 
   // Старые ссылки и AI могут задавать условия, которых больше нет в форме.
   // Они остаются видимыми, чтобы ни один фильтр не скрывал выдачу незаметно.
@@ -115,6 +125,24 @@ export default function SearchFilters({ filters, options, onChange, onReset, onN
           </FilterPill>
         )}
       </div>
+
+      <label className="filter-field">
+        <span className="inline-flex items-center gap-1.5"><Timer size={14} aria-hidden="true" /> Время в пути</span>
+        <span className="filter-select-wrap">
+          <select
+            value={filters.maxTravelMinutes || 0}
+            onChange={(event) => onChange('maxTravelMinutes', Number(event.target.value))}
+            disabled={!travel.originKnown && !filters.maxTravelMinutes}
+          >
+            <option value={0}>Любое</option>
+            {(options.travelLimits || []).map((minutes) => (
+              <option key={minutes} value={minutes}>Не дольше {minutes} мин</option>
+            ))}
+          </select>
+          <ChevronDown size={15} aria-hidden="true" />
+        </span>
+        <small className="filter-hint">{travelHint(travel, filters.maxTravelMinutes > 0)}</small>
+      </label>
 
       <details className="filter-more">
         <summary>

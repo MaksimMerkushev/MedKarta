@@ -43,6 +43,9 @@ import {
   ExternalLink,
   Wallet,
   HelpCircle,
+  Timer,
+  Bus,
+  CalendarCheck,
 } from 'lucide-react';
 import { doctorsData } from '@data/doctors.legacy.js';
 import { verifiedDoctors } from '@data/doctors';
@@ -51,7 +54,14 @@ import { ClinicsData } from '@data/clinics.js';
 import Toast, { useToast } from './Toast';
 import SearchFilters from './SearchFilters';
 import PlaceDoctorList from './PlaceDoctorList';
+import { DataReportButton, SearchFeedbackPrompt } from './FeedbackWidgets';
+import { track } from './services/analytics';
+import { buildExternalRouteUrl, EXTERNAL_MODE_BY_TRAVEL_MODE } from './externalMaps';
+import { GOSUSLUGI_APPOINTMENT_URL, omsHint, withReferral } from './booking';
+import { fetchTravelTimes } from './services/travelTimes';
 import { SORT_MODES } from '@shared/contract.js';
+import { ownershipCode } from '@shared/analytics.js';
+import { isPediatricRecord, specialtyCode } from '@shared/specialties.js';
 import { parseOpeningHours, scheduleIntervals } from '@shared/openingHours.js';
 import { useDebouncedValue } from './hooks/useDebouncedValue';
 import { isBoolean, isStringIdArray, useLocalStorageState } from './hooks/useLocalStorageState';
@@ -780,38 +790,37 @@ const formatPriceRange = (entry) => {
   return `${format(Number.isFinite(min) ? min : max)} ₽`;
 };
 
-// --- Внешние карты --------------------------------------------------------
+// --- Внешние карты, запись и время в пути ---------------------------------
 
-const YANDEX_ROUTE_TYPE = { driving: 'auto', foot: 'pd', bike: 'bc' };
-
-/**
- * Ссылка на Яндекс.Карты для одной или нескольких точек — на всех платформах.
- * Промежуточные точки Яндекс принимает через «~», поэтому весь маршрут
- * передаётся целиком. На телефоне ссылка открывается в приложении Яндекс.Карт,
- * если оно установлено, иначе в браузере.
+/*
+ * Средние городские скорости для оценки «по прямой», пока сервер считает
+ * настоящее время в пути (или если он недоступен). Те же значения, что
+ * у серверного запасного провайдера; поправка на извилистость улиц — 1,3.
  */
-const buildExternalMapUrl = (origin, targets, travelMode) => {
-  const points = (targets || []).filter((t) => Number.isFinite(t?.lat) && Number.isFinite(t?.lng));
-  if (points.length === 0) {
-    return null;
-  }
+const FALLBACK_SPEED_KMH = { driving: 28, bike: 14, foot: 4.5 };
+const DETOUR_FACTOR = 1.3;
+const TRAVEL_MODE_LABEL = { driving: 'на машине', foot: 'пешком', bike: 'на велосипеде' };
+const MAX_TRAVEL_POINTS = 600;
 
-  const coords = (point) => `${point.lat.toFixed(6)},${point.lng.toFixed(6)}`;
+const pointKey = (lat, lng) => `${Number(lat).toFixed(5)},${Number(lng).toFixed(5)}`;
 
-  const segments = [];
-  if (origin) {
-    segments.push(`${origin[0].toFixed(6)},${origin[1].toFixed(6)}`);
-  }
-  points.forEach((point) => segments.push(coords(point)));
+/** Тот же формат идентификатора места, что принимает сервер аналитики. */
+const PLACE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:_.-]{0,79}$/;
 
-  const params = new URLSearchParams({
-    rtext: segments.join('~'),
-    rtt: YANDEX_ROUTE_TYPE[travelMode] || 'auto',
-  });
-  return `https://yandex.ru/maps/?${params.toString()}`;
+const formatVerifiedAt = (value) => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}/.test(value)) return null;
+  const [year, month, day] = value.slice(0, 10).split('-');
+  return `${day}.${month}.${year}`;
 };
 
-const externalMapLabel = () => 'Открыть в Яндекс.Картах';
+const daysSince = (value, now) => {
+  const date = typeof value === 'string' ? new Date(`${value.slice(0, 10)}T00:00:00+03:00`) : null;
+  if (!date || Number.isNaN(date.getTime())) return null;
+  return Math.max(0, Math.floor((now.getTime() - date.getTime()) / 86_400_000));
+};
+
+/** Через сколько дней без проверки запись считается устаревшей. */
+const STALE_AFTER_DAYS = 60;
 
 // --- Состояние в адресной строке -----------------------------------------
 
@@ -834,11 +843,15 @@ const URL_KEYS = {
   minRating: 'rating',
   minExperience: 'exp',
   maxDistance: 'dist',
+  maxTravel: 'travel',
   flags: 'flags',
   focus: 'doc',
 };
 
 const FLAG_KEYS = ['open', 'fav', 'weekend', 'evening', 'online', 'wheelchair', 'children'];
+
+/** Варианты фильтра «не дольше N минут в пути». */
+const TRAVEL_LIMIT_OPTIONS = [10, 15, 20, 30, 45, 60];
 
 const readUrlState = () => {
   if (typeof window === 'undefined') {
@@ -878,6 +891,7 @@ const readUrlState = () => {
     minRating: number('minRating', 0, 5),
     minExperience: number('minExperience', 0, 40),
     maxDistance: number('maxDistance', 0, 50),
+    maxTravel: TRAVEL_LIMIT_OPTIONS.includes(Number(params.get(URL_KEYS.maxTravel))) ? Number(params.get(URL_KEYS.maxTravel)) : 0,
     focus: text('focus', 120),
     flags,
   };
@@ -902,6 +916,7 @@ const buildUrlQuery = (state) => {
   put('minRating', state.minRating || null, 0);
   put('minExperience', state.minExperience || null, 0);
   put('maxDistance', state.maxDistance || null, 0);
+  put('maxTravel', state.maxTravel || null, 0);
   put('focus', state.focus);
 
   if (state.services?.length) {
@@ -993,6 +1008,12 @@ export default function App() {
   const [minRating, setMinRating] = useState(INITIAL_URL_STATE.minRating ?? 0);
   const [minExperience, setMinExperience] = useState(INITIAL_URL_STATE.minExperience ?? 0);
   const [maxDistance, setMaxDistance] = useState(INITIAL_URL_STATE.maxDistance ?? 0);
+  const [maxTravelMinutes, setMaxTravelMinutes] = useState(INITIAL_URL_STATE.maxTravel ?? 0);
+  // Время в пути от точки отправления до каждого адреса — для фильтра
+  // «не дольше N минут». Считает сервер по графу дорог.
+  const [travelTimes, setTravelTimes] = useState({ key: null, status: 'idle', byPoint: null });
+  // Откуда пришёл последний поиск: от ассистента, из ссылки или из фильтров.
+  const searchSourceRef = useRef({ source: INITIAL_URL_STATE.q || INITIAL_URL_STATE.doctorProfile ? 'url' : 'filters', at: Date.now() });
   // Избранное и тема читаются из localStorage через валидатор: испорченное или
   // подменённое значение раньше роняло приложение на favorites.includes(...).
   const [favorites, setFavorites] = useLocalStorageState(FAVORITES_STORAGE_KEY, [], isStringIdArray);
@@ -1034,6 +1055,7 @@ export default function App() {
   const serviceSetRef = useRef(new Set());
 
   const handleApplyTriage = useCallback((result) => {
+    searchSourceRef.current = { source: 'assistant', at: Date.now() };
     // === МАРШРУТ ===
     // «Сбрось маршрут и фильтры» — это и то и другое. Раньше при обоих
     // флагах маршрут оставался на месте.
@@ -1064,6 +1086,7 @@ export default function App() {
       setMinRating(0);
       setMinExperience(0);
       setMaxDistance(0);
+      setMaxTravelMinutes(0);
       setSortBy('recommendation');
     }
 
@@ -1110,6 +1133,11 @@ export default function App() {
     }
     if (typeof result.maxDistance === 'number' && !Number.isNaN(result.maxDistance)) {
       setMaxDistance(Math.max(0, Math.min(50, result.maxDistance)));
+    }
+    if (Number.isInteger(result.maxTravelMinutes)) {
+      // Ближайший вариант из списка не меньше запрошенного: «25 минут» → 30.
+      const option = TRAVEL_LIMIT_OPTIONS.find((value) => value >= result.maxTravelMinutes) || TRAVEL_LIMIT_OPTIONS[TRAVEL_LIMIT_OPTIONS.length - 1];
+      setMaxTravelMinutes(option);
     }
 
     if (result.clinic && clinicSetRef.current.has(result.clinic)) {
@@ -1453,7 +1481,9 @@ export default function App() {
           : EMPTY_SERVICES;
         // Часть источников (OSM, ClinicsData) может прийти без features/services —
         // раньше это роняло рендер на doc.features.children.
-        const features = doc.features || {};
+        // «Детский ЛОР», «Педиатр», «Детская поликлиника» — детский приём,
+        // даже если в источнике флаг не проставлен (а он не проставлен ни у кого).
+        const features = { ...(doc.features || {}), children: isPediatricRecord(doc) };
         const services = Array.isArray(doc.services) ? doc.services : EMPTY_SERVICES;
 
         // Бейджи раньше дублировали друг друга: врач со стажем 20+ получал
@@ -1673,8 +1703,97 @@ export default function App() {
     routeTargets,
   ]);
 
+  /*
+   * Фильтр «не дольше N минут». Точка отправления должна быть настоящей:
+   * если геолокации нет и точку не выбрали вручную, «20 минут от центра
+   * Казани» ничего не значат, и фильтр не применяется (форма это объясняет).
+   */
+  const travelOriginKnown = isManualOrigin || !locationError;
+  const travelFilterActive = maxTravelMinutes > 0 && travelOriginKnown && Boolean(activeOrigin);
+  const travelKey = travelFilterActive
+    ? `${travelMode}|${maxTravelMinutes}|${activeOrigin[0].toFixed(3)},${activeOrigin[1].toFixed(3)}`
+    : null;
+
+  // Уникальные адреса справочника: на одном адресе бывают десятки врачей.
+  const travelPoints = useMemo(() => {
+    const unique = new Map();
+    for (const doc of sourceFacilities) {
+      const key = pointKey(doc.lat, doc.lng);
+      if (!unique.has(key)) unique.set(key, [Number(Number(doc.lat).toFixed(5)), Number(Number(doc.lng).toFixed(5))]);
+    }
+    return [...unique.entries()];
+  }, [sourceFacilities]);
+
+  useEffect(() => {
+    if (!travelKey) return undefined;
+    const controller = new AbortController();
+    const origin = activeOrigin;
+    const mode = travelMode;
+    const limit = maxTravelMinutes;
+
+    // «Считаем…» выводится из несовпадения ключа — отдельный setState не нужен.
+    const timerId = setTimeout(async () => {
+      // Больше 600 адресов сервер за раз не считает — берём ближайшие по прямой.
+      const points = travelPoints.length > MAX_TRAVEL_POINTS
+        ? [...travelPoints]
+          .sort((left, right) => calculateDistanceKm(origin, left[1]) - calculateDistanceKm(origin, right[1]))
+          .slice(0, MAX_TRAVEL_POINTS)
+        : travelPoints;
+      try {
+        const durations = await fetchTravelTimes({
+          origin,
+          mode,
+          maxMinutes: limit,
+          points: points.map(([, coords]) => coords),
+          signal: controller.signal,
+        });
+        const byPoint = new Map(points.map(([key], index) => [key, durations[index]]));
+        setTravelTimes({ key: travelKey, status: 'ready', byPoint });
+      } catch {
+        if (controller.signal.aborted) return;
+        setTravelTimes({ key: travelKey, status: 'error', byPoint: null });
+      }
+    }, 250);
+
+    return () => {
+      clearTimeout(timerId);
+      controller.abort();
+    };
+    // travelKey огрубляет точку до ~100 м: дрожание GPS не перезапрашивает время.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [travelKey, travelPoints]);
+
+  const travelEstimateState = !travelFilterActive
+    ? 'off'
+    : travelTimes.key === travelKey && travelTimes.status === 'ready'
+      ? 'exact'
+      : travelTimes.key === travelKey && travelTimes.status === 'error'
+        ? 'approximate'
+        : 'loading';
+
+  const travelFilteredDoctors = useMemo(() => {
+    if (!travelFilterActive) return filteredDoctors;
+    const limitSeconds = maxTravelMinutes * 60;
+    const routeTargetIds = new Set(routeTargets.map((target) => target.id));
+    const exact = travelEstimateState === 'exact';
+    const speedKmh = FALLBACK_SPEED_KMH[travelMode] || FALLBACK_SPEED_KMH.driving;
+
+    return filteredDoctors
+      .map((doc) => {
+        const seconds = exact
+          ? travelTimes.byPoint.get(pointKey(doc.lat, doc.lng)) ?? null
+          // Пока сервер считает (или если он недоступен) — грубая оценка по
+          // прямой с поправкой на извилистость улиц. Помечается как «≈».
+          : doc.distanceKm == null
+            ? null
+            : Math.round(((doc.distanceKm * DETOUR_FACTOR) / speedKmh) * 3600);
+        return { ...doc, travelSeconds: seconds, travelApproximate: !exact };
+      })
+      .filter((doc) => routeTargetIds.has(doc.id) || (doc.travelSeconds != null && doc.travelSeconds <= limitSeconds));
+  }, [filteredDoctors, travelFilterActive, maxTravelMinutes, travelEstimateState, travelTimes, travelMode, routeTargets]);
+
   const sortedDoctors = useMemo(() => {
-    const list = [...filteredDoctors];
+    const list = [...travelFilteredDoctors];
     const currentDayKey = dayKeys[now.getDay()];
 
     const compareByRecommendation = (left, right) => {
@@ -1704,6 +1823,10 @@ export default function App() {
       rating: (left, right) => right.rating - left.rating || right.experience - left.experience,
       experience: (left, right) => right.experience - left.experience || right.rating - left.rating,
       distance: (left, right) => {
+        // С фильтром по времени «ближе» — это быстрее доехать, а не короче по прямой.
+        if (left.travelSeconds != null && right.travelSeconds != null) {
+          return left.travelSeconds - right.travelSeconds || Number(right.openNow) - Number(left.openNow);
+        }
         const leftDistance = left.distanceKm == null ? Number.POSITIVE_INFINITY : left.distanceKm;
         const rightDistance = right.distanceKm == null ? Number.POSITIVE_INFINITY : right.distanceKm;
 
@@ -1716,7 +1839,7 @@ export default function App() {
 
     list.sort(comparators[sortBy] || compareByRecommendation);
     return list;
-  }, [filteredDoctors, now, sortBy]);
+  }, [travelFilteredDoctors, now, sortBy]);
 
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [expandedSchedules, setExpandedSchedules] = useState(() => new Set());
@@ -1751,6 +1874,7 @@ export default function App() {
         minRating,
         minExperience,
         maxDistance,
+        maxTravel: maxTravelMinutes,
         flags: [
           openOnly && 'open',
           favoritesOnly && 'fav',
@@ -1774,6 +1898,7 @@ export default function App() {
       minRating,
       minExperience,
       maxDistance,
+      maxTravelMinutes,
       openOnly,
       favoritesOnly,
       weekendOnly,
@@ -1833,8 +1958,163 @@ export default function App() {
     minRating,
     minExperience,
     maxDistance,
+    maxTravelMinutes,
     sortBy,
   ]);
+
+  // --- Аналитика и обратная связь -----------------------------------------
+
+  /*
+   * Какие фильтры включены — без значений: в событие уходит «был фильтр по
+   * клинике», а не какая клиника, и тем более не текст поиска.
+   */
+  const activeFilterKeys = useMemo(() => {
+    const keys = [];
+    if (deferredSearchQuery.trim()) keys.push('query');
+    if (selectedDoctorProfile !== 'all') keys.push('profile');
+    if (selectedFacilityType !== 'all') keys.push('facilityType');
+    if (selectedOwnership !== 'all') keys.push('ownership');
+    if (selectedClinic !== 'all') keys.push('clinic');
+    if (selectedDistrict !== 'all') keys.push('district');
+    if (selectedServices.length > 0) keys.push('services');
+    if (childrenOnly) keys.push('children');
+    if (openOnly) keys.push('open');
+    if (weekendOnly) keys.push('weekend');
+    if (eveningOnly) keys.push('evening');
+    if (onlineOnly) keys.push('online');
+    if (wheelchairOnly) keys.push('wheelchair');
+    if (favoritesOnly) keys.push('favorites');
+    if (minRating > 0) keys.push('minRating');
+    if (minExperience > 0) keys.push('minExperience');
+    if (maxDistance > 0) keys.push('maxDistance');
+    if (maxTravelMinutes > 0) keys.push('maxTravel');
+    return keys;
+  }, [
+    deferredSearchQuery, selectedDoctorProfile, selectedFacilityType, selectedOwnership, selectedClinic,
+    selectedDistrict, selectedServices, childrenOnly, openOnly, weekendOnly, eveningOnly, onlineOnly,
+    wheelchairOnly, favoritesOnly, minRating, minExperience, maxDistance, maxTravelMinutes,
+  ]);
+
+  // Подпись поиска — только для сравнения внутри вкладки, наружу не уходит.
+  const searchSignature = activeFilterKeys.length === 0
+    ? ''
+    : JSON.stringify([
+      normalizeText(deferredSearchQuery).trim(), selectedDoctorProfile, selectedFacilityType, selectedOwnership,
+      selectedClinic, selectedDistrict, selectedServices, cardDisplayMode, childrenOnly, openOnly, weekendOnly,
+      eveningOnly, onlineOnly, wheelchairOnly, favoritesOnly, minRating, minExperience, maxDistance,
+      maxTravelMinutes, maxTravelMinutes > 0 ? travelMode : null,
+    ]);
+
+  /*
+   * Специальность — только если она выбрана из справочника: в фильтре или
+   * строка поиска совпала с названием профиля целиком. Свободный текст
+   * поиска не разбирается и не отправляется.
+   */
+  const searchSpecialty = useMemo(() => {
+    if (selectedDoctorProfile !== 'all') return specialtyCode(selectedDoctorProfile);
+    const query = normalizeText(deferredSearchQuery).trim();
+    const profile = query ? doctorProfiles.find((item) => normalizeText(item) === query) : null;
+    return profile ? specialtyCode(profile) : null;
+  }, [selectedDoctorProfile, deferredSearchQuery, doctorProfiles]);
+
+  const resultCount = sortedDoctors.length;
+  const resultsSettled = travelEstimateState !== 'loading';
+  const lastTrackedSearchRef = useRef('');
+  const firstSearchRef = useRef(true);
+
+  useEffect(() => {
+    if (!searchSignature || !resultsSettled || searchSignature === lastTrackedSearchRef.current) return undefined;
+    // Событие — когда поиск «устоялся», а не на каждую нажатую букву.
+    const timerId = setTimeout(() => {
+      lastTrackedSearchRef.current = searchSignature;
+      const origin = searchSourceRef.current;
+      const source = origin.source === 'assistant' && Date.now() - origin.at < 5000
+        ? 'assistant'
+        : origin.source === 'url' && firstSearchRef.current
+          ? 'url'
+          : 'filters';
+      firstSearchRef.current = false;
+      track('search', {
+        source,
+        specialty: searchSpecialty,
+        ownership: selectedOwnership === 'all' ? 'any' : ownershipCode(selectedOwnership),
+        filters: activeFilterKeys,
+        results: Math.min(resultCount, 5000),
+        hasLocation: travelOriginKnown,
+        maxTravel: maxTravelMinutes || undefined,
+      });
+    }, 1500);
+    return () => clearTimeout(timerId);
+  }, [searchSignature, resultsSettled, resultCount, searchSpecialty, selectedOwnership, activeFilterKeys, travelOriginKnown, maxTravelMinutes]);
+
+  // Вопрос «Нашли, куда обратиться?»: после целевого действия или через
+  // 45 секунд на выдаче. Не чаще трёх раз за сессию и один раз на поиск.
+  const [feedbackFor, setFeedbackFor] = useState(null);
+  const feedbackDoneRef = useRef(new Set());
+  const feedbackShownRef = useRef(new Set());
+
+  const requestFeedback = useCallback((signature) => {
+    if (!signature || feedbackDoneRef.current.has(signature)) return;
+    if (!feedbackShownRef.current.has(signature) && feedbackShownRef.current.size >= 3) return;
+    feedbackShownRef.current.add(signature);
+    setFeedbackFor(signature);
+  }, []);
+
+  useEffect(() => {
+    if (!searchSignature || resultCount === 0) return undefined;
+    const timerId = setTimeout(() => requestFeedback(searchSignature), 45_000);
+    return () => clearTimeout(timerId);
+  }, [searchSignature, resultCount, requestFeedback]);
+
+  const handleFeedbackAnswer = useCallback((answer, reason) => {
+    track('feedback', { context: 'list', answer, reason: reason || undefined });
+    if (feedbackFor) feedbackDoneRef.current.add(feedbackFor);
+  }, [feedbackFor]);
+
+  const handleFeedbackDismiss = useCallback(() => {
+    if (feedbackFor) feedbackDoneRef.current.add(feedbackFor);
+    setFeedbackFor(null);
+  }, [feedbackFor]);
+
+  const showFeedbackPrompt = Boolean(feedbackFor) && feedbackFor === searchSignature && resultCount > 0;
+
+  /** Поля карточки для событий: тип, форма собственности, профиль, id записи. */
+  const placeFields = useCallback((doc) => ({
+    kind: doc.entityKind === 'doctor' ? 'doctor' : 'facility',
+    ownership: ownershipCode(doc.ownership),
+    specialty: doc.entityKind === 'doctor' ? specialtyCode(doc.doctorProfile || doc.specialty) ?? undefined : undefined,
+    placeId: PLACE_ID_PATTERN.test(String(doc.id)) ? String(doc.id) : undefined,
+  }), []);
+
+  /** Целевое действие: звонок, сайт, Госуслуги, внешние карты. */
+  const trackContact = useCallback((doc, channel) => {
+    track('contact_click', { channel, ...placeFields(doc) });
+    requestFeedback(searchSignature);
+  }, [placeFields, requestFeedback, searchSignature]);
+
+  const trackExternalMap = useCallback((provider, mode, targets, doc = null) => {
+    track('external_map_click', {
+      provider,
+      mode,
+      stops: Math.max(1, Math.min(6, targets.length)),
+      placeId: doc && PLACE_ID_PATTERN.test(String(doc.id)) ? String(doc.id) : undefined,
+    });
+    requestFeedback(searchSignature);
+  }, [requestFeedback, searchSignature]);
+
+  const lastRouteDataRef = useRef(null);
+  useEffect(() => {
+    if (!routeData || routeData === lastRouteDataRef.current || routeTargets.length === 0) return undefined;
+    lastRouteDataRef.current = routeData;
+    track('route_build', {
+      mode: travelMode,
+      stops: Math.min(6, routeTargets.length),
+      outcome: routeData.error ? 'failed' : 'ok',
+    });
+    if (routeData.error) return undefined;
+    const timerId = setTimeout(() => requestFeedback(searchSignature), 1200);
+    return () => clearTimeout(timerId);
+  }, [routeData, routeTargets.length, travelMode, requestFeedback, searchSignature]);
 
   const favoritesCount = enrichedDoctors.filter((doc) => doc.isFavorite).length;
   // Сколько записей фильтр «Открытые сейчас» прячет не потому, что они закрыты,
@@ -1988,13 +2268,46 @@ export default function App() {
     setFlyToTarget([nearestOpenDoctor.lat, nearestOpenDoctor.lng]);
   };
 
-  // Ссылка на весь маршрут во внешних картах: там есть голосовое ведение,
-  // которого у нас нет. Яндекс принимает промежуточные точки, Apple — только
-  // конечную, поэтому buildExternalMapUrl разводит эти случаи.
-  const externalRouteUrl = useMemo(
-    () => buildExternalMapUrl(activeOrigin, routeTargets, travelMode),
-    [activeOrigin, routeTargets, travelMode],
-  );
+  /*
+   * Ссылки «Как добраться» в Яндекс Карты и 2ГИС. МедКарта подбирает, куда
+   * обратиться; вести до двери — с пробками, автобусами и голосом — лучше
+   * умеют навигаторы. Без настоящей точки отправления ссылка строится «от
+   * моего местоположения», а не от центра Казани.
+   */
+  const renderExternalRouteLinks = (targets, { doc = null, label = 'Как добраться:', className = '' } = {}) => {
+    if (!targets || targets.length === 0) return null;
+    const origin = travelOriginKnown ? activeOrigin : null;
+    const mode = EXTERNAL_MODE_BY_TRAVEL_MODE[travelMode] || 'auto';
+    const links = [
+      { provider: 'yandex', mode, text: 'Яндекс Карты' },
+      { provider: '2gis', mode, text: '2ГИС' },
+      // Общественного транспорта в нашем движке нет — честно отправляем туда, где он есть.
+      { provider: 'yandex', mode: 'transit', text: 'На транспорте', icon: Bus },
+    ];
+    return (
+      <div className={`flex flex-wrap items-center gap-1.5 text-xs ${className}`}>
+        {label && <span className="mr-0.5 text-slate-500 dark:text-slate-400">{label}</span>}
+        {links.map((link) => {
+          const href = buildExternalRouteUrl(link.provider, origin, targets, link.mode);
+          if (!href) return null;
+          return (
+            <a
+              key={`${link.provider}-${link.mode}`}
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() => trackExternalMap(link.provider, link.mode, targets, doc)}
+              className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 font-semibold text-slate-600 transition-colors hover:border-blue-300 hover:text-blue-700 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:text-blue-300"
+            >
+              {link.icon && <link.icon size={12} aria-hidden="true" />}
+              {link.text}
+              <ExternalLink size={10} className="opacity-50" aria-hidden="true" />
+            </a>
+          );
+        })}
+      </div>
+    );
+  };
 
   const stableSetRouteData = useCallback((data) => {
     setRouteData(data);
@@ -2142,7 +2455,12 @@ export default function App() {
           : 'mt-2 w-full text-xs font-medium py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition-all bg-blue-50 text-blue-600 border border-blue-200 dark:bg-blue-900 dark:text-blue-300 dark:border-blue-800';
 
       return (
-        <Marker key={`group-${key}`} position={stablePosition(key, lat, lng)} icon={icon}>
+        <Marker
+          key={`group-${key}`}
+          position={stablePosition(key, lat, lng)}
+          icon={icon}
+          eventHandlers={{ popupopen: () => track('result_open', { surface: 'map', ...placeFields(primary) }) }}
+        >
           <Popup
             // На телефоне окно не шире экрана: раньше CSS ограничивал обёртку
             // 280 px при содержимом 300 px, и поиск, сердечки и счётчики
@@ -2245,7 +2563,7 @@ export default function App() {
         </Marker>
       );
     });
-  }, [sortedDoctors, routeTargets, cardDisplayMode, routeStarted, removeFromRoute, handleRouteClick, toggleFavorite, isMobile]);
+  }, [sortedDoctors, routeTargets, cardDisplayMode, routeStarted, removeFromRoute, handleRouteClick, toggleFavorite, isMobile, placeFields]);
 
   const resetToGPS = () => {
     setIsManualOrigin(false);
@@ -2276,6 +2594,7 @@ export default function App() {
     setMinRating(0);
     setMinExperience(0);
     setMaxDistance(0);
+    setMaxTravelMinutes(0);
     setSortBy('recommendation');
     setVisibleCount(PAGE_SIZE);
   };
@@ -2362,13 +2681,18 @@ export default function App() {
     );
   };
 
-  const renderListingCard = (doc) => {
+  const renderListingCard = (doc, index = 0) => {
     const isTarget = routeTargets.some(t => t.id === doc.id);
     const isDoctorCard = doc.entityKind === 'doctor';
     const distanceLabel = doc.distanceKm == null ? 'Геолокация недоступна' : formatDistance(doc.distanceKm * 1000);
     const hasVisibleDescription = Boolean((doc.description || '').trim()) && !/данные из openstreetmap/i.test(String(doc.description));
     const isScheduleOpen = expandedSchedules.has(doc.id);
-    const externalMapUrl = buildExternalMapUrl(activeOrigin, [doc], travelMode);
+    const isState = doc.ownership === 'Государственная';
+    const oms = omsHint(doc);
+    const referralUrl = withReferral(doc.websiteUrl, 'card');
+    const verifiedLabel = formatVerifiedAt(doc.verifiedAt);
+    const verifiedDays = daysSince(doc.verifiedAt, now);
+    const isOsm = /^osm$/i.test(String(doc.source || '')) || /^osm-/.test(String(doc.id || ''));
 
     return (
       <div
@@ -2428,18 +2752,32 @@ export default function App() {
 
         {/* Пометка о происхождении данных: запись взята с официального сайта
             учреждения, и на неё можно перейти и проверить самому. */}
-        {toSafeUrl(doc.sourceUrl) && (
+        {toSafeUrl(doc.sourceUrl) ? (
           <a
             href={toSafeUrl(doc.sourceUrl)}
             target="_blank"
             rel="noopener noreferrer"
-            className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200"
-            title={`Данные с официального сайта учреждения. Сверено ${doc.verifiedAt || ''}`}
+            onClick={() => trackContact(doc, 'source')}
+            className={`mt-3 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold transition-colors ${
+              verifiedDays != null && verifiedDays > STALE_AFTER_DAYS
+                ? 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/40 dark:text-amber-200'
+                : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200'
+            }`}
+            title="Данные с официального сайта учреждения — откройте, чтобы сверить"
           >
             <ShieldCheck size={13} aria-hidden="true" />
-            Проверено по официальному сайту
+            {verifiedLabel ? `Официальный сайт · проверено ${verifiedLabel}` : 'Проверено по официальному сайту'}
             <ExternalLink size={11} className="opacity-60" aria-hidden="true" />
           </a>
+        ) : isOsm ? (
+          <p className="mt-3 text-[11px] leading-4 text-slate-400 dark:text-slate-500" title="Открытые данные OpenStreetMap: адрес и часы работы могут быть неточны">
+            Данные: OpenStreetMap · часы и телефон уточняйте
+          </p>
+        ) : null}
+        {verifiedDays != null && verifiedDays > STALE_AFTER_DAYS && (
+          <p className="mt-1.5 text-[11px] leading-4 text-amber-700 dark:text-amber-300">
+            Сведения проверялись {verifiedDays} дн. назад — перед визитом уточните расписание.
+          </p>
         )}
 
         <div className="mt-4 grid grid-cols-1 gap-3 text-sm text-slate-600 sm:grid-cols-2 dark:text-slate-300">
@@ -2456,7 +2794,10 @@ export default function App() {
             {doc.weekSchedule ? (
               <button
                 type="button"
-                onClick={() => toggleSchedule(doc.id)}
+                onClick={() => {
+                  if (!isScheduleOpen) track('result_open', { surface: 'list', rank: Math.min(index + 1, 500), ...placeFields(doc) });
+                  toggleSchedule(doc.id);
+                }}
                 aria-expanded={isScheduleOpen}
                 className="inline-flex items-center gap-1 text-left underline decoration-dotted underline-offset-4 transition-colors hover:text-blue-600 dark:hover:text-blue-400"
               >
@@ -2536,6 +2877,15 @@ export default function App() {
           <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">{doc.ownership}</span>
           {doc.district && <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">{doc.district}</span>}
           <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">{distanceLabel}</span>
+          {doc.travelSeconds != null && (
+            <span
+              className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700 dark:bg-blue-900 dark:text-blue-200"
+              title={doc.travelApproximate ? 'Оценка по расстоянию: точное время ещё считается' : 'Время по дорогам, без учёта пробок'}
+            >
+              <Timer size={12} aria-hidden="true" />
+              {doc.travelApproximate ? '≈ ' : ''}{Math.max(1, Math.round(doc.travelSeconds / 60))} мин {TRAVEL_MODE_LABEL[travelMode] || ''}
+            </span>
+          )}
           {doc.features.onlineBooking && <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900 dark:text-emerald-200">Онлайн-запись</span>}
           {doc.features.wheelchair && <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700 dark:bg-blue-900 dark:text-blue-200">Доступная среда</span>}
           {doc.features.children && <span className="rounded-full bg-pink-50 px-3 py-1 text-xs font-semibold text-pink-700 dark:bg-pink-900 dark:text-pink-200">Детский приём</span>}
@@ -2552,23 +2902,55 @@ export default function App() {
 
         {hasVisibleDescription && <p className="mt-4 text-sm leading-6 text-slate-600 dark:text-slate-400">{doc.description}</p>}
 
-        {/* Контакты: телефон и сайт лежали в данных, но в интерфейс не выходили.
-            На телефоне звонок — основное целевое действие, поэтому он первым. */}
-        {(doc.telHref || doc.websiteUrl) && (
-          <div className="mt-4 flex flex-wrap gap-2">
+        {/*
+          Переход к записи. Своей записи у МедКарты нет: ведём туда, где
+          записываются, и честно говорим, как это устроено по ОМС.
+        */}
+        {oms && (
+          <div className="mt-4 rounded-2xl border border-blue-100 bg-blue-50/60 p-3 text-xs leading-5 text-slate-600 dark:border-blue-900 dark:bg-blue-950/30 dark:text-slate-300">
+            <p>{oms.text}</p>
+            <a
+              href={GOSUSLUGI_APPOINTMENT_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() => trackContact(doc, 'gosuslugi')}
+              className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-blue-700"
+            >
+              <CalendarCheck size={14} aria-hidden="true" /> Записаться через Госуслуги
+              <ExternalLink size={11} className="opacity-70" aria-hidden="true" />
+            </a>
+          </div>
+        )}
+
+        {(doc.telHref || referralUrl) && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {!isState && referralUrl && (
+              <a
+                href={referralUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => trackContact(doc, 'website')}
+                className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-700"
+              >
+                <CalendarCheck size={16} aria-hidden="true" /> Записаться на сайте
+                <ExternalLink size={13} className="opacity-70" aria-hidden="true" />
+              </a>
+            )}
             {doc.telHref && (
               <a
                 href={doc.telHref}
+                onClick={() => trackContact(doc, 'phone')}
                 className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition-colors hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200"
               >
                 <Phone size={16} aria-hidden="true" /> {doc.phone}
               </a>
             )}
-            {doc.websiteUrl && (
+            {isState && referralUrl && (
               <a
-                href={doc.websiteUrl}
+                href={referralUrl}
                 target="_blank"
                 rel="noopener noreferrer"
+                onClick={() => trackContact(doc, 'website')}
                 className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600"
               >
                 <Globe size={16} aria-hidden="true" /> Сайт
@@ -2577,6 +2959,8 @@ export default function App() {
             )}
           </div>
         )}
+
+        {renderExternalRouteLinks([doc], { doc, className: 'mt-3' })}
 
         <div className={`mt-4 grid gap-2 ${isMobile ? 'grid-cols-1' : 'grid-cols-2'}`}>
           {renderRouteButton(doc, false)}
@@ -2590,7 +2974,11 @@ export default function App() {
           </button>
         </div>
 
-
+        {PLACE_ID_PATTERN.test(String(doc.id)) && (
+          <DataReportButton
+            onReport={(reason) => track('data_report', { reason, kind: isDoctorCard ? 'doctor' : 'facility', placeId: String(doc.id) })}
+          />
+        )}
       </div>
     );
   };
@@ -2612,6 +3000,7 @@ export default function App() {
     clinic: selectedClinic, district: selectedDistrict, services: selectedServices,
     childrenOnly, openOnly, favoritesOnly, weekendOnly, eveningOnly,
     onlineOnly, wheelchairOnly, minRating, minExperience, maxDistance,
+    maxTravelMinutes,
   };
   const filterSetters = {
     searchQuery: setSearchQuery, doctorProfile: setSelectedDoctorProfile,
@@ -2621,6 +3010,7 @@ export default function App() {
     weekendOnly: setWeekendOnly, eveningOnly: setEveningOnly,
     onlineOnly: setOnlineOnly, wheelchairOnly: setWheelchairOnly,
     minRating: setMinRating, minExperience: setMinExperience, maxDistance: setMaxDistance,
+    maxTravelMinutes: setMaxTravelMinutes,
   };
   const handleFilterChange = (field, value) => {
     if (field === 'cardDisplayMode') {
@@ -2776,7 +3166,12 @@ export default function App() {
             <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
               <SearchFilters
                 filters={filters}
-                options={{ doctorProfiles, facilityTypes, clinics, services: allServices }}
+                options={{ doctorProfiles, facilityTypes, clinics, services: allServices, travelLimits: TRAVEL_LIMIT_OPTIONS }}
+                travel={{
+                  modeLabel: TRAVEL_MODE_LABEL[travelMode] || '',
+                  originKnown: travelOriginKnown,
+                  state: travelEstimateState,
+                }}
                 onChange={handleFilterChange}
                 onReset={clearFilters}
                 onNearest={handleGoToNearest}
@@ -2808,6 +3203,9 @@ export default function App() {
                 </p>
               )}
               <div className="space-y-3">
+                {showFeedbackPrompt && (
+                  <SearchFeedbackPrompt key={feedbackFor} onAnswer={handleFeedbackAnswer} onDismiss={handleFeedbackDismiss} />
+                )}
                 {sortedDoctors.length === 0 ? (
                   <div className="rounded-3xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-400">
                     {/* Пустое состояние теперь называет конкретную причину:
@@ -2832,11 +3230,22 @@ export default function App() {
                         <p className="mt-1">
                           {openOnly && unknownScheduleCount > 0
                             ? `Возможно, дело в фильтре «Открытые сейчас»: у ${unknownScheduleCount} объектов график не указан, и они не проходят проверку.`
-                            : searchQuery
+                            : travelFilterActive
+                              ? `В пределах ${maxTravelMinutes} мин ${TRAVEL_MODE_LABEL[travelMode] || ''} ничего не нашлось. Увеличьте время в пути или смените способ передвижения.`
+                              : searchQuery
                               ? `По запросу «${searchQuery}» совпадений нет. Проверьте раскладку или попробуйте более общее слово.`
                               : 'Ослабьте фильтры или очистите поиск, чтобы вернуть карточки.'}
                         </p>
                         <div className="mt-4 flex flex-wrap justify-center gap-2">
+                          {travelFilterActive && (
+                            <button
+                              type="button"
+                              onClick={() => setMaxTravelMinutes(0)}
+                              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 font-semibold text-slate-600 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300"
+                            >
+                              Снять ограничение по времени
+                            </button>
+                          )}
                           {openOnly && (
                             <button
                               type="button"
@@ -3003,7 +3412,7 @@ export default function App() {
                   ) : (
                     <>
                       <div className="text-3xl font-extrabold tracking-tight text-slate-800 dark:text-white">{formatTime(routeData.time)}</div>
-                      <div className="mt-1 font-medium text-slate-500 dark:text-slate-400">{formatDistance(routeData.distance)}</div>
+                      <div className="mt-1 font-medium text-slate-500 dark:text-slate-400">{formatDistance(routeData.distance)} · без учёта пробок</div>
                     </>
                   )
                 ) : (
@@ -3013,6 +3422,8 @@ export default function App() {
                   </div>
                 )}
               </div>
+
+              {renderExternalRouteLinks(routeTargets, { label: 'Открыть в:', className: 'justify-center border-t border-slate-100 px-3 py-2.5 dark:border-slate-700' })}
 
               <div className="flex flex-col gap-2 border-t border-slate-100 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-700/50">
                 {!routeStarted ? (
@@ -3192,7 +3603,7 @@ export default function App() {
                 ) : (
                   <>
                     <div className={`${isMobile ? 'text-3xl' : 'text-4xl'} font-extrabold tracking-tight text-slate-800 dark:text-white`}>{formatTime(routeData.time)}</div>
-                    <div className="mt-1 font-medium text-slate-500 dark:text-slate-400">{formatDistance(routeData.distance)}</div>
+                    <div className="mt-1 font-medium text-slate-500 dark:text-slate-400">{formatDistance(routeData.distance)} · без учёта пробок</div>
                   </>
                 )
               ) : (
@@ -3202,6 +3613,8 @@ export default function App() {
                 </div>
               )}
             </div>
+
+            {renderExternalRouteLinks(routeTargets, { label: 'Открыть в:', className: 'justify-center border-t border-slate-100 px-4 py-3 dark:border-slate-700' })}
 
             <div className="flex flex-col gap-2 border-t border-slate-100 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-700/50">
               {!routeStarted ? (

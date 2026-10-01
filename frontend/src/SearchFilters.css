@@ -112,3 +112,6 @@
   .filter-field input[type="range"] { min-height: 44px; }
   .active-filters li button { min-height: 36px; }
 }
+
+/* Подпись под полем: что именно посчитано и почему фильтр не работает. */
+.filter-hint { display: block; font-size: 11px; line-height: 1.35; font-weight: 400; color: var(--panel-secondary); opacity: 0.9; }
