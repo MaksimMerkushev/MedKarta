@@ -167,7 +167,8 @@ const validateConstraints = (raw, allowedDistricts) => {
         break;
       }
       case 'max_distance_km': {
-        if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > 50) {
+        // Меньше 300 м — не ограничение, а способ обнулить выдачу (1e-300 проходило).
+        if (typeof value !== 'number' || !Number.isFinite(value) || value < 0.3 || value > 50) {
           return fail(VALIDATION_ERROR.BAD_CONSTRAINT, key);
         }
         result[key] = value;

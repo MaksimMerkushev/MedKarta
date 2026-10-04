@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { ANALYTICS_LIMITS, sanitizeEvent } from '../../shared/analytics.js';
 import { createEventStore } from '../analytics/eventStore.js';
 import { readBody, respondJson, verifyOrigin } from '../http/request.js';
-import { createRateLimiter, getClientIp } from '../http/rateLimit.js';
+import { createRateLimiter, getClientIp, rateLimitKey } from '../http/rateLimit.js';
 import { logger } from '../observability/safeLogger.js';
 import { metrics } from '../observability/metrics.js';
 
@@ -31,6 +31,33 @@ const ROOT = fileURLToPath(new URL('../..', import.meta.url));
  */
 const checkEventsRateLimit = createRateLimiter({ maxPerIp: 120, maxPerInstance: Number.POSITIVE_INFINITY });
 
+/*
+ * Суточный потолок событий с адреса. Лимит запросов один не спасал: с одного
+ * адреса за полтора часа выбирался весь суточный потолок журнала, и события
+ * настоящих пользователей в этот день отбрасывались. Живая сессия — десятки
+ * событий; 1500 в сутки — запас для офиса за одним NAT.
+ */
+export const createDailyEventQuota = ({ maxPerIp = 1_500, maxTracked = 20_000, now = () => Date.now() } = {}) => {
+  const counters = new Map();
+  let day = null;
+  return (address, count) => {
+    const today = Math.floor(now() / 86_400_000);
+    if (today !== day) {
+      day = today;
+      counters.clear();
+    }
+    const key = rateLimitKey(address);
+    const used = counters.get(key) || 0;
+    const allowed = Math.max(0, Math.min(count, maxPerIp - used));
+    counters.delete(key);
+    counters.set(key, used + allowed);
+    while (counters.size > maxTracked) counters.delete(counters.keys().next().value);
+    return allowed;
+  };
+};
+
+const defaultDailyQuota = createDailyEventQuota();
+
 let defaultStore = null;
 
 const getDefaultStore = () => {
@@ -38,6 +65,7 @@ const getDefaultStore = () => {
   defaultStore ||= createEventStore({
     dir: process.env.ANALYTICS_DIR || path.join(ROOT, 'var', 'analytics'),
     maxEventsPerDay: Number(process.env.ANALYTICS_MAX_EVENTS_PER_DAY) || undefined,
+    maxTotalBytes: Number(process.env.ANALYTICS_MAX_TOTAL_MB) * 1024 * 1024 || undefined,
     retentionDays: Number(process.env.ANALYTICS_RETENTION_DAYS) || undefined,
     logger,
   });
@@ -54,7 +82,11 @@ const unpack = (body) => {
 /**
  * @param {object} [deps] для тестов: свой журнал вместо файлового
  */
-export const createEventsHandler = ({ store = undefined, rateLimit = checkEventsRateLimit } = {}) =>
+export const createEventsHandler = ({
+  store = undefined,
+  rateLimit = checkEventsRateLimit,
+  dailyQuota = defaultDailyQuota,
+} = {}) =>
   async function eventsHandler(req, res) {
     if (req.method === 'OPTIONS') {
       res.statusCode = 204;
@@ -74,7 +106,8 @@ export const createEventsHandler = ({ store = undefined, rateLimit = checkEvents
       return;
     }
 
-    const limit = rateLimit(getClientIp(req));
+    const clientIp = getClientIp(req);
+    const limit = rateLimit(clientIp);
     if (!limit.allowed) {
       res.setHeader('Retry-After', String(limit.retryAfterSeconds));
       respondJson(res, 429, { error: 'Слишком много запросов.' });
@@ -94,9 +127,11 @@ export const createEventsHandler = ({ store = undefined, rateLimit = checkEvents
       return;
     }
 
-    const events = raw.map(sanitizeEvent).filter(Boolean);
-    const rejected = raw.length - events.length;
+    const valid = raw.map(sanitizeEvent).filter(Boolean);
+    const rejected = raw.length - valid.length;
     if (rejected > 0) metrics.increment('analytics.rejected', {}, rejected);
+    const events = valid.slice(0, dailyQuota(clientIp, valid.length));
+    if (events.length < valid.length) metrics.increment('analytics.quota_exceeded', {}, valid.length - events.length);
 
     const target = store === undefined ? getDefaultStore() : store;
     if (target && events.length > 0) {

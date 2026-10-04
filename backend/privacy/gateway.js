@@ -50,6 +50,8 @@ import {
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{12,64}$/;
 
+const yieldToEventLoop = () => new Promise((resolve) => setImmediate(resolve));
+
 /** Приводит идентификатор сессии к безопасному виду или выдаёт новый. */
 export const normalizeSessionId = (value) =>
   typeof value === 'string' && SESSION_ID_PATTERN.test(value) ? value : randomUUID();
@@ -366,7 +368,16 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
     let analyses;
     let classification;
     try {
-      analyses = messages.map((message) => ({ message, ...analyzeTurn(message.content) }));
+      /*
+       * Между репликами — уступка циклу событий. Разбор синхронный, и
+       * двенадцать длинных реплик раньше занимали ядро одним куском: статика
+       * и лёгкие запросы других пользователей ждали до конца разбора.
+       */
+      analyses = [];
+      for (const message of messages) {
+        analyses.push({ message, ...analyzeTurn(message.content) });
+        await yieldToEventLoop();
+      }
 
       /*
        * Жалоба классифицируется по ВСЕЙ истории, а не только по последней
@@ -391,9 +402,18 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
       };
       const perTurn = analyses.map((analysis) => classifier(masked(analysis)));
       const lastTurn = perTurn[perTurn.length - 1] || classifier('');
+      /*
+       * Красные флаги проверяются и по тексту БЕЗ маскировки. Маскировка
+       * защищает от ложных диагнозов в фамилиях, но «У мамы Инсульт» с
+       * заглавной принималось за имя: слово вырезалось, флаг терялся, и
+       * вместо «звоните 103» пользователь получал просьбу уточнить запрос.
+       * Для неотложных состояний ложная тревога дешевле пропуска.
+       */
+      const lastRaw = analyses.length > 0 ? analyses[analyses.length - 1].message.content : '';
+      const rawEmergency = lastTurn.emergency ? null : classifier(lastRaw).emergency;
 
       classification = {
-        emergency: lastTurn.emergency,
+        emergency: lastTurn.emergency || rawEmergency,
         hasMedicalText: perTurn.some((item) => item.hasMedicalText),
         isChild: perTurn.some((item) => item.isChild),
         confidence: Math.max(...perTurn.map((item) => item.confidence), 0),

@@ -16,6 +16,8 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pipeline } from 'node:stream';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 
 import chatHandler from './api/chat.js';
@@ -24,6 +26,7 @@ import eventsHandler from './api/events.js';
 import routeHandler from './api/route.js';
 import travelTimesHandler from './api/travelTimes.js';
 import { applySecurityHeaders } from './http/securityHeaders.js';
+import { rateLimitKey, validateTrustProxy } from './http/rateLimit.js';
 import { getDefaultRoutingEngine } from './routing/engine.js';
 import { logger } from './observability/safeLogger.js';
 
@@ -37,6 +40,18 @@ if (typeof process.loadEnvFile === 'function') {
   } catch {
     // .env может отсутствовать, если переменные заданы в окружении
   }
+}
+
+/*
+ * Неверное значение TRUST_PROXY («true», «yes») раньше молча читалось как 0:
+ * за nginx все пользователи попадали в одно ведро лимита. Теперь — отказ
+ * от запуска с понятной причиной.
+ */
+try {
+  validateTrustProxy();
+} catch (error) {
+  logger.error('server.bad_config', error, { code: 'TRUST_PROXY' });
+  process.exit(1);
 }
 
 const PORT = Number(process.env.PORT) || 3001;
@@ -83,7 +98,53 @@ const resolveStaticPath = (requestUrl) => {
   return candidate;
 };
 
-const sendFile = (res, filePath, status = 200) => {
+/*
+ * Сжатие текстовых файлов. Без него main.js уходил на каждый визит целиком
+ * (3,7 МБ вместо ~0,3 МБ), и одно ядро упиралось в отдачу статики раньше,
+ * чем в API. Сжатый вариант считается один раз и живёт в памяти, пока файл
+ * не изменился. В продакшене статику лучше отдавать nginx (gzip_static) —
+ * см. docs/deployment.md; это запасной путь для автономного запуска.
+ */
+const COMPRESSIBLE = new Set(['.html', '.js', '.css', '.json', '.svg', '.webmanifest']);
+const MAX_GZIP_SOURCE_BYTES = 8 * 1024 * 1024;
+const MAX_GZIP_CACHE_BYTES = 48 * 1024 * 1024;
+const gzipCache = new Map();
+let gzipCacheBytes = 0;
+
+const gzipFile = (filePath, stats) => {
+  const key = `${stats.size}:${stats.mtimeMs}`;
+  const cached = gzipCache.get(filePath);
+  if (cached && cached.key === key) return cached.promise;
+  if (cached) {
+    gzipCache.delete(filePath);
+    gzipCacheBytes -= cached.bytes;
+  }
+  if (stats.size > MAX_GZIP_SOURCE_BYTES) return Promise.resolve(null);
+
+  const entry = { key, bytes: 0, promise: null };
+  entry.promise = fs.promises
+    .readFile(filePath)
+    .then((data) => new Promise((resolve) => zlib.gzip(data, { level: 6 }, (error, buffer) => resolve(error ? null : buffer))))
+    .then((buffer) => {
+      if (!buffer || gzipCacheBytes + buffer.length > MAX_GZIP_CACHE_BYTES) {
+        gzipCache.delete(filePath);
+        return buffer;
+      }
+      entry.bytes = buffer.length;
+      gzipCacheBytes += buffer.length;
+      return buffer;
+    })
+    .catch(() => {
+      gzipCache.delete(filePath);
+      return null;
+    });
+  gzipCache.set(filePath, entry);
+  return entry.promise;
+};
+
+const acceptsGzip = (req) => /\bgzip\b/i.test(String(req.headers['accept-encoding'] || ''));
+
+const sendFile = async (req, res, filePath, stats, status = 200) => {
   const extension = path.extname(filePath);
   res.statusCode = status;
   res.setHeader('Content-Type', MIME[extension] || 'application/octet-stream');
@@ -96,14 +157,46 @@ const sendFile = (res, filePath, status = 200) => {
       ? 'public, max-age=31536000, immutable'
       : 'no-cache',
   );
-  const stream = fs.createReadStream(filePath);
-  // Файл мог исчезнуть между stat и чтением (пересборка dist/): без обработчика
-  // ошибка потока тоже уронила бы процесс.
-  stream.on('error', () => {
-    if (!res.headersSent) res.statusCode = 404;
+  /*
+   * ETag и Last-Modified: с «no-cache» браузер теперь переспрашивает и
+   * получает 304 без тела, а не скачивает файл заново на каждом визите.
+   */
+  const etag = `W/"${stats.size.toString(16)}-${Math.floor(stats.mtimeMs).toString(16)}"`;
+  res.setHeader('ETag', etag);
+  res.setHeader('Last-Modified', stats.mtime.toUTCString());
+  const compressible = COMPRESSIBLE.has(extension);
+  if (compressible) res.setHeader('Vary', 'Accept-Encoding');
+
+  if (req.headers['if-none-match'] === etag) {
+    res.statusCode = 304;
     res.end();
-  });
-  stream.pipe(res);
+    return;
+  }
+
+  if (compressible && stats.size > 1024 && acceptsGzip(req)) {
+    const gzipped = await gzipFile(filePath, stats);
+    if (gzipped) {
+      res.setHeader('Content-Encoding', 'gzip');
+      res.setHeader('Content-Length', String(gzipped.length));
+      res.end(req.method === 'HEAD' ? undefined : gzipped);
+      return;
+    }
+  }
+
+  res.setHeader('Content-Length', String(stats.size));
+  if (req.method === 'HEAD') {
+    res.end();
+    return;
+  }
+  /*
+   * pipeline, а не pipe: при обрыве соединения клиентом pipe не закрывал
+   * файловый поток. Две тысячи оборванных скачиваний оставляли две тысячи
+   * открытых дескрипторов, пока лимит не кончался и сайт не начинал отвечать
+   * 404 всем. pipeline закрывает поток при любой ошибке с обеих сторон.
+   * Файл мог исчезнуть между stat и чтением (пересборка dist/) — это тоже
+   * просто закрытие ответа.
+   */
+  pipeline(fs.createReadStream(filePath), res, () => {});
 };
 
 /*
@@ -153,6 +246,14 @@ const handleRequest = async (req, res) => {
     return;
   }
 
+  // Статика — только чтение. Раньше POST, DELETE и TRACE тоже получали файл с 200.
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.statusCode = 405;
+    res.setHeader('Allow', 'GET, HEAD');
+    res.end();
+    return;
+  }
+
   const filePath = resolveStaticPath(req.url || '/');
   if (!filePath) {
     res.statusCode = 400;
@@ -160,23 +261,21 @@ const handleRequest = async (req, res) => {
     return;
   }
 
-  fs.stat(filePath, (error, stats) => {
-    if (!error && stats.isFile()) {
-      sendFile(res, filePath);
-      return;
-    }
-    // SPA: любой неизвестный путь отдаёт index.html, маршрутизацию делает клиент.
-    const index = path.join(DIST, 'index.html');
-    fs.access(index, fs.constants.R_OK, (indexError) => {
-      if (indexError) {
-        res.statusCode = 404;
-        res.setHeader('Content-Type', 'application/json; charset=utf-8');
-        res.end(JSON.stringify({ error: 'Not found' }));
-        return;
-      }
-      sendFile(res, index, 200);
-    });
-  });
+  const stats = await fs.promises.stat(filePath).catch(() => null);
+  if (stats?.isFile()) {
+    await sendFile(req, res, filePath, stats);
+    return;
+  }
+  // SPA: любой неизвестный путь отдаёт index.html, маршрутизацию делает клиент.
+  const index = path.join(DIST, 'index.html');
+  const indexStats = await fs.promises.stat(index).catch(() => null);
+  if (!indexStats?.isFile()) {
+    res.statusCode = 404;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.end(JSON.stringify({ error: 'Not found' }));
+    return;
+  }
+  await sendFile(req, res, index, indexStats, 200);
 };
 
 /*
@@ -222,7 +321,12 @@ const behindProxy = Number.parseInt(process.env.TRUST_PROXY ?? '0', 10) > 0;
 const connectionsByIp = new Map();
 if (!behindProxy) {
   server.on('connection', (socket) => {
-    const address = socket.remoteAddress || 'unknown';
+    /*
+     * Ключ — тот же, что у лимита запросов: IPv6 считается по сети /64.
+     * Раньше счётчик вёлся по точному адресу, и один клиент с подсетью /64
+     * (или полтора десятка адресов IPv4) занимал все 512 соединений.
+     */
+    const address = rateLimitKey(socket.remoteAddress || 'unknown');
     const count = (connectionsByIp.get(address) || 0) + 1;
     if (count > MAX_CONNECTIONS_PER_IP) {
       socket.destroy();

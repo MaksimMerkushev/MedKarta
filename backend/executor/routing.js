@@ -99,12 +99,21 @@ export const createOsrmRoutingProvider = ({
       try {
         const response = await fetchImpl(
           `${baseUrl.replace(/\/+$/, '')}/table/v1/${profile}/${points}?sources=0&annotations=duration,distance`,
-          { signal: controller.signal },
+          { signal: controller.signal, redirect: 'error' },
         );
         if (!response.ok) {
+          await response.body?.cancel().catch(() => {});
           throw new Error(`osrm ${response.status}`);
         }
-        const payload = await response.json();
+        // Ответ сервиса маршрутов читается с потолком: таблица на десяток точек — килобайты.
+        const length = Number(response.headers.get('content-length'));
+        if (Number.isFinite(length) && length > 1_000_000) {
+          await response.body?.cancel().catch(() => {});
+          throw new Error('osrm response too large');
+        }
+        const text = await response.text();
+        if (text.length > 1_000_000) throw new Error('osrm response too large');
+        const payload = JSON.parse(text);
         const durations = payload?.durations?.[0]?.slice(1) || [];
         const distances = payload?.distances?.[0]?.slice(1) || [];
 

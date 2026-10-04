@@ -54,6 +54,7 @@ export const createPipeline = ({
   const gateway = createPrivacyGateway({ resolver, vault, catalog });
   const policyEngine = createPolicyEngine({ vault, repository });
   const executor = createExecutor({ repository, routing });
+  let warnedNotConfigured = false;
 
   /** Запрашивает план у внешней модели и валидирует ответ. */
   const planExternally = async (request) => {
@@ -80,8 +81,9 @@ export const createPipeline = ({
     logger.event('planner.usage', {
       request_id: request.requestId,
       provider: completion.provider,
-      prompt_tokens: completion.usage?.promptTokens,
-      completion_tokens: completion.usage?.completionTokens,
+      // Числа приходят от апстрима: в лог попадает только конечное число.
+      prompt_tokens: Number.isFinite(completion.usage?.promptTokens) ? completion.usage.promptTokens : null,
+      completion_tokens: Number.isFinite(completion.usage?.completionTokens) ? completion.usage.completionTokens : null,
     });
 
     return { ...validated.value, source: 'external' };
@@ -95,9 +97,31 @@ export const createPipeline = ({
      * @param {{lat: number, lng: number}|null} [params.origin] огрублённая точка
      * @returns {Promise<{action: object, diagnostics: object}>}
      */
-    async handle({ messages, sessionId, origin = null, takeExternalBudget = () => true }) {
+    async handle({
+      messages,
+      sessionId,
+      origin = null,
+      takeExternalBudget = () => true,
+      runExclusive = (task) => task(),
+    }) {
       const started = Date.now();
-      const gate = await gateway.process({ messages, sessionId });
+      /*
+       * Оценка затраченного процессора — время внутри тяжёлых участков
+       * (разбор реплик и исполнение плана). Ожидание внешней модели и очередь
+       * сюда не входят: по этой оценке chat.js списывает бюджет адреса.
+       */
+      let workMs = 0;
+      const cpuMs = () => workMs;
+      const exclusive = (task) =>
+        runExclusive(async () => {
+          const taskStarted = Date.now();
+          try {
+            return await task();
+          } finally {
+            workMs += Date.now() - taskStarted;
+          }
+        });
+      const gate = await exclusive(() => gateway.process({ messages, sessionId }));
 
       metrics.increment('gateway.decision', { decision: gate.decision });
       logger.event('gateway.decision', {
@@ -116,7 +140,7 @@ export const createPipeline = ({
         metrics.increment('gateway.emergency');
         return {
           action: buildEmergencyAction(gate.context?.classification?.emergency?.id),
-          diagnostics: { requestId: gate.requestId, decision: gate.decision, planSource: 'none' },
+          diagnostics: { requestId: gate.requestId, decision: gate.decision, planSource: 'none', cpuMs: cpuMs() },
         };
       }
 
@@ -137,7 +161,16 @@ export const createPipeline = ({
           if (plan) planSource = 'external';
         } catch (error) {
           metrics.increment('planner.error', { code: error?.code || 'unknown' });
-          logger.error('planner.error', error, { request_id: gate.requestId });
+          if (error?.code === PLANNER_ERROR.NOT_CONFIGURED) {
+            // Модель не настроена — это режим работы, а не авария: одна
+            // запись при первом запросе вместо трёх строк error на каждый.
+            if (!warnedNotConfigured) {
+              warnedNotConfigured = true;
+              logger.warn('planner.not_configured', { request_id: gate.requestId });
+            }
+          } else {
+            logger.error('planner.error', error, { request_id: gate.requestId });
+          }
           /*
            * Резервного пути «отправить оригинал другому провайдеру» нет.
            * Падаем в локальный план — он строится из уже извлечённых структур.
@@ -190,11 +223,12 @@ export const createPipeline = ({
             decision: gate.decision,
             planSource,
             rejected: authorized.error.code,
+            cpuMs: cpuMs(),
           },
         };
       }
 
-      const execution = await executor.run({ plan: authorized.value, origin });
+      const execution = await exclusive(() => executor.run({ plan: authorized.value, origin }));
       const action = buildUiAction(execution, {
         clarifyPrompt: clarifyTextFor(gate.reason),
         notice: noticeFor(gate.reason),
@@ -219,6 +253,7 @@ export const createPipeline = ({
           reason: gate.reason,
           planSource,
           stops: execution.stops.length,
+          cpuMs: cpuMs(),
         },
       };
     },
@@ -262,12 +297,34 @@ const clarifyTextFor = (reason) => {
 
 let cached = null;
 
-/** Ленивая сборка конвейера по умолчанию для serverless-функции. */
-export const getDefaultPipeline = async () => {
-  if (cached) return cached;
+/**
+ * Ленивая сборка конвейера по умолчанию.
+ *
+ * Кэшируется обещание, а не результат: иначе двадцать одновременных первых
+ * запросов после запуска собирали двадцать конвейеров (каталог, индексы,
+ * хранилище) и отвечали по 1,7 с.
+ */
+export const getDefaultPipeline = () => {
+  if (!cached) {
+    cached = buildDefaultPipeline().catch((error) => {
+      cached = null;
+      throw error;
+    });
+  }
+  return cached;
+};
 
+const buildDefaultPipeline = async () => {
   const catalog = await loadCatalog();
   const vault = createTokenVault({ store: createStoreFromEnv() });
+  if ((process.env.OPENROUTER_API_KEY || process.env.AI_API_KEY) && !process.env.AI_UPSTREAM_URL) {
+    /*
+     * Ключ задан, а адрес модели — нет: запросы уйдут на адрес по умолчанию
+     * (modelhub.my). Предупреждение в журнале запуска, чтобы ключ одного
+     * провайдера не отправлялся другому незаметно. Задайте AI_UPSTREAM_URL явно.
+     */
+    defaultLogger.warn('planner.default_upstream', { status: 'AI_UPSTREAM_URL not set' });
+  }
   const planner = createExternalPlanner({
     apiKey: process.env.OPENROUTER_API_KEY || process.env.AI_API_KEY,
     url: process.env.AI_UPSTREAM_URL || 'https://modelhub.my/v1/chat/completions',
@@ -275,14 +332,12 @@ export const getDefaultPipeline = async () => {
     logger: defaultLogger,
   });
 
-  cached = createPipeline({
+  return createPipeline({
     catalog,
     vault,
     planner,
     routing: await createRoutingProviderFromEnv(),
   });
-
-  return cached;
 };
 
 /** Только для тестов. */

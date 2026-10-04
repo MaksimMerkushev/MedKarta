@@ -11,9 +11,26 @@
 const WINDOW_MS = 5 * 60 * 1000;
 const MAX_PER_IP = 20;
 const MAX_PER_INSTANCE = 300;
-const MAX_TRACKED_IPS = 5000;
+const MAX_TRACKED_IPS = 20_000;
 
 const prune = (list, now, windowMs) => list.filter((timestamp) => now - timestamp < windowMs);
+
+/*
+ * Вытеснение самых давних записей вместо полного сброса.
+ *
+ * Раньше при переполнении карта очищалась целиком (hits.clear()): разослав
+ * запросы с пяти тысяч адресов, можно было обнулить счётчики ВСЕХ клиентов,
+ * включая собственный, и получить новый лимит. Map хранит порядок вставки,
+ * а активные ключи переставляются в конец при каждом обновлении, поэтому
+ * первыми уходят те, кто давно не обращался.
+ */
+const touch = (map, key, value, maxSize) => {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > maxSize) {
+    map.delete(map.keys().next().value);
+  }
+};
 
 /*
  * Ключ лимита. IPv6-адрес считается по сети /64: провайдер выдаёт клиенту
@@ -46,29 +63,32 @@ export const createRateLimiter = ({
 } = {}) => {
   const hits = new Map();
   let instanceHits = [];
+  /*
+   * Общий счётчик ведётся, только если общий потолок задан. Раньше массив
+   * фильтровался на каждом запросе и при Infinity: при 70 тысячах отметок в
+   * окне даже дешёвые /api/events замедлялись втрое.
+   */
+  const instanceCapped = Number.isFinite(maxPerInstance);
 
   return (address, now = Date.now()) => {
     const ip = rateLimitKey(address);
-    instanceHits = prune(instanceHits, now, windowMs);
-    if (instanceHits.length >= maxPerInstance) {
-      return { allowed: false, retryAfterSeconds: 60, remaining: 0 };
-    }
-
-    // Аварийный сброс, чтобы карта не росла бесконечно при разбросе адресов.
-    if (hits.size > maxTrackedIps) {
-      hits.clear();
+    if (instanceCapped) {
+      instanceHits = prune(instanceHits, now, windowMs);
+      if (instanceHits.length >= maxPerInstance) {
+        return { allowed: false, retryAfterSeconds: 60, remaining: 0 };
+      }
     }
 
     const previous = prune(hits.get(ip) || [], now, windowMs);
     if (previous.length >= maxPerIp) {
       const retryAfterSeconds = Math.max(1, Math.ceil((windowMs - (now - previous[0])) / 1000));
-      hits.set(ip, previous);
+      touch(hits, ip, previous, maxTrackedIps);
       return { allowed: false, retryAfterSeconds, remaining: 0 };
     }
 
     previous.push(now);
-    hits.set(ip, previous);
-    instanceHits.push(now);
+    touch(hits, ip, previous, maxTrackedIps);
+    if (instanceCapped) instanceHits.push(now);
 
     return { allowed: true, retryAfterSeconds: 0, remaining: maxPerIp - previous.length };
   };
@@ -105,13 +125,61 @@ export const createCostLimiter = ({
     },
     charge(address, costMs, now = Date.now()) {
       const key = rateLimitKey(address);
-      if (buckets.size > maxTrackedIps) buckets.clear();
-      buckets.set(key, { level: level(key, now) - Math.max(0, costMs), at: now });
+      touch(buckets, key, { level: level(key, now) - Math.max(0, costMs), at: now }, maxTrackedIps);
     },
   });
 };
 
 export const routeCpuLimiter = createCostLimiter();
+
+/*
+ * Бюджет процессора ассистента. Обычный запрос разбирается за 5–50 мс, но
+ * двенадцать реплик по тысяче символов, подобранных под нечёткий поиск
+ * фамилий, стоили до 0,8 с. Двадцать таких запросов с одного адреса держали
+ * единственное ядро десять секунд. Ведро в 3 с с пополнением 30 мс/с
+ * пропускает живой диалог и останавливает перебор.
+ */
+export const chatCpuLimiter = createCostLimiter({ capacityMs: 3_000, refillMsPerSecond: 30 });
+
+/**
+ * Общий предохранитель тяжёлой работы на весь процесс.
+ *
+ * Лимиты «на адрес» не спасают от двадцати адресов сразу: каждый укладывается
+ * в свой бюджет, а ядро одно. Здесь суммируется время, потраченное маршрутами,
+ * расчётом времени в пути и ассистентом за последние windowMs. Если сумма
+ * превысила долю окна, новые тяжёлые запросы получают 503 с Retry-After, а
+ * статика и лёгкие эндпоинты продолжают отвечать.
+ */
+export const createLoadShedder = ({ windowMs = 10_000, maxShare = 0.6 } = {}) => {
+  let entries = [];
+  let total = 0;
+  const trim = (now) => {
+    while (entries.length > 0 && now - entries[0].at >= windowMs) {
+      total -= entries.shift().ms;
+    }
+  };
+  return Object.freeze({
+    /*
+     * share — своя доля для разных потребителей: ассистент отключается
+     * первым (60 %), маршруты — только при почти полной загрузке (85 %),
+     * чтобы перебор запросов к ассистенту не ломал построение маршрутов.
+     */
+    allows(now = Date.now(), share = maxShare) {
+      trim(now);
+      return total < windowMs * share;
+    },
+    record(ms, now = Date.now()) {
+      if (!(ms > 0)) return;
+      trim(now);
+      entries.push({ at: now, ms });
+      total += ms;
+    },
+    retryAfterSeconds: Math.max(1, Math.ceil(windowMs / 2000)),
+  });
+};
+
+export const heavyWork = createLoadShedder();
+export const ROUTING_LOAD_SHARE = 0.85;
 
 /**
  * Бюджет маршрутизации отдельный и заметно шире: расчёт идёт локально,
@@ -137,28 +205,58 @@ export const checkRouteRateLimit = createRateLimiter({
  * N-е значение с конца: его дописал наш собственный прокси, подделать его
  * клиент не может.
  */
+const parseTrustProxy = (raw) => {
+  const value = String(raw ?? '0').trim();
+  if (value === '') return 0;
+  if (!/^\d+$/.test(value) || Number(value) > 5) {
+    // «true», «yes», «-1», «10»: раньше молча читалось как 0, и за nginx все
+    // пользователи оказывались в одном ведре лимита. Теперь сервер не стартует.
+    throw new Error('TRUST_PROXY должен быть целым числом от 0 до 5 — числом прокси перед сервером.');
+  }
+  return Number(value);
+};
+
+/** Проверка переменной при запуске сервера: ошибка лучше тихого неверного режима. */
+export const validateTrustProxy = () => parseTrustProxy(process.env.TRUST_PROXY);
+
 const trustedProxyHops = () => {
-  const hops = Number.parseInt(process.env.TRUST_PROXY ?? '0', 10);
-  return Number.isFinite(hops) && hops > 0 ? Math.min(hops, 5) : 0;
+  try {
+    return parseTrustProxy(process.env.TRUST_PROXY);
+  } catch {
+    return 0;
+  }
+};
+
+/*
+ * Адреса, с которых сервер принимает X-Forwarded-For. По умолчанию — только
+ * локальный nginx. Иначе при TRUST_PROXY=1 и открытом наружу порте любой
+ * клиент, придя напрямую, подставлял себе адрес заголовком.
+ */
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+const trustedProxies = () => {
+  const configured = (process.env.TRUSTED_PROXIES || '')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  return configured.length > 0 ? new Set(configured) : LOOPBACK;
 };
 
 export const getClientIp = (req) => {
   const socketAddress = (req.socket?.remoteAddress || 'unknown').toString().slice(0, 64);
   const hops = trustedProxyHops();
-  if (hops === 0) {
+  if (hops === 0 || !trustedProxies().has(socketAddress.toLowerCase())) {
     return socketAddress;
   }
 
+  /*
+   * X-Real-IP больше не читается: его тоже пишет клиент, и при отсутствии
+   * X-Forwarded-For он подменял адрес без всяких условий.
+   */
   const forwarded = req.headers['x-forwarded-for'];
   if (typeof forwarded === 'string' && forwarded.length > 0) {
     const chain = forwarded.split(',').map((part) => part.trim()).filter(Boolean);
     const candidate = chain[chain.length - hops];
     if (candidate) return candidate.slice(0, 64);
-  }
-
-  const realIp = req.headers['x-real-ip'];
-  if (typeof realIp === 'string' && realIp.length > 0) {
-    return realIp.trim().slice(0, 64);
   }
   return socketAddress;
 };
@@ -187,6 +285,31 @@ export const createBudget = ({ windowMs = WINDOW_MS, max = MAX_PER_INSTANCE } = 
   };
 };
 
-export const takeExternalBudget = createBudget();
+/*
+ * Суточный потолок обращений к модели (AI_DAILY_CALL_LIMIT, по умолчанию 2000).
+ * Пятиминутного бюджета мало: 300 вызовов за пять минут — это до 86 тысяч в
+ * сутки, и пятнадцать адресов могли держать расход на максимуме круглые сутки.
+ * Когда потолок выбран, ассистент отвечает по локальному плану. Жёсткий лимит
+ * расходов стоит включить и в кабинете провайдера модели.
+ */
+const DAY_MS = 24 * 60 * 60 * 1000;
+const dailyCallLimit = () => {
+  const value = Number.parseInt(process.env.AI_DAILY_CALL_LIMIT ?? '', 10);
+  return Number.isFinite(value) && value >= 0 ? value : 2000;
+};
+
+export const createExternalBudget = ({ windowMs = WINDOW_MS, max = MAX_PER_INSTANCE, dailyLimit = dailyCallLimit } = {}) => {
+  const shortWindow = createBudget({ windowMs, max });
+  let dailyTaken = [];
+  return (now = Date.now()) => {
+    dailyTaken = prune(dailyTaken, now, DAY_MS);
+    if (dailyTaken.length >= dailyLimit()) return false;
+    if (!shortWindow(now)) return false;
+    dailyTaken.push(now);
+    return true;
+  };
+};
+
+export const takeExternalBudget = createExternalBudget();
 
 export const RATE_LIMIT_CONFIG = { WINDOW_MS, MAX_PER_IP, MAX_PER_INSTANCE };

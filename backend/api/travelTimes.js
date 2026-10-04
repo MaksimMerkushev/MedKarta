@@ -13,7 +13,7 @@
  */
 
 import { readBody, respondJson, verifyOrigin } from '../http/request.js';
-import { createRateLimiter, getClientIp, routeCpuLimiter } from '../http/rateLimit.js';
+import { createRateLimiter, getClientIp, heavyWork as defaultLoad, ROUTING_LOAD_SHARE, routeCpuLimiter } from '../http/rateLimit.js';
 import { getDefaultRoutingEngine, ROUTING_ERROR } from '../routing/engine.js';
 import { logger } from '../observability/safeLogger.js';
 import { metrics } from '../observability/metrics.js';
@@ -76,6 +76,7 @@ export const createTravelTimesHandler = ({
   getEngine = getDefaultRoutingEngine,
   rateLimit = checkTravelRateLimit,
   cpuLimiter = routeCpuLimiter,
+  load = defaultLoad,
 } = {}) =>
   async function travelTimesHandler(req, res) {
     if (req.method === 'OPTIONS') {
@@ -131,6 +132,12 @@ export const createTravelTimesHandler = ({
       return;
     }
 
+    if (!load.allows(Date.now(), ROUTING_LOAD_SHARE)) {
+      res.setHeader('Retry-After', String(load.retryAfterSeconds));
+      respondJson(res, 503, { error: 'Сервер перегружен.', code: 'busy' });
+      return;
+    }
+
     const started = Date.now();
     const valid = parsed.destinations.map((point, index) => ({ point, index })).filter(({ point }) => point);
     const estimates = valid.length > 0
@@ -140,6 +147,7 @@ export const createTravelTimesHandler = ({
       : [];
     const latency = Date.now() - started;
     cpuLimiter.charge(clientIp, latency);
+    load.record(latency);
 
     const durations = new Array(parsed.destinations.length).fill(null);
     valid.forEach(({ index }, position) => {

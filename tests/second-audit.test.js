@@ -54,7 +54,7 @@ const run = async (messages) => {
   const wire = [];
   const planner = createExternalPlanner({
     apiKey: 'test-key',
-    url: 'http://planner.invalid',
+    url: 'https://planner.invalid',
     model: 'test',
     fetchImpl: async (_url, init) => {
       wire.push(JSON.parse(init.body));
@@ -243,7 +243,7 @@ describe('Второй аудит: ответ модели', () => {
     });
     const planner = createExternalPlanner({
       apiKey: 'k',
-      url: 'http://planner.invalid',
+      url: 'https://planner.invalid',
       model: 'm',
       fetchImpl: async () => ({ ok: true, status: 200, headers: new Headers(), body }),
     });

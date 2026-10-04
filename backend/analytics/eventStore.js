@@ -16,6 +16,7 @@
  */
 
 import fs from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
 import path from 'node:path';
 
 const FILE_PATTERN = /^events-(\d{4}-\d{2}-\d{2})\.jsonl$/;
@@ -39,8 +40,13 @@ const minuteStamp = (date) => `${date.toISOString().slice(0, 16)}Z`;
  */
 export const createEventStore = ({
   dir,
-  maxEventsPerDay = 200_000,
+  // 50 тысяч в сутки — с запасом для пилота. Прежние 200 тысяч давали до
+  // 90 МБ мусора в день, если журнал заливали скриптом.
+  maxEventsPerDay = 50_000,
   retentionDays = 180,
+  // Потолок на весь каталог: старые файлы удаляются раньше срока, если журнал
+  // разросся. Диск сервера важнее полугода истории.
+  maxTotalBytes = 500 * 1024 * 1024,
   now = () => new Date(),
   logger = null,
 }) => {
@@ -69,27 +75,47 @@ export const createEventStore = ({
     } catch {
       return 0;
     }
+    const kept = [];
     for (const name of entries) {
       const match = name.match(FILE_PATTERN);
-      if (match && match[1] < cutoffDay) {
+      if (!match) continue;
+      if (match[1] < cutoffDay) {
         await fs.rm(path.join(dir, name), { force: true });
         removed += 1;
+      } else {
+        kept.push(name);
       }
+    }
+
+    // Самые старые файлы уходят первыми, пока каталог не уложится в потолок.
+    kept.sort();
+    const sizes = await Promise.all(
+      kept.map((name) => fs.stat(path.join(dir, name)).then((stats) => stats.size).catch(() => 0)),
+    );
+    let total = sizes.reduce((sum, size) => sum + size, 0);
+    for (let index = 0; index < kept.length - 1 && total > maxTotalBytes; index += 1) {
+      await fs.rm(path.join(dir, kept[index]), { force: true });
+      total -= sizes[index];
+      removed += 1;
     }
     return removed;
   };
 
   /** Сколько событий уже записано за день — после перезапуска сервера. */
-  const countExisting = async (day) => {
-    try {
-      const text = await fs.readFile(path.join(dir, `events-${day}.jsonl`), 'utf8');
+  const countExisting = (day) =>
+    /*
+     * Потоком, а не readFile: файл за день может весить десятки мегабайт, и
+     * при перезапуске он целиком читался в память.
+     */
+    new Promise((resolve) => {
       let count = 0;
-      for (let index = text.indexOf('\n'); index !== -1; index = text.indexOf('\n', index + 1)) count += 1;
-      return count;
-    } catch {
-      return 0;
-    }
-  };
+      const stream = createReadStream(path.join(dir, `events-${day}.jsonl`));
+      stream.on('data', (chunk) => {
+        for (let index = chunk.indexOf(10); index !== -1; index = chunk.indexOf(10, index + 1)) count += 1;
+      });
+      stream.on('end', () => resolve(count));
+      stream.on('error', () => resolve(count));
+    });
 
   /**
    * Добавляет проверенные события. Записи идут строго по очереди: две

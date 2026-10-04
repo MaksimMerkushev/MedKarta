@@ -17,7 +17,7 @@
  */
 
 import { readBody, respondJson, verifyOrigin } from '../http/request.js';
-import { checkRouteRateLimit, routeCpuLimiter } from '../http/rateLimit.js';
+import { checkRouteRateLimit, heavyWork, ROUTING_LOAD_SHARE, routeCpuLimiter } from '../http/rateLimit.js';
 import { getClientIp } from '../http/rateLimit.js';
 import { getDefaultRoutingEngine } from '../routing/engine.js';
 import { ROUTING_ERROR } from '../routing/engine.js';
@@ -137,10 +137,17 @@ export default async function handler(req, res) {
     return;
   }
 
+  if (!heavyWork.allows(Date.now(), ROUTING_LOAD_SHARE)) {
+    res.setHeader('Retry-After', String(heavyWork.retryAfterSeconds));
+    respondJson(res, 503, { error: 'Сервер перегружен. Попробуйте через несколько секунд.', code: 'busy' });
+    return;
+  }
+
   const started = Date.now();
   const result = engine.route({ waypoints, profile });
   const latency = Date.now() - started;
   routeCpuLimiter.charge(clientIp, latency);
+  heavyWork.record(latency);
 
   metrics.observe('routing.latency_ms', latency, { provider: 'local' });
   logger.event('routing.request', {

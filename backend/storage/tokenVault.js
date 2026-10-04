@@ -19,7 +19,13 @@
 
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
-export const DEFAULT_TTL_SECONDS = 900;
+/*
+ * Токены нужны только на время одного запроса: план исполняется в том же
+ * запросе, в котором выданы токены (ключ включает requestId). Раньше записи
+ * жили 15 минут и при наплыве держали в памяти десятки мегабайт мёртвых
+ * соответствий. Двух минут хватает с запасом на таймаут модели (20 с).
+ */
+export const DEFAULT_TTL_SECONDS = 120;
 
 /** Верхняя граница числа токенов на сессию: защита от раздувания хранилища. */
 export const MAX_TOKENS_PER_SESSION = 64;
@@ -42,8 +48,13 @@ const resolveSecret = () => {
 /** In-memory store. Подходит для dev и одиночного инстанса. */
 export const createMemoryStore = ({ maxEntries = 50_000 } = {}) => {
   const entries = new Map();
+  let lastPruneAt = 0;
 
   const prune = (now) => {
+    // Полный проход по карте — не чаще раза в секунду: при заполненном
+    // хранилище он иначе выполнялся на каждой записи.
+    if (now - lastPruneAt < 1_000) return;
+    lastPruneAt = now;
     for (const [key, entry] of entries) {
       if (entry.expiresAt <= now) {
         entries.delete(key);
@@ -110,6 +121,9 @@ export const createUpstashStore = ({ url, token, fetchImpl = fetch } = {}) => {
   const call = async (path) => {
     const response = await fetchImpl(`${base}/${path}`, {
       headers: { Authorization: `Bearer ${token}` },
+      // Без таймаута зависший Upstash подвешивал каждый запрос ассистента.
+      signal: AbortSignal.timeout(3_000),
+      redirect: 'error',
     });
     if (!response.ok) {
       throw new Error(`upstash ${response.status}`);

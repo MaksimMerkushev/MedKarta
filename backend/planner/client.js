@@ -124,6 +124,20 @@ export class PlannerClient {
  * @param {Function} [config.fetchImpl]
  * @param {{event: Function}} [config.logger] безопасный логгер
  */
+/**
+ * Ключ уходит только по HTTPS. Обычный HTTP допускается лишь для модели,
+ * запущенной на этой же машине (localhost).
+ */
+export const isAllowedUpstreamUrl = (value) => {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol === 'https:') return true;
+    return parsed.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname);
+  } catch {
+    return false;
+  }
+};
+
 export const createExternalPlanner = ({
   apiKey,
   url,
@@ -143,7 +157,7 @@ export const createExternalPlanner = ({
       );
     }
 
-    if (!apiKey || !url || !model) {
+    if (!apiKey || !url || !model || !isAllowedUpstreamUrl(url)) {
       throw new PlannerError('planner is not configured', PLANNER_ERROR.NOT_CONFIGURED);
     }
 
@@ -197,6 +211,11 @@ export const createExternalPlanner = ({
       const response = await fetchImpl(url, {
         method: 'POST',
         signal: controller.signal,
+        /*
+         * Редирект апстрима не выполняется: 307 заставлял fetch повторить POST
+         * со всем телом запроса на другой хост.
+         */
+        redirect: 'error',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${apiKey}`,
@@ -211,6 +230,12 @@ export const createExternalPlanner = ({
          * запись такого тела в логи свела бы на нет всю работу Gateway.
          */
         logger?.event('planner.upstream_error', { status: response.status, provider: name });
+        // Непрочитанное тело держало сокет открытым: после серии 429 копились соединения.
+        try {
+          await response.body?.cancel();
+        } catch {
+          // тело уже закрыто
+        }
         throw new PlannerError(`upstream ${response.status}`, PLANNER_ERROR.UPSTREAM);
       }
 
