@@ -72,7 +72,11 @@ export const createFileStore = ({ root }) => {
       if (['clinic', 'doctor', 'price', 'unmatched_price'].includes(item.kind)) {
         const snapshot = await store.readSnapshot(item.sourceId);
         const records = snapshot?.records || EMPTY_RECORDS;
-        await store.saveSnapshot({ ...snapshot, sourceId: item.sourceId, records: applyChanges(records, [item]) });
+        await store.saveSnapshot({ ...snapshot, sourceId: item.sourceId, records: applyChanges(records, [item], { reviewed: true }) });
+      } else if (item.kind === 'source' && item.change === 'added') {
+        // Подтверждение нового источника: с этого момента он попадает в справочник.
+        const snapshot = await store.readSnapshot(item.sourceId);
+        if (snapshot) await store.saveSnapshot({ ...snapshot, approved: true });
       }
       await writeJson(pendingFile, pending.filter((entry) => entry.id !== id));
       return item;
@@ -111,7 +115,8 @@ export const createMemoryStore = () => {
       const item = pending.find((entry) => entry.id === id);
       if (!item) return null;
       const snapshot = snapshots.get(item.sourceId);
-      if (snapshot && ['clinic', 'doctor', 'price', 'unmatched_price'].includes(item.kind)) snapshot.records = applyChanges(snapshot.records, [item]);
+      if (snapshot && ['clinic', 'doctor', 'price', 'unmatched_price'].includes(item.kind)) snapshot.records = applyChanges(snapshot.records, [item], { reviewed: true });
+      else if (snapshot && item.kind === 'source' && item.change === 'added') snapshot.approved = true;
       pending = pending.filter((entry) => entry.id !== id);
       return item;
     },

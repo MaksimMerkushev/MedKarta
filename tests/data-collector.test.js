@@ -139,8 +139,10 @@ describe('Сравнение и классификация', () => {
     assert.match(big.reason, /36%/);
   });
 
-  it('телефон и часы — сами; адрес, исчезновение врача и специальность — человеку', () => {
-    assert.equal(classifyChange({ kind: 'clinic', change: 'changed', field: 'phone' }).decision, 'auto');
+  it('часы — сами; телефон, сайт, адрес, исчезновение врача и специальность — человеку', () => {
+    assert.equal(classifyChange({ kind: 'clinic', change: 'changed', field: 'hours' }).decision, 'auto');
+    assert.equal(classifyChange({ kind: 'clinic', change: 'changed', field: 'phone' }).decision, 'review');
+    assert.equal(classifyChange({ kind: 'clinic', change: 'changed', field: 'website' }).decision, 'review');
     assert.equal(classifyChange({ kind: 'clinic', change: 'changed', field: 'address' }).decision, 'review');
     assert.equal(classifyChange({ kind: 'doctor', change: 'removed', before: { name: 'X' } }).decision, 'review');
     assert.equal(classifyChange({ kind: 'doctor', change: 'changed', field: 'specialty' }).decision, 'review');
@@ -162,8 +164,10 @@ describe('Прогон по источнику', () => {
     const store = createMemoryStore();
     const first = await collectSource({ source: ZDOROVIE, fetcher: fileFetcher, store, now: NOW });
     assert.equal(first.status, 'created');
-    assert.equal(first.review.length, 0);
+    // Единственный пункт — подтвердить новый источник.
+    assert.deepEqual(first.review.map((item) => `${item.kind}:${item.change}`), ['source:added']);
     const snapshot = await store.readSnapshot(ZDOROVIE.id);
+    assert.equal(snapshot.approved, false);
     assert.equal(snapshot.records.doctors.length, 4);
     assert.equal(snapshot.verifiedAt, '2026-10-01');
 
@@ -180,13 +184,14 @@ describe('Прогон по источнику', () => {
 
     assert.equal(report.status, 'updated');
     const auto = report.auto.map(describeChange);
-    assert.ok(auto.some((line) => line.includes('телефон')));
+    assert.ok(auto.some((line) => line.includes('часы работы')));
     assert.ok(auto.some((line) => line.includes('Романова Полина Игоревна')));
     assert.ok(auto.some((line) => line.includes('1900 ₽ → 1995 ₽')));
-    assert.deepEqual(report.review.map((item) => item.kind).sort(), ['doctor', 'price', 'unmatched_price']);
+    assert.deepEqual(report.review.map((item) => item.kind).sort(), ['clinic', 'doctor', 'price', 'unmatched_price']);
+    assert.ok(report.review.some((item) => item.kind === 'clinic' && item.field === 'phone'), 'телефон меняет только человек');
 
     const snapshot = await store.readSnapshot(ZDOROVIE.id);
-    assert.equal(snapshot.records.clinic.phone, '+7 (843) 000-01-11');
+    assert.equal(snapshot.records.clinic.phone, '+7 (843) 000-01-01');
     assert.ok(snapshot.records.doctors.some((doctor) => doctor.name === 'Соколов Глеб Аркадьевич'), 'пропавший врач остаётся до решения человека');
     assert.equal(snapshot.records.prices.find((price) => price.serviceId === 'consult.lor.first').price.min, 2200, 'резкая цена не применена');
   });
@@ -197,10 +202,16 @@ describe('Прогон по источнику', () => {
     const report = await collectSource({ source: ZDOROVIE, fetcher: fileFetcher, store, now: NOW, vars: { version: 'v2' } });
     const lor = report.review.find((item) => item.kind === 'price');
     const sokolov = report.review.find((item) => item.kind === 'doctor');
+    const phone = report.review.find((item) => item.kind === 'clinic');
+    const approval = (await store.readPending()).find((item) => item.kind === 'source');
 
+    await store.accept(approval.id);
     await store.accept(lor.id);
     await store.accept(sokolov.id);
+    await store.accept(phone.id);
     const snapshot = await store.readSnapshot(ZDOROVIE.id);
+    assert.equal(snapshot.approved, true);
+    assert.equal(snapshot.records.clinic.phone, '+7 (843) 000-01-11');
     assert.equal(snapshot.records.prices.find((price) => price.serviceId === 'consult.lor.first').price.min, 3000);
     assert.ok(!snapshot.records.doctors.some((doctor) => doctor.name === 'Соколов Глеб Аркадьевич'));
 
@@ -255,7 +266,13 @@ describe('Прогон по источнику', () => {
     const saved = JSON.parse(await fs.readFile(path.join(root, 'data/collected', `${MALYSH.id}.json`), 'utf8'));
     assert.equal(saved.records.doctors.length, 2);
     const pending = JSON.parse(await fs.readFile(path.join(root, 'data/review/pending.json'), 'utf8'));
-    assert.equal(pending.length, 1, '«Приём педиатра на дому» — не приём в клинике');
+    assert.deepEqual(
+      pending.map((item) => item.kind),
+      ['source', 'unmatched_price'],
+      'подтверждение источника и «Приём педиатра на дому» — не приём в клинике',
+    );
+    await store.accept(pending[0].id);
+    assert.equal((await store.readSnapshot(MALYSH.id)).approved, true);
     assert.throws(() => store.readSnapshot('../escape'), /недопустимый id/);
   });
 });
@@ -265,6 +282,14 @@ describe('Сборка справочника из снимков', () => {
     const store = createMemoryStore();
     await collectSource({ source: ZDOROVIE, fetcher: fileFetcher, store, now: NOW });
     await collectSource({ source: MALYSH, fetcher: fileFetcher, store, now: NOW });
+
+    const unapproved = buildCatalogFromSnapshots(SOURCES, await store.listSnapshots(), { includeDemo: true });
+    assert.equal(unapproved.catalog.clinics.length, 0, 'неподтверждённый источник в справочник не попадает');
+    assert.ok(unapproved.skipped.every((line) => /не подтверждён/.test(line)));
+
+    for (const item of await store.readPending()) {
+      if (item.kind === 'source') await store.accept(item.id);
+    }
     const snapshots = await store.listSnapshots();
 
     const plain = buildCatalogFromSnapshots(SOURCES, snapshots);
@@ -286,6 +311,9 @@ describe('Сборка справочника из снимков', () => {
     const store = createMemoryStore();
     const noGeo = { ...MALYSH, geo: undefined };
     await collectSource({ source: noGeo, fetcher: fileFetcher, store, now: NOW });
+    for (const item of await store.readPending()) {
+      if (item.kind === 'source') await store.accept(item.id);
+    }
     const { skipped } = buildCatalogFromSnapshots([noGeo], await store.listSnapshots(), { includeDemo: true });
     assert.match(skipped[0], /нет координат/);
   });

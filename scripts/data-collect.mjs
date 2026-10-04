@@ -37,6 +37,8 @@ const STATUS = {
   unchanged: 'без изменений, дата проверки обновлена',
   mass_change: 'СЛИШКОМ МНОГО ИЗМЕНЕНИЙ — всё на проверку',
   parse_empty: 'страница не разобралась — на проверку',
+  too_many_records: 'СЛИШКОМ МНОГО ЗАПИСЕЙ — на проверку, ничего не применено',
+  failed: 'сбой разбора — источник пропущен',
   blocked: 'запрещено robots.txt — пропущен',
   error: 'ошибка загрузки',
 };
@@ -55,7 +57,16 @@ const main = async () => {
 
   for (const source of selected) {
     const vars = version && sourceIds.length > 0 ? { version } : {};
-    const report = await collectSource({ source, fetcher, store, vars, dryRun });
+    /*
+     * Сбой одного источника не останавливает остальные: раньше одна битая
+     * страница обрывала весь прогон, и следующие источники не проверялись.
+     */
+    let report;
+    try {
+      report = await collectSource({ source, fetcher, store, vars, dryRun });
+    } catch (error) {
+      report = { status: 'failed', code: error?.name || 'error', auto: [], review: [] };
+    }
     process.stdout.write(`\n${source.id}: ${STATUS[report.status] || report.status}${report.code ? ` (${report.code})` : ''}\n`);
     for (const change of report.auto) process.stdout.write(`  ✓ ${describeChange(change)}\n`);
     for (const item of report.review) process.stdout.write(`  ? ${describeChange(item)} — ${item.reason} [${item.id}]\n`);

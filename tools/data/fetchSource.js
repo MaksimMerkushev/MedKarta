@@ -14,11 +14,93 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { isIP } from 'node:net';
 
 const DEFAULT_UA = 'MedKartaBot/1.0 (+medical navigator for Kazan; contact: set DATA_BOT_CONTACT)';
 const MAX_BYTES = 3 * 1024 * 1024;
+const MAX_ROBOTS_BYTES = 256 * 1024;
 const TIMEOUT_MS = 15_000;
 const HOST_DELAY_MS = 1_000;
+const MAX_REDIRECTS = 3;
+
+/*
+ * Адреса, на которые сборщик не ходит ни при каких условиях: локальная
+ * машина, внутренние сети, метаданные облака. Проверяется адрес из URL;
+ * перенаправления на другой сайт не выполняются вовсе (см. fetchSource).
+ */
+const PRIVATE_V4 = [/^127\./, /^10\./, /^192\.168\./, /^172\.(1[6-9]|2\d|3[01])\./, /^169\.254\./, /^0\./, /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./];
+export const isPrivateHost = (hostname) => {
+  const host = String(hostname || '').replace(/^\[|\]$/g, '').toLowerCase();
+  if (!host || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal')) return true;
+  const version = isIP(host);
+  if (version === 4) return PRIVATE_V4.some((pattern) => pattern.test(host));
+  if (version === 6) return host === '::1' || host === '::' || /^(?:fc|fd|fe80)/.test(host) || host.startsWith('::ffff:');
+  return false;
+};
+
+/** Тот же сайт: совпадает хост или отличается только «www.». */
+export const sameSite = (left, right) => {
+  try {
+    const strip = (value) => new URL(value).hostname.toLowerCase().replace(/^www\./, '');
+    return strip(left) === strip(right);
+  } catch {
+    return false;
+  }
+};
+
+/*
+ * Чтение тела с потолком по БАЙТАМ, по мере поступления. Раньше тело
+ * читалось целиком (response.text()), и проверка размера шла после: ответ
+ * без Content-Length или «gzip-бомба» в 300 КБ, разжимавшаяся в 300 МБ,
+ * доводили процесс до 700 МБ — на сервере с 2 ГБ это падение.
+ */
+const readLimited = async (response, maxBytes) => {
+  const reader = response.body?.getReader();
+  if (!reader) return { bytes: new Uint8Array(0) };
+  const chunks = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        return { error: 'too_large' };
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    return { error: error?.name === 'TimeoutError' || error?.name === 'AbortError' ? 'timeout' : 'network' };
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { bytes };
+};
+
+/*
+ * Кодировка: из Content-Type, затем из <meta charset> в начале страницы.
+ * Сайты на windows-1251 раньше читались как UTF-8 и превращались в «�»,
+ * а сравнение снимков видело «изменилось всё».
+ */
+const decodeBody = (bytes, contentType) => {
+  const fromHeader = /charset\s*=\s*["']?([\w-]+)/i.exec(contentType || '')?.[1];
+  const head = new TextDecoder('latin1').decode(bytes.subarray(0, 2048));
+  const fromMeta = /<meta[^>]{0,200}charset\s*=\s*["']?([\w-]+)/i.exec(head)?.[1];
+  for (const label of [fromHeader, fromMeta, 'utf-8']) {
+    if (!label) continue;
+    try {
+      return new TextDecoder(label.toLowerCase()).decode(bytes);
+    } catch {
+      // неизвестная кодировка — пробуем следующую
+    }
+  }
+  return new TextDecoder('utf-8').decode(bytes);
+};
 
 /**
  * Минимальный разбор robots.txt: группы User-agent «*» и наша, Disallow и
@@ -89,11 +171,18 @@ export const createFetcher = ({
         await politeWait(origin);
         const response = await fetchImpl(`${origin}/robots.txt`, {
           headers: { 'User-Agent': userAgent },
+          redirect: 'manual',
           signal: AbortSignal.timeout(TIMEOUT_MS),
         });
         // Нет robots.txt — ограничений нет; 401/403 на него — считаем «всё закрыто».
         if (response.status === 401 || response.status === 403) rules = () => false;
-        else if (response.ok) rules = parseRobots(await response.text());
+        else if (response.ok) {
+          const read = await readLimited(response, MAX_ROBOTS_BYTES);
+          // Огромный robots.txt — не повод читать его в память целиком; считаем «всё закрыто».
+          rules = read.error ? () => false : parseRobots(new TextDecoder('utf-8').decode(read.bytes));
+        } else {
+          await response.body?.cancel().catch(() => {});
+        }
       } catch {
         // Не ответил — ведём себя так, будто запретов нет, но страницу всё равно
         // запросим с теми же паузами и потолками.
@@ -123,30 +212,59 @@ export const createFetcher = ({
     }
 
     if (source.type !== 'http' || !/^https?:\/\//.test(source.url || '')) return { status: 'error', code: 'bad_source' };
-    if (!(await allowedByRobots(source.url))) return { status: 'blocked', code: 'robots_txt' };
+    if (isPrivateHost(new URL(source.url).hostname)) return { status: 'error', code: 'private_address' };
 
-    await politeWait(new URL(source.url).origin);
     const headers = { 'User-Agent': userAgent, Accept: 'text/html,application/xhtml+xml' };
     if (previous?.etag) headers['If-None-Match'] = previous.etag;
     if (previous?.lastModified) headers['If-Modified-Since'] = previous.lastModified;
 
+    /*
+     * Перенаправления — вручную и только в пределах того же сайта. Раньше
+     * fetch следовал за любым редиректом, в том числе на 127.0.0.1 и адреса
+     * внутренней сети, а robots.txt и паузы применялись лишь к исходному хосту.
+     */
+    let url = source.url;
     let response;
-    try {
-      response = await fetchImpl(source.url, { headers, redirect: 'follow', signal: AbortSignal.timeout(TIMEOUT_MS) });
-    } catch (error) {
-      return { status: 'error', code: error?.name === 'TimeoutError' ? 'timeout' : 'network' };
+    for (let hop = 0; ; hop += 1) {
+      if (!(await allowedByRobots(url))) return { status: 'blocked', code: 'robots_txt' };
+      await politeWait(new URL(url).origin);
+      try {
+        response = await fetchImpl(url, { headers, redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT_MS) });
+      } catch (error) {
+        return { status: 'error', code: error?.name === 'TimeoutError' ? 'timeout' : 'network' };
+      }
+      if (![301, 302, 303, 307, 308].includes(response.status)) break;
+      await response.body?.cancel().catch(() => {});
+      const location = response.headers.get('location');
+      if (!location || hop >= MAX_REDIRECTS) return { status: 'error', code: 'redirect' };
+      let next;
+      try {
+        next = new URL(location, url);
+      } catch {
+        return { status: 'error', code: 'redirect' };
+      }
+      if (!/^https?:$/.test(next.protocol) || !sameSite(next.href, source.url) || isPrivateHost(next.hostname)) {
+        return { status: 'error', code: 'redirect_offsite' };
+      }
+      url = next.href;
     }
     if (response.status === 304) return { status: 'not_modified' };
-    if (!response.ok) return { status: 'error', code: `http_${response.status}` };
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {});
+      return { status: 'error', code: `http_${response.status}` };
+    }
 
     const length = Number(response.headers.get('content-length'));
-    if (Number.isFinite(length) && length > MAX_BYTES) return { status: 'error', code: 'too_large' };
-    const body = await response.text();
-    if (body.length > MAX_BYTES) return { status: 'error', code: 'too_large' };
+    if (Number.isFinite(length) && length > MAX_BYTES) {
+      await response.body?.cancel().catch(() => {});
+      return { status: 'error', code: 'too_large' };
+    }
+    const read = await readLimited(response, MAX_BYTES);
+    if (read.error) return { status: 'error', code: read.error };
 
     return {
       status: 'ok',
-      body,
+      body: decodeBody(read.bytes, response.headers.get('content-type')),
       etag: response.headers.get('etag') || null,
       lastModified: response.headers.get('last-modified') || null,
     };

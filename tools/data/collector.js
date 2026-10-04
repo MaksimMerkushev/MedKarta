@@ -17,7 +17,7 @@
 import { createHash } from 'node:crypto';
 
 import { serviceName } from '../../shared/services.js';
-import { htmlToText, nameKey, parseJsonLd, parsePriceTables, findPersonOnPage } from './html.js';
+import { cleanText, htmlToText, nameKey, parseJsonLd, parsePriceTables, findPersonOnPage } from './html.js';
 
 export const EMPTY_RECORDS = Object.freeze({ clinic: null, doctors: [], prices: [], unmatched: [] });
 
@@ -26,7 +26,22 @@ export const PRICE_AUTO_TOLERANCE = 0.2;
 /** Доля пропавших записей, после которой весь прогон считается подозрительным. */
 export const MASS_CHANGE_SHARE = 0.5;
 
-const CLINIC_AUTO_FIELDS = new Set(['phone', 'hours', 'website']);
+/*
+ * Сами применяются только часы работы. Телефон и сайт раньше тоже менялись
+ * без человека, и подменённая (или взломанная) страница клиники могла
+ * поставить свой номер и свою ссылку на кнопку «Записаться на сайте»
+ * рядом с отметкой «официальный сайт». Теперь это решает человек.
+ */
+const CLINIC_AUTO_FIELDS = new Set(['hours']);
+
+/*
+ * Потолки на один источник. Страница с восемью тысячами «врачей» раньше
+ * целиком попадала в справочник и в бандл, который скачивает каждый
+ * посетитель. Больше — значит, разбор взял не то; прогон уходит на проверку.
+ */
+export const MAX_DOCTORS_PER_SOURCE = 400;
+export const MAX_PRICES_PER_SOURCE = 1_500;
+export const MAX_UNMATCHED_PER_SOURCE = 300;
 
 export const kazanDay = (date) => new Date(date.getTime() + 3 * 3600 * 1000).toISOString().slice(0, 10);
 
@@ -38,7 +53,18 @@ export const extractRecords = (body, parsers = ['jsonld', 'price-table']) => {
   if (parsers.includes('jsonld')) {
     const { clinic, doctors } = parseJsonLd(body);
     records.clinic = clinic;
-    records.doctors = doctors;
+    /*
+     * Врачи с одинаковым ключом имени («Иванова Мария» и «ИВАНОВА  мария»):
+     * берётся первый. Раньше второй молча заменял первого, и строка ниже по
+     * странице переписывала специальность настоящего врача.
+     */
+    const seen = new Set();
+    records.doctors = doctors.filter((doctor) => {
+      const key = nameKey(doctor.name);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }
   if (parsers.includes('price-table')) {
     const seen = new Set();
@@ -57,6 +83,11 @@ export const extractRecords = (body, parsers = ['jsonld', 'price-table']) => {
 };
 
 const isEmpty = (records) => !records.clinic && records.doctors.length === 0 && records.prices.length === 0;
+
+const isOversized = (records) =>
+  records.doctors.length > MAX_DOCTORS_PER_SOURCE
+  || records.prices.length > MAX_PRICES_PER_SOURCE
+  || records.unmatched.length > MAX_UNMATCHED_PER_SOURCE;
 
 const priceValue = (price) => price?.min ?? null;
 
@@ -107,7 +138,8 @@ export const diffRecords = (previous = EMPTY_RECORDS, next = EMPTY_RECORDS) => {
     const before = prevPrices.get(key);
     if (!before) changes.push({ kind: 'price', key, change: 'added', after: price });
     else if (priceValue(before.price) !== priceValue(price.price) || Boolean(before.price.from) !== Boolean(price.price.from)) {
-      changes.push({ kind: 'price', key, change: 'changed', field: 'price', before: before.price, after: price.price });
+      // baseline — последняя цена, которую видел человек (или первая собранная).
+      changes.push({ kind: 'price', key, change: 'changed', field: 'price', before: before.price, after: price.price, baseline: before.approved ?? before.price });
     }
   }
   for (const [key, price] of prevPrices) {
@@ -138,7 +170,12 @@ export const classifyChange = (change) => {
     case 'price': {
       if (change.change === 'added') return { decision: 'auto' };
       if (change.change === 'removed') return { decision: 'review', reason: 'услуга пропала из прайса' };
-      const before = priceValue(change.before);
+      /*
+       * Сдвиг считается от последней цены, одобренной человеком, а не от
+       * последней применённой. Иначе цену можно было «дотянуть» ступеньками
+       * по 19 %: 1000 → 2386 за пять прогонов без единой проверки.
+       */
+      const before = priceValue(change.baseline ?? change.before);
       const after = priceValue(change.after);
       const shift = before ? Math.abs(after - before) / before : 1;
       return shift <= PRICE_AUTO_TOLERANCE
@@ -157,40 +194,65 @@ export const classifyChange = (change) => {
  * того, что половина врачей уволилась за неделю. Тогда на проверку уходит всё.
  */
 export const isMassChange = (previous, changes) => {
-  const removedDoctors = changes.filter((change) => change.kind === 'doctor' && change.change === 'removed').length;
-  const removedPrices = changes.filter((change) => change.kind === 'price' && change.change === 'removed').length;
+  const count = (kind, change) => changes.filter((item) => item.kind === kind && item.change === change).length;
+  const removedDoctors = count('doctor', 'removed');
+  const removedPrices = count('price', 'removed');
+  /*
+   * Массовые ДОБАВЛЕНИЯ — тоже признак поломки или подмены: раньше считались
+   * только пропажи, и тысячи выдуманных врачей применялись автоматически.
+   */
+  const addedDoctors = count('doctor', 'added');
+  const addedPrices = count('price', 'added');
   return (previous.doctors.length >= 3 && removedDoctors / previous.doctors.length > MASS_CHANGE_SHARE)
-    || (previous.prices.length >= 3 && removedPrices / previous.prices.length > MASS_CHANGE_SHARE);
+    || (previous.prices.length >= 3 && removedPrices / previous.prices.length > MASS_CHANGE_SHARE)
+    || addedDoctors > Math.max(10, previous.doctors.length)
+    || addedPrices > Math.max(30, previous.prices.length);
 };
 
-/** Применяет изменения к записям снимка. */
-export const applyChanges = (records, changes) => {
+/**
+ * Применяет изменения к записям снимка.
+ *
+ * @param {object} records
+ * @param {object[]} changes
+ * @param {{reviewed?: boolean}} [options] reviewed — изменения одобрил человек:
+ *   его решение становится новой точкой отсчёта для цены.
+ */
+export const applyChanges = (records, changes, { reviewed = false } = {}) => {
+  /*
+   * Карты вместо поиска по массиву на каждое изменение: восемь тысяч
+   * изменений раньше применялись двадцать секунд (квадратичная сложность).
+   * Map сохраняет порядок вставки — порядок записей в снимке не меняется.
+   */
+  const doctors = new Map(records.doctors.map((doctor) => [nameKey(doctor.name), { ...doctor }]));
+  const prices = new Map(records.prices.map((price) => [price.serviceId, { ...price }]));
   const next = {
     clinic: records.clinic ? { ...records.clinic } : null,
-    doctors: records.doctors.map((doctor) => ({ ...doctor })),
-    prices: records.prices.map((price) => ({ ...price })),
     unmatched: [...(records.unmatched || [])],
   };
   for (const change of changes) {
     if (change.kind === 'clinic') {
       if (change.change === 'added') next.clinic = { ...change.after };
+      else if (!next.clinic) continue;
       else if (change.field === 'geo') [next.clinic.lat, next.clinic.lng] = change.after;
       else next.clinic[change.field] = change.after;
     } else if (change.kind === 'doctor') {
-      const index = next.doctors.findIndex((doctor) => nameKey(doctor.name) === change.key);
-      if (change.change === 'added' && index === -1) next.doctors.push({ ...change.after });
-      else if (change.change === 'removed' && index !== -1) next.doctors.splice(index, 1);
-      else if (change.change === 'changed' && index !== -1) next.doctors[index][change.field] = change.after;
+      const existing = doctors.get(change.key);
+      if (change.change === 'added' && !existing) doctors.set(change.key, { ...change.after });
+      else if (change.change === 'removed' && existing) doctors.delete(change.key);
+      else if (change.change === 'changed' && existing) existing[change.field] = change.after;
     } else if (change.kind === 'price') {
-      const index = next.prices.findIndex((price) => price.serviceId === change.key);
-      if (change.change === 'added' && index === -1) next.prices.push({ ...change.after });
-      else if (change.change === 'removed' && index !== -1) next.prices.splice(index, 1);
-      else if (change.change === 'changed' && index !== -1) next.prices[index].price = change.after;
+      const existing = prices.get(change.key);
+      if (change.change === 'added' && !existing) prices.set(change.key, { ...change.after, approved: change.after.price });
+      else if (change.change === 'removed' && existing) prices.delete(change.key);
+      else if (change.change === 'changed' && existing) {
+        existing.approved = reviewed ? change.after : existing.approved ?? change.baseline ?? existing.price;
+        existing.price = change.after;
+      }
     } else if (change.kind === 'unmatched_price') {
       next.unmatched.push(change.after);
     }
   }
-  return next;
+  return { clinic: next.clinic, doctors: [...doctors.values()], prices: [...prices.values()], unmatched: next.unmatched };
 };
 
 /** Стабильный id пункта очереди: одно и то же изменение не дублируется между прогонами. */
@@ -226,6 +288,12 @@ export const collectSource = async ({ source, fetcher, store, now = new Date(), 
   if (previous && previous.contentHash === contentHash) return touch('unchanged');
 
   const records = extractRecords(fetched.body, source.parser || ['jsonld', 'price-table']);
+  if (isOversized(records)) {
+    const item = { kind: 'source', key: 'page', change: 'changed', field: 'structure', after: 'oversized' };
+    const review = [{ ...item, id: reviewId(source.id, item), sourceId: source.id, reason: `на странице слишком много записей (врачей: ${records.doctors.length}, цен: ${records.prices.length}) — проверьте разбор`, detectedAt: today }];
+    if (!dryRun) await store.enqueue(review);
+    return { sourceId: source.id, status: 'too_many_records', auto: [], review };
+  }
   if (isEmpty(records)) {
     const item = { kind: 'source', key: 'page', change: 'changed', field: 'structure', after: 'empty' };
     const review = [{ ...item, id: reviewId(source.id, item), sourceId: source.id, reason: 'страница не разобралась — возможно, сменилась вёрстка', detectedAt: today }];
@@ -250,6 +318,16 @@ export const collectSource = async ({ source, fetcher, store, now = new Date(), 
     else review.push({ ...change, id: reviewId(source.id, change), sourceId: source.id, reason: verdict.reason, detectedAt: today });
   }
 
+  /*
+   * Новый источник не попадает в справочник, пока человек не посмотрел
+   * первый снимок: один пункт очереди «подтвердите источник». Раньше всё,
+   * что было на странице в момент заведения, применялось без проверки.
+   */
+  if (bootstrap) {
+    const item = { kind: 'source', key: 'source', change: 'added', field: 'approval', after: { doctors: records.doctors.length, prices: records.prices.length, clinic: records.clinic?.name || '' } };
+    review.unshift({ ...item, id: reviewId(source.id, item), sourceId: source.id, reason: 'новый источник: посмотрите снимок и подтвердите его', detectedAt: today });
+  }
+
   const rejected = await store.readRejected();
   const pending = review.filter((item) => !rejected.has(item.id));
 
@@ -261,6 +339,8 @@ export const collectSource = async ({ source, fetcher, store, now = new Date(), 
       etag: fetched.etag || null,
       lastModified: fetched.lastModified || null,
       contentHash,
+      // Снимки, заведённые до проверки источников, считаются одобренными.
+      approved: bootstrap ? false : previous.approved ?? true,
       records: applyChanges(base, auto),
     });
     await store.enqueue(pending);
@@ -290,8 +370,15 @@ export const verifyDoctorsOnPages = async ({ doctors, fetcher, now = new Date(),
   for (const [url, list] of byUrl) {
     if (pages >= limitPages) break;
     pages += 1;
-    const fetched = await fetcher.fetchSource({ type: 'http', url });
-    const text = fetched.status === 'ok' ? htmlToText(fetched.body) : null;
+    let fetched;
+    let text = null;
+    try {
+      fetched = await fetcher.fetchSource({ type: 'http', url });
+      text = fetched.status === 'ok' ? htmlToText(fetched.body) : null;
+    } catch (error) {
+      // Одна страница с сюрпризом не должна оставить без проверки все остальные.
+      fetched = { status: 'error', code: error?.name || 'exception' };
+    }
     for (const doctor of list) {
       if (!text) {
         results[doctor.id] = { status: 'unreachable', checkedAt: today, code: fetched.code || fetched.status };
@@ -318,7 +405,9 @@ const show = (value) => {
 };
 
 /** Человекочитаемое описание изменения — для отчёта и очереди проверки. */
-export const describeChange = (change) => {
+export const describeChange = (change) => cleanText(describeChangeRaw(change), 400);
+
+const describeChangeRaw = (change) => {
   const field = FIELD_LABELS[change.field] || change.field;
   switch (change.kind) {
     case 'clinic':
@@ -334,7 +423,10 @@ export const describeChange = (change) => {
     case 'unmatched_price':
       return `строка прайса без услуги в справочнике: «${change.after.name}» — ${show(change.after.price)}`;
     case 'source':
-      return 'страница не разобралась (сменилась вёрстка?)';
+      if (change.change === 'added') {
+        return `новый источник: клиника «${change.after?.clinic || '?'}», врачей ${change.after?.doctors ?? 0}, цен ${change.after?.prices ?? 0}`;
+      }
+      return change.after === 'oversized' ? 'на странице слишком много записей' : 'страница не разобралась (сменилась вёрстка?)';
     default:
       return `${change.kind}: ${change.change}`;
   }

@@ -20,6 +20,28 @@ import { isPediatricRecord, specialtyCode } from './specialties.js';
 
 const ID = /^[a-z0-9][a-z0-9-]{1,63}$/;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
+const PHONE = /^\+?[\d\s()-]{5,24}$/;
+const OWNERSHIP = new Set(['Частная', 'Государственная']);
+
+/*
+ * Справочник собирается и со страниц клиник, поэтому значения проверяются
+ * как чужие: ссылки — только http(s), телефон — только цифры и разделители,
+ * координаты — в пределах республики, строки — разумной длины. Раньше
+ * проходили «vbscript:…» в ссылке, имя в 2 МБ и стаж в миллиард лет.
+ */
+const isHttpUrl = (value) => {
+  if (typeof value !== 'string' || value.length > 500) return false;
+  try {
+    return ['http:', 'https:'].includes(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+};
+const inRegion = (lat, lng) => Number.isFinite(lat) && Number.isFinite(lng) && lat >= 53.5 && lat <= 57 && lng >= 46.5 && lng <= 55;
+const tooLong = (value, max) => typeof value === 'string' && value.length > max;
+const checkUrl = (errors, label, value) => {
+  if (value !== undefined && value !== null && value !== '' && !isHttpUrl(value)) errors.push(`${label}: ссылка не http(s)`);
+};
 
 /**
  * Проверяет справочник. Возвращает список ошибок — пустой, если всё верно.
@@ -36,13 +58,23 @@ export const validatePrivateCatalog = (catalog) => {
     if (clinicIds.has(clinic.id)) errors.push(`клиника ${clinic.id}: повтор id`);
     clinicIds.add(clinic.id);
     if (!clinic.name) errors.push(`клиника ${clinic.id}: нет названия`);
+    if (tooLong(clinic.name, 200) || tooLong(clinic.description, 2000)) errors.push(`клиника ${clinic.id}: слишком длинный текст`);
+    if (clinic.ownership !== undefined && !OWNERSHIP.has(clinic.ownership)) errors.push(`клиника ${clinic.id}: неизвестная форма собственности`);
+    if (clinic.phone && !PHONE.test(clinic.phone)) errors.push(`клиника ${clinic.id}: неверный телефон`);
+    checkUrl(errors, `клиника ${clinic.id}`, clinic.website);
+    checkUrl(errors, `клиника ${clinic.id}`, clinic.sourceUrl);
     if (!Array.isArray(clinic.branches) || clinic.branches.length === 0) errors.push(`клиника ${clinic.id}: нет филиалов`);
     for (const branch of clinic.branches || []) {
       if (!ID.test(branch.id || '')) errors.push(`филиал: неверный id «${branch.id}»`);
       if (branchIds.has(branch.id)) errors.push(`филиал ${branch.id}: повтор id`);
       branchIds.add(branch.id);
       if (!Number.isFinite(branch.lat) || !Number.isFinite(branch.lng)) errors.push(`филиал ${branch.id}: нет координат`);
+      else if (!inRegion(branch.lat, branch.lng)) errors.push(`филиал ${branch.id}: координаты вне Татарстана`);
       if (!branch.address) errors.push(`филиал ${branch.id}: нет адреса`);
+      if (tooLong(branch.name, 200) || tooLong(branch.address, 300) || tooLong(branch.description, 2000)) errors.push(`филиал ${branch.id}: слишком длинный текст`);
+      if (branch.phone && !PHONE.test(branch.phone)) errors.push(`филиал ${branch.id}: неверный телефон`);
+      checkUrl(errors, `филиал ${branch.id}`, branch.bookingUrl);
+      checkUrl(errors, `филиал ${branch.id}`, branch.sourceUrl);
       if (branch.hours && !parseOpeningHours(branch.hours)) errors.push(`филиал ${branch.id}: часы не разбираются «${branch.hours}»`);
     }
   }
@@ -53,6 +85,11 @@ export const validatePrivateCatalog = (catalog) => {
     if (doctorIds.has(doctor.id)) errors.push(`врач ${doctor.id}: повтор id`);
     doctorIds.add(doctor.id);
     if (!doctor.name || !doctor.specialty) errors.push(`врач ${doctor.id}: нет имени или специальности`);
+    if (tooLong(doctor.name, 200) || tooLong(doctor.specialty, 120) || tooLong(doctor.description, 2000)) errors.push(`врач ${doctor.id}: слишком длинный текст`);
+    if (doctor.experienceYears !== undefined && !(Number.isFinite(doctor.experienceYears) && doctor.experienceYears >= 0 && doctor.experienceYears <= 70)) {
+      errors.push(`врач ${doctor.id}: неверный стаж`);
+    }
+    if (Array.isArray(doctor.branchIds) && new Set(doctor.branchIds).size !== doctor.branchIds.length) errors.push(`врач ${doctor.id}: филиал указан дважды`);
     if (!Array.isArray(doctor.branchIds) || doctor.branchIds.length === 0) errors.push(`врач ${doctor.id}: не привязан к филиалу`);
     for (const branchId of doctor.branchIds || []) {
       if (!branchIds.has(branchId)) errors.push(`врач ${doctor.id}: нет филиала ${branchId}`);

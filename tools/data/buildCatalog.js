@@ -10,8 +10,24 @@
  * данные (shared/privateCatalog.js), и только потом попадает в приложение.
  */
 
+import { createHash } from 'node:crypto';
+
 import { parseOpeningHours } from '../../shared/openingHours.js';
 import { validatePrivateCatalog } from '../../shared/privateCatalog.js';
+import { sameSite } from './fetchSource.js';
+
+const shortHash = (value) => createHash('sha256').update(String(value)).digest('hex').slice(0, 10);
+
+/* Сайт со страницы принимается, только если он того же сайта, что и источник. */
+const trustedWebsite = (candidate, source) => {
+  if (typeof candidate === 'string' && /^https?:\/\//i.test(candidate) && source.url && sameSite(candidate, source.url)) return candidate;
+  if (typeof source.website === 'string' && /^https?:\/\//i.test(source.website)) return source.website;
+  try {
+    return source.url ? new URL(source.url).origin : '';
+  } catch {
+    return '';
+  }
+};
 
 const TRANSLIT = {
   а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y', к: 'k', л: 'l', м: 'm',
@@ -40,6 +56,8 @@ export const buildCatalogFromSnapshots = (sources, snapshots, { includeDemo = fa
   const catalog = { meta: { source: 'collected', verifiedAt: null }, clinics: [], doctors: [], prices: [] };
   const skipped = [];
   const clinics = new Map();
+  const doctorsByIdentity = new Map();
+  const usedIds = new Set();
   let oldest = null;
 
   for (const source of sources) {
@@ -51,9 +69,17 @@ export const buildCatalogFromSnapshots = (sources, snapshots, { includeDemo = fa
       skipped.push(`${source.id}: нет снимка или на странице не нашлось клиники`);
       continue;
     }
+    if (snapshot.approved === false) {
+      skipped.push(`${source.id}: новый источник ещё не подтверждён (npm run data:review)`);
+      continue;
+    }
 
-    const lat = page.lat ?? source.geo?.lat ?? null;
-    const lng = page.lng ?? source.geo?.lng ?? null;
+    /*
+     * Координаты из описания источника главнее страницы: их ставил человек.
+     * Страница может написать что угодно — в том числе 0 или 1e308.
+     */
+    const lat = source.geo?.lat ?? page.lat ?? null;
+    const lng = source.geo?.lng ?? page.lng ?? null;
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
       skipped.push(`${source.id}: нет координат — укажите geo в описании источника`);
       continue;
@@ -64,7 +90,7 @@ export const buildCatalogFromSnapshots = (sources, snapshots, { includeDemo = fa
         id: source.clinicId,
         name: source.clinicName || page.name,
         ownership: 'Частная',
-        website: page.website || source.website || '',
+        website: trustedWebsite(page.website, source),
         facilityType: source.facilityType || 'Клиника',
         branches: [],
       });
@@ -86,20 +112,37 @@ export const buildCatalogFromSnapshots = (sources, snapshots, { includeDemo = fa
     if (snapshot.verifiedAt && (!oldest || snapshot.verifiedAt < oldest)) oldest = snapshot.verifiedAt;
 
     for (const doctor of snapshot.records.doctors || []) {
-      const id = `${source.clinicId}-${slugify(doctor.name)}`.slice(0, 64).replace(/-+$/, '');
-      const existing = catalog.doctors.find((item) => item.id === id);
+      /*
+       * Один и тот же врач в двух филиалах клиники — одна запись с двумя
+       * филиалами. Разные люди с одинаковым транслитом («Иванова Мария» и
+       * «Иванова-Мария», «ц» и «тс») раньше сливались в одну запись; теперь
+       * врач узнаётся по имени и специальности, а id при совпадении
+       * транслита получает суффикс.
+       */
+      if (!doctor.specialty) continue;
+      const identity = `${source.clinicId}|${doctor.name}|${doctor.specialty}`;
+      const existing = doctorsByIdentity.get(identity);
       if (existing) {
-        existing.branchIds.push(source.branchId);
+        if (!existing.branchIds.includes(source.branchId)) existing.branchIds.push(source.branchId);
         continue;
       }
-      if (!doctor.specialty) continue;
-      catalog.doctors.push({
+      /*
+       * id — непрозрачный хэш, а не транслит имени: он попадает в адрес
+       * страницы (?doc=) и в события аналитики, а там имя врача рядом со
+       * специальностью (например, психиатр) ни к чему.
+       */
+      let id = `${source.clinicId.slice(0, 48)}-d${shortHash(identity)}`;
+      for (let attempt = 1; usedIds.has(id); attempt += 1) id = `${source.clinicId.slice(0, 48)}-d${shortHash(`${identity}|${attempt}`)}`;
+      usedIds.add(id);
+      const record = {
         id,
         name: doctor.name,
         specialty: doctor.specialty,
         branchIds: [source.branchId],
         ...(doctor.hours && parseOpeningHours(doctor.hours) ? { hours: doctor.hours } : {}),
-      });
+      };
+      doctorsByIdentity.set(identity, record);
+      catalog.doctors.push(record);
     }
 
     for (const price of snapshot.records.prices || []) {

@@ -147,7 +147,8 @@ export const serviceName = (id) => SERVICE_BY_ID[id]?.name || null;
  */
 export const normalizePrice = (value) => {
   if (typeof value === 'number') {
-    return Number.isFinite(value) && value > 0 && value < 1_000_000 ? { min: Math.round(value), max: Math.round(value) } : null;
+    // Меньше 10 ₽ — не цена приёма, а ошибка разбора («0,4» показывалось как «0 ₽» и шло первым).
+    return Number.isFinite(value) && value >= 10 && value < 1_000_000 ? { min: Math.round(value), max: Math.round(value) } : null;
   }
   if (value && typeof value === 'object') {
     const min = normalizePrice(value.min)?.min;
