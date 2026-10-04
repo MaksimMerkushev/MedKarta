@@ -31,7 +31,7 @@ shared/           контракт между фронтендом и бекен
 
 data/             справочники; это данные, а не код
   doctors.js        публичный срез
-  doctors.full.js   полная база (вне git)
+  doctors.full.js   полная база (вне git, но попадает в бандл — см. ниже)
   clinics.js
   facilities.js
 
@@ -68,91 +68,254 @@ npm start              # backend/server.js: API + статика из dist/
 | `PORT` | 3001 |
 | `HOST` | 127.0.0.1 |
 | `SERVE_STATIC` | включено, если существует `dist/`; `off` — только API |
+| `TRUST_PROXY` | 0; за nginx — 1 |
+| `AI_DAILY_CALL_LIMIT` | 2000 обращений к модели в сутки |
+| `CHAT_MAX_CONCURRENCY` | 1 |
 
-## Если статику отдаёт nginx
+## Сервер (VPS) пошагово
 
-`backend/server.js` выставляет заголовки безопасности сам. Но если HTML
-отдаёт nginx, а сервер работает только как API (`SERVE_STATIC=off`), то
-**заголовки для страницы обязан выставлять nginx** — на ответах API они
-страницу не защищают.
+Рассчитано на одну машину с 1 ядром и 2 ГБ: nginx отдаёт статику и TLS,
+Node обслуживает только `/api/`. Так статика не конкурирует за ядро с
+расчётом маршрутов, а Node не виден из интернета напрямую.
 
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name medkarta.example;
+### 1. Пользователь, код, секреты
 
-    add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.tile.openstreetmap.org; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests" always;
-    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-Frame-Options "DENY" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    add_header Permissions-Policy "geolocation=(self), camera=(), microphone=(), payment=(), usb=(), magnetometer=(), accelerometer=(), gyroscope=(), browsing-topics=()" always;
-
-    root /srv/medkarta/dist;
-
-    location / {
-        try_files $uri /index.html;
-    }
-
-    location /assets/ {
-        add_header Cache-Control "public, max-age=31536000, immutable" always;
-    }
-
-    location /api/ {
-        proxy_pass http://127.0.0.1:3001;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Host $host;
-        add_header Cache-Control "no-store, max-age=0" always;
-        add_header X-Robots-Tag "noindex" always;
-    }
-}
+```bash
+sudo adduser --system --group --home /srv/medkarta medkarta
+sudo -u medkarta git clone https://github.com/MaksimMerkushev/med-navigator.git /srv/medkarta/app
+cd /srv/medkarta/app
+sudo -u medkarta npm ci && sudo -u medkarta npm run build
+sudo -u medkarta cp .env.example .env && sudo chmod 600 .env   # заполнить .env
 ```
 
-**Ограничьте частоту и соединения на уровне nginx.** У сервера одно ядро,
-и расчёт маршрута идёт в основном потоке. Приложение само ограничивает
-маршруты по затраченному процессорному времени на адрес и обращения к
-модели общим бюджетом (когда он исчерпан, ассистент отвечает по локальному
-плану, а не отказом). Но медленные соединения и поток запросов с многих
-адресов дешевле отсечь до Node:
+Node — 22 LTS (`.nvmrc`). Граф `data/graph/kazan.graph` и
+`data/doctors.full.js` копируются отдельно (их нет в git).
+
+> **Важно про `data/doctors.full.js`.** Файла нет в git, но при сборке он
+> попадает в бандл (`vite.config.js` подставляет его вместо публичного среза):
+> карта показывает этих врачей, значит, браузер их скачивает. Это не утечка
+> секрета — данные публичные, со страниц больниц, — но «закрытой» базу
+> делает только отдельный API с выдачей по запросу.
+
+### 2. systemd
+
+`/etc/systemd/system/medkarta.service`:
+
+```ini
+[Unit]
+Description=MedKarta API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=medkarta
+Group=medkarta
+WorkingDirectory=/srv/medkarta/app
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=3001
+Environment=SERVE_STATIC=off
+Environment=TRUST_PROXY=1
+ExecStart=/usr/bin/node backend/server.js
+Restart=always
+RestartSec=2
+# Сервер выходит при необработанном исключении и рассчитывает на перезапуск.
+MemoryMax=1200M
+LimitNOFILE=8192
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/medkarta/app/var /srv/medkarta/app/data/collected /srv/medkarta/app/data/review /srv/medkarta/app/data/private
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo -u medkarta mkdir -p /srv/medkarta/app/var /srv/medkarta/app/data/collected /srv/medkarta/app/data/review
+sudo systemctl daemon-reload && sudo systemctl enable --now medkarta
+journalctl -u medkarta -f        # «server.started», routing_provider: local
+```
+
+### 3. nginx и HTTPS
+
+Сертификат — Let's Encrypt: `sudo apt install certbot python3-certbot-nginx`,
+затем `sudo certbot --nginx -d medkarta.example` (продление certbot ставит сам).
+
+`/etc/nginx/snippets/medkarta-headers.conf` — заголовки страницы. nginx не
+наследует `add_header` в `location` со своими `add_header`, поэтому файл
+подключается в каждом таком блоке:
 
 ```nginx
-limit_req_zone  $binary_remote_addr zone=api:10m rate=5r/s;
+add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.tile.openstreetmap.org; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests" always;
+add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header X-Frame-Options "DENY" always;
+add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+add_header Permissions-Policy "geolocation=(self), camera=(), microphone=(), payment=(), usb=(), magnetometer=(), accelerometer=(), gyroscope=(), browsing-topics=()" always;
+```
+
+`/etc/nginx/sites-available/medkarta`:
+
+```nginx
+# Журнал без строки запроса: в ?q= лежит текст поиска («невролог после
+# инсульта»), а это сведения о здоровье. Тела запросов nginx не пишет.
+log_format medkarta '$remote_addr [$time_local] "$request_method $uri" $status $body_bytes_sent $request_time';
+
+limit_req_zone  $binary_remote_addr zone=chat:10m   rate=1r/s;
+limit_req_zone  $binary_remote_addr zone=route:10m  rate=5r/s;
+limit_req_zone  $binary_remote_addr zone=events:10m rate=2r/s;
 limit_conn_zone $binary_remote_addr zone=perip:10m;
 
 server {
-    # …
+    listen 80;
+    listen [::]:80;
+    server_name medkarta.example;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name medkarta.example;
+    # ssl_certificate … — добавит certbot
+
+    server_tokens off;
+    access_log /var/log/nginx/medkarta.access.log medkarta;
+
     client_header_timeout 10s;
     client_body_timeout   10s;
     client_max_body_size  64k;
     limit_conn perip 20;
 
+    gzip on;
+    gzip_types text/css application/javascript text/javascript application/json image/svg+xml;
+    gzip_min_length 1024;
+
+    root /srv/medkarta/app/dist;
+    include snippets/medkarta-headers.conf;
+
+    location / {
+        try_files $uri /index.html;
+        add_header Cache-Control "no-cache" always;
+        include snippets/medkarta-headers.conf;
+    }
+
+    # Имена файлов в assets/ содержат хэш содержимого — их можно кэшировать навсегда.
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        include snippets/medkarta-headers.conf;
+    }
+
     location /api/ {
-        limit_req zone=api burst=20 nodelay;
-        # … proxy_pass как выше
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 30s;
+        # Cache-Control, X-Robots-Tag и заголовки безопасности для API
+        # ставит сам сервер — здесь их не дублируем.
+        limit_req zone=route burst=20 nodelay;
+    }
+    location = /api/chat {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_read_timeout 30s;
+        limit_req zone=chat burst=5;
+    }
+    location = /api/events {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Host $host;
+        limit_req zone=events burst=10 nodelay;
     }
 }
 ```
 
-Если сервер открыт в интернет напрямую, без nginx, он сам ограничивает
-число соединений с одного адреса (`MAX_CONNECTIONS_PER_IP`, по умолчанию 32).
-Задайте также `ALLOWED_HOSTS` — имена сайта, на которые отвечает API.
+HSTS с `preload` включайте только когда HTTPS работает на всех поддоменах:
+из списка предзагрузки браузеров домен выводится месяцами.
+
+### 4. Межсетевой экран
+
+```bash
+sudo ufw default deny incoming
+sudo ufw allow OpenSSH
+sudo ufw allow 80,443/tcp
+sudo ufw enable                 # порт 3001 снаружи закрыт: Node слушает 127.0.0.1
+```
+
+Вход по SSH — только по ключу (`PasswordAuthentication no` в `sshd_config`).
+
+### 5. Журналы и резервные копии
+
+- Журналы сервиса — `journald`; ограничьте размер: `SystemMaxUse=200M` в
+  `/etc/systemd/journald.conf`. Журналы nginx ротирует пакетный logrotate.
+- Аналитика сама удаляет файлы старше `ANALYTICS_RETENTION_DAYS` и держит
+  каталог в пределах `ANALYTICS_MAX_TOTAL_MB`.
+- Раз в сутки копируйте на другую машину: `.env`, `data/doctors.full.js`,
+  `data/graph/`, `data/collected/`, `var/analytics/`. Без копии `.env` и
+  полной базы восстановление после потери VPS займёт дни.
+
+### 6. Обновление
+
+```bash
+cd /srv/medkarta/app && sudo -u medkarta git pull && sudo -u medkarta npm ci \
+  && sudo -u medkarta npm test && sudo -u medkarta npm run build && sudo systemctl restart medkarta
+```
+
+### Ограничения внутри приложения
+
+nginx отсекает поток запросов и медленные соединения до Node, но сервер
+защищается и сам:
+
+- **Ассистент:** 20 запросов за 5 минут с адреса, бюджет процессорного
+  времени на адрес (3 с, пополняется на 30 мс/с) и очередь на разбор
+  (`CHAT_MAX_CONCURRENCY`, по умолчанию 1). Обращения к модели — не больше
+  300 за 5 минут и `AI_DAILY_CALL_LIMIT` за сутки; сверх этого ответ строится
+  локально.
+- **Маршруты и время в пути:** бюджет процессорного времени на адрес.
+- **Общий предохранитель:** если тяжёлые запросы заняли больше 60 % ядра за
+  10 секунд, ассистент отвечает 503 «перегружен»; маршруты — при 85 %.
+  Статика и лёгкие запросы при этом отвечают.
+- **Аналитика:** 120 запросов за 5 минут и 1500 событий в сутки с адреса.
 
 `X-Forwarded-For` нужен ограничителю частоты: без него все запросы придут
-с адреса прокси и лимит на адрес станет общим на всех. **Задайте в `.env`
-`TRUST_PROXY=1`** — число прокси перед сервером. Тогда адрес клиента берётся
-из последнего значения `X-Forwarded-For`, которое дописал nginx.
+с адреса прокси, и лимит на адрес станет общим на всех. **Задайте
+`TRUST_PROXY=1`** — число прокси перед сервером. Адрес клиента берётся из
+последнего значения `X-Forwarded-For`, которое дописал nginx, и только если
+соединение пришло от самого nginx (`127.0.0.1`; другой адрес прокси —
+`TRUSTED_PROXIES`). Значение вроде `TRUST_PROXY=true` — ошибка запуска, а не
+тихий ноль.
 
-Без `TRUST_PROXY` сервер заголовкам `X-Forwarded-*` не верит и берёт адрес
-из сокета. Так и должно быть, если сервер открыт в интернет напрямую:
-заголовок пишет клиент, и раньше, меняя его в каждом запросе, любой обходил
-лимит «20 запросов с адреса». Первое значение заголовка подделывается даже
-за nginx, поэтому берётся последнее.
+Без `TRUST_PROXY` сервер заголовкам `X-Forwarded-*` и `X-Real-IP` не верит и
+берёт адрес из сокета. Так и должно быть, если сервер открыт в интернет
+напрямую: тогда он сам ограничивает число соединений с одного адреса
+(`MAX_CONNECTIONS_PER_IP`, по умолчанию 32; IPv6 считается по сети /64),
+сжимает статику и отдаёт `304` по `ETag`. Задайте также `ALLOWED_HOSTS` —
+имена сайта, на которые отвечает API.
 
-Оговорка про `add_header` в nginx: директивы не наследуются в блок `location`,
-если в нём есть собственный `add_header`. Поэтому в `/api/` и `/assets/`
-заголовки безопасности придётся перечислить повторно либо вынести их
-в подключаемый файл и `include` его в каждом блоке.
+## Карта: тайлы
+
+Подложка карты сейчас берётся с `tile.openstreetmap.org`. Правила OSM
+запрещают нагружать их серверы коммерческим проектом без договорённости и
+не дают гарантий доступности. Для продакшена нужен свой поставщик тайлов
+(или свой тайл-сервер); после смены адреса поправьте `img-src` в CSP
+(`backend/http/securityHeaders.js` и сниппет nginx) и `preconnect` в
+`frontend/index.html`.
 
 ## Провайдер модели
 
@@ -192,7 +355,8 @@ npm run report:searches -- --json      # для таблиц и графиков
 ## Что проверить перед выкладкой
 
 1. `npm test` — все тесты, включая проверки границы доверия.
-2. `npm run lint`.
+2. `npm run lint` и `npm audit` (Vite — не старше 8.0.16: в более ранних
+   версиях dev-сервер с `--host` отдавал файлы вне проекта).
 3. `PRIVACY_TOKEN_SECRET` задан в окружении.
 4. В сборке нет секретов: `grep -R "sk-\|ghp_" dist/ || echo чисто`.
 5. `data/doctors.full.js` не попал в git: `git check-ignore data/doctors.full.js`.
