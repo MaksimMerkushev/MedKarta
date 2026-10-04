@@ -112,7 +112,9 @@ export const track = (type, fields = {}) => {
   if (optedOut()) return false;
   const event = sanitizeEvent({ type, sid: sessionId(), ...fields });
   if (!event) {
-    if (import.meta.env?.DEV) console.warn('[analytics] событие отброшено', type, fields);
+    // Без «?.»: с ним сборщик мог подставить объект import.meta.env целиком
+    // вместе со всеми переменными VITE_* вместо одного флага DEV.
+    if (import.meta.env.DEV) console.warn('[analytics] событие отброшено', type, fields);
     return false;
   }
   attachListeners();

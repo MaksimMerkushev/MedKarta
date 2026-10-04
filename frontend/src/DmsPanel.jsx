@@ -16,8 +16,11 @@ const INSURED_LABEL = { adult: 'взрослая', child: 'детская', fami
 const formatDay = (value) => (typeof value === 'string' ? value.split('-').reverse().join('.') : '');
 
 const telHref = (phone) => {
-  const digits = String(phone || '').replace(/[^\d+]/g, '');
-  return digits.length >= 6 ? `tel:${digits}` : null;
+  // Несколько номеров через «;» — звоним по первому (раньше цифры склеивались в один «номер»).
+  const raw = String(phone || '').split(/[;,]/)[0].trim();
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length < 6 || digits.length > 15) return null;
+  return `tel:${raw.startsWith('+') ? '+' : ''}${digits}`;
 };
 
 export default function DmsPanel({ insurance, planId, today, onSave, onClose, onCallPult, isDemo }) {

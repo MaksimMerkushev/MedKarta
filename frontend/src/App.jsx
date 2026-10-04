@@ -56,7 +56,8 @@ import { ClinicsData } from '@data/clinics.js';
 import collectedCatalog from '@data/private/catalog.json';
 import verificationData from '@data/verification.json';
 import { flattenPrivateCatalog } from '@shared/privateCatalog.js';
-import Toast, { useToast } from './Toast';
+import Toast from './Toast';
+import { useToast } from './hooks/useToast';
 import SearchFilters from './SearchFilters';
 import PlaceDoctorList from './PlaceDoctorList';
 import { DataReportButton, SearchFeedbackPrompt } from './FeedbackWidgets';
@@ -759,8 +760,12 @@ const buildWeekSchedule = (schedule, now) => {
 // tel: не переносит пробелы и скобки — в ссылку идёт только «+» и цифры,
 // а на экране остаётся человекочитаемый вид из данных.
 const toTelHref = (phone) => {
-  const cleaned = String(phone || '').replace(/[^\d+]/g, '');
-  return cleaned.length >= 6 ? `tel:${cleaned}` : null;
+  // «+» допустим только в начале номера: из «…//+7 843…» раньше получалось «tel:5+7843…».
+  // Несколько номеров через «;» — звоним по первому (раньше цифры склеивались в один «номер»).
+  const raw = String(phone || '').split(/[;,]/)[0].trim();
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length < 6 || digits.length > 15) return null;
+  return `tel:${raw.startsWith('+') ? '+' : ''}${digits}`;
 };
 
 // Ссылка из данных считается недоверенной: разрешаем только http(s),

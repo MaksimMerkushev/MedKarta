@@ -4,7 +4,6 @@
  * Замена window.alert(): нативный диалог блокирует поток, ломает вёрстку на
  * мобильных и не читается скринридером в контексте карты.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Info, X } from 'lucide-react';
 
 const ICONS = {
@@ -17,26 +16,6 @@ const TONES = {
   info: 'border-blue-200 bg-white text-slate-700 dark:border-blue-800 dark:bg-slate-800 dark:text-slate-100',
   success: 'border-emerald-200 bg-white text-emerald-800 dark:border-emerald-800 dark:bg-slate-800 dark:text-emerald-200',
   warning: 'border-amber-200 bg-white text-amber-800 dark:border-amber-800 dark:bg-slate-800 dark:text-amber-200',
-};
-
-export const useToast = () => {
-  const [toast, setToast] = useState(null);
-  const timerRef = useRef(null);
-
-  const dismiss = useCallback(() => {
-    clearTimeout(timerRef.current);
-    setToast(null);
-  }, []);
-
-  const showToast = useCallback((message, tone = 'info', durationMs = 4000) => {
-    clearTimeout(timerRef.current);
-    setToast({ message, tone, id: `${tone}-${message}` });
-    timerRef.current = setTimeout(() => setToast(null), durationMs);
-  }, []);
-
-  useEffect(() => () => clearTimeout(timerRef.current), []);
-
-  return { toast, showToast, dismiss };
 };
 
 export default function Toast({ toast, onDismiss }) {

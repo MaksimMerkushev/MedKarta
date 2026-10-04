@@ -6,7 +6,7 @@
  * Поэтому всё, что оттуда читается, проходит через валидатор,
  * а не сразу попадает в состояние.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 const readValue = (key, validate, fallback) => {
   try {
@@ -24,10 +24,9 @@ const readValue = (key, validate, fallback) => {
 };
 
 export const useLocalStorageState = (key, fallback, validate) => {
-  const validateRef = useRef(validate);
-  validateRef.current = validate;
-
-  const [value, setValue] = useState(() => readValue(key, validateRef.current, fallback));
+  // Валидатор нужен только при первом чтении: ref для него не требуется, а
+  // запись в ref во время отрисовки нарушала правила React.
+  const [value, setValue] = useState(() => readValue(key, validate, fallback));
 
   useEffect(() => {
     try {

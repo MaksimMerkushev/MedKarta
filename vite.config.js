@@ -7,6 +7,7 @@ const ROOT = fileURLToPath(new URL('.', import.meta.url))
 const FRONTEND = fileURLToPath(new URL('./frontend', import.meta.url))
 const SHARED = fileURLToPath(new URL('./shared', import.meta.url))
 const DATA = fileURLToPath(new URL('./data', import.meta.url))
+const NODE_MODULES = fileURLToPath(new URL('./node_modules', import.meta.url))
 
 const CHAT_HANDLER_URL = new URL('./backend/api/chat.js', import.meta.url)
 const ROUTE_HANDLER_URL = new URL('./backend/api/route.js', import.meta.url)
@@ -28,6 +29,10 @@ const HAS_FULL_DB = fs.existsSync(FULL_DB_PATH)
  * конвейер Vite ему не нужен. Query-параметр сбрасывает кеш модулей, чтобы
  * правки подхватывались без перезапуска.
  */
+const isLocalHost = (host) =>
+  /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(String(host || '')) ||
+  (process.env.ALLOWED_HOSTS || '').split(',').map((value) => value.trim().toLowerCase()).filter(Boolean).includes(String(host || '').toLowerCase())
+
 const devApiPlugin = (env) => ({
   name: 'medkarta-dev-api',
   apply: 'serve',
@@ -66,6 +71,16 @@ const devApiPlugin = (env) => ({
       }
 
       server.middlewares.use(mount, async (req, res, next) => {
+        /*
+         * Эти обработчики подключены раньше проверки Host самого Vite. Без
+         * своей проверки страница с чужого домена, указавшего на 127.0.0.1
+         * (DNS rebinding), могла бы звать /api/chat с вашим ключом модели.
+         */
+        if (!isLocalHost(req.headers.host)) {
+          res.statusCode = 403
+          res.end()
+          return
+        }
         try {
           const { default: handler } = await import(`${handlerUrl.href}?t=${Date.now()}`)
           await handler(req, res)
@@ -105,9 +120,18 @@ export default defineConfig(({ mode }) => {
       ],
     },
     server: {
-      // root — frontend/, а shared/ и data/ лежат выше: без этого dev-сервер
-      // откажется их отдавать.
-      fs: { allow: [ROOT] },
+      /*
+       * Только эта машина. Если открыть сервер в сеть (`--host`, например
+       * для проверки с телефона), dev-сервер отдаёт исходники и данные всем
+       * в сети — делайте это только в доверенной сети и на свежем Vite.
+       */
+      host: 'localhost',
+      fs: {
+        // root — frontend/, а shared/ и data/ лежат выше. Раньше разрешался
+        // весь корень проекта — вместе с .env, backend/ и var/.
+        allow: [FRONTEND, SHARED, DATA, NODE_MODULES],
+        deny: ['.env', '.env.*', '*.{crt,pem,key}', '**/.git/**', '**/data/collected/**', '**/data/review/**', '**/var/**'],
+      },
     },
     build: {
       outDir: fileURLToPath(new URL('./dist', import.meta.url)),
