@@ -14,9 +14,10 @@ const ACCEPTANCE =
   'Построй маршрут сначала к терапевту Петрову, потом к ближайшему стоматологу после 18:00, а потом домой.';
 
 describe('Приёмочный сценарий', () => {
-  it('наружу уходит только санитизированное представление', async () => {
+  it('hybrid: наружу уходит только санитизированное представление', async () => {
     const { pipeline, sent } = makeTestPipeline({
       respond: { action: 'CLARIFY', steps: [], constraints: {}, reply_hint: 'need_clarification' },
+      outboundMode: 'hybrid',
     });
 
     await pipeline.handle({ messages: [{ role: 'user', content: ACCEPTANCE }], sessionId: TEST_SESSION });
@@ -26,6 +27,22 @@ describe('Приёмочный сценарий', () => {
     // hints глубоко заморожен: сортируем копию, а не сам массив.
     assert.deepEqual([...sent[0].hints.specialties].sort(), ['dentist', 'therapist']);
     assert.equal(sent[0].hints.constraints.availableAfter, '18:00');
+  });
+
+  it('structured: наружу уходит описание, порядок шагов сохранён', async () => {
+    const { pipeline, sent } = makeTestPipeline({
+      respond: { action: 'CLARIFY', steps: [], constraints: {}, reply_hint: 'need_clarification' },
+      outboundMode: 'structured',
+    });
+
+    await pipeline.handle({ messages: [{ role: 'user', content: ACCEPTANCE }], sessionId: TEST_SESSION });
+
+    const outbound = sent[0].messages[0].content;
+    assert.doesNotMatch(outbound, /Петров|Построй|сначала/u);
+    assert.match(outbound, /Порядок в запросе: @DOCTOR_[A-Z]{1,2} \(therapist\), затем dentist, затем @HOME\./u);
+    assert.match(outbound, /availableAfter=18:00/u);
+    assert.match(outbound, /selection=nearest/u);
+    assert.match(outbound, /Признаки намерения: route/u);
   });
 
   it('структурный план модели исполняется и превращается в маршрут', async () => {

@@ -67,6 +67,13 @@ grep -R "sk-" dist/ || echo "Секретов в сборке нет"
 который умеет единственный модуль `privacy/gateway.js`. Это закреплено
 правилом ESLint и тестом `tests/boundary.test.js`.
 
+По умолчанию (`PRIVACY_OUTBOUND_MODE=structured`) в запросе нет ни одного
+слова пользователя — только описание из перечислимых значений и меток.
+Проверка на размеченном наборе (`npm run eval:privacy`,
+[`docs/privacy-evaluation.md`](docs/privacy-evaluation.md)): 0 утечек на
+14 728 примерах с персональными данными; её десятая часть входит в
+`npm test`. `npm run test:security` прогоняет все тесты в обоих режимах.
+
 Что делает функция `backend/api/chat.js`:
 
 - принимает только `POST`, проверяет `Origin` на совпадение с собственным хостом

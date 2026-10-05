@@ -49,6 +49,8 @@ const CLINIC_ALIASES = Object.freeze({
   'дркб': ['детская республиканская клиническая больница'],
 });
 
+const ALIAS_EXCLUDES = Object.freeze({ 'ркб': ['детск'] });
+
 const asArray = (value) => (Array.isArray(value) ? value : []);
 
 const DAY_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
@@ -145,9 +147,16 @@ export const buildCatalog = ({ doctors = [], clinics = [], facilities = [] } = {
 
   const uniqueClinics = [...seen.values()].map((clinic) => {
     const key = clinic.name.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+    /*
+     * Сокращение добавляется и тогда, когда в названии есть только полная
+     * форма: «Детская республиканская клиническая больница…» без «(ДРКБ)»
+     * раньше не находилась по «ДРКБ». Детские больницы не получают «РКБ».
+     */
     const extra = Object.entries(CLINIC_ALIASES)
-      .filter(([alias]) => key.includes(alias))
-      .flatMap(([, values]) => values);
+      .filter(([alias, values]) => (key.includes(alias)
+        || values.some((value) => key.includes(value.replace(/\s+/g, ''))))
+        && !(ALIAS_EXCLUDES[alias] || []).some((stop) => key.includes(stop)))
+      .flatMap(([alias, values]) => [alias, ...values]);
     return extra.length > 0 ? { ...clinic, aliases: [...clinic.aliases, ...extra] } : clinic;
   });
 

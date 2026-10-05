@@ -13,7 +13,7 @@ import { FAIL_CLOSED_REASON, GATEWAY_DECISION } from './models.js';
 import { HARD_BLOCK_KINDS } from './detectors.js';
 
 /** Версия политики. Пишется в логи и в SanitizedPlannerRequest. */
-export const POLICY_VERSION = '2026-09-26.1';
+export const POLICY_VERSION = '2026-10-05.1';
 
 export const POLICY = Object.freeze({
   /**
@@ -75,6 +75,10 @@ export const decideGatewayPolicy = ({
   sanitizedChars = 0,
   obfuscation = { suspicious: false, resolved: false },
   analysisIncomplete = false,
+  structuredOutbound = false,
+  plannable = true,
+  namedUnknownDoctor = false,
+  explicitSpecialty = false,
 }) => {
   if (classification.emergency) {
     return { decision: GATEWAY_DECISION.EMERGENCY, reason: FAIL_CLOSED_REASON.EMERGENCY };
@@ -85,6 +89,47 @@ export const decideGatewayPolicy = ({
     // после редактуры — сам факт их появления означает, что пользователь
     // делится документами, и правильная реакция — попросить этого не делать.
     return { decision: GATEWAY_DECISION.LOCAL_ONLY, reason: FAIL_CLOSED_REASON.HARD_IDENTIFIER };
+  }
+
+  /*
+   * Структурный режим: наружу уходит только описание из перечислимых
+   * значений, слов пользователя в нём нет. Проверки ниже защищают ТЕКСТ —
+   * разорванный по буквам, недоразобранный, почти целиком вымаранный, — и
+   * в этом режиме ничего не защищают, а только отключали модель для
+   * запросов вроде «я Гульнара Хайруллина, Баумана 44, нужен терапевт».
+   */
+  if (structuredOutbound) {
+    /*
+     * Разрыв остаётся поводом ответить локально и в этом режиме — но уже не
+     * ради приватности: «маршрут к Н е и з в е с т н о м у» модель получила
+     * бы как «нужен маршрут» без цели, а локальный ответ прямо просит
+     * написать фамилию обычным текстом.
+     */
+    if (obfuscation.suspicious && !obfuscation.resolved) {
+      return { decision: GATEWAY_DECISION.LOCAL_ONLY, reason: FAIL_CLOSED_REASON.OBFUSCATION };
+    }
+    if (placeholderCount > POLICY.maxPlaceholders) {
+      return { decision: GATEWAY_DECISION.LOCAL_ONLY, reason: FAIL_CLOSED_REASON.TOKEN_BUDGET };
+    }
+    /*
+     * Неуверенный классификатор жалоб — повод не угадывать профиль. Но если
+     * пользователь сам назвал врача («Марат беспокоит, нужен кардиолог»),
+     * угадывать нечего: профиль взят из его слов, а не из симптомов.
+     */
+    if (classification.hasMedicalText && classification.confidence < POLICY.symptomConfidenceThreshold && !explicitSpecialty) {
+      return { decision: GATEWAY_DECISION.LOCAL_ONLY, reason: FAIL_CLOSED_REASON.LOW_CLASSIFIER_CONFIDENCE };
+    }
+    if (!plannable) {
+      // Ни профиля, ни места, ни условия: описание было бы пустым.
+      return {
+        decision: GATEWAY_DECISION.LOCAL_ONLY,
+        reason: namedUnknownDoctor ? FAIL_CLOSED_REASON.UNKNOWN_DOCTOR : FAIL_CLOSED_REASON.NOTHING_TO_PLAN,
+      };
+    }
+    return {
+      decision: GATEWAY_DECISION.ALLOW_EXTERNAL,
+      reason: classification.hasMedicalText ? FAIL_CLOSED_REASON.MEDICAL_TEXT : null,
+    };
   }
 
   if (obfuscation.suspicious && !obfuscation.resolved) {

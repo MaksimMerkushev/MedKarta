@@ -44,6 +44,7 @@ import { SPECIALTY_CANON } from './catalog.js';
 import {
   checkClosedVocabulary,
   findKnownPlaces,
+  findStreetMentions,
   isStreetMention,
   registerCatalogVocabulary,
 } from './vocabulary.js';
@@ -62,7 +63,8 @@ export const normalizeSessionId = (value) =>
  * ни одного фрагмента пользовательских слов наружу не попадает.
  */
 export const extractConstraints = (text) => {
-  const lower = String(text || '').toLowerCase();
+  // «Добрый вечер» — приветствие, а не «принимает вечером».
+  const lower = String(text || '').toLowerCase().replace(/(?<!\p{L})добр\p{L}*\s+(?:вечер|утр|ден|дн|ноч)\p{L}*/gu, ' ');
   const constraints = {};
 
   /*
@@ -115,7 +117,10 @@ export const extractConstraints = (text) => {
     constraints.ownership = 'Частная';
   }
 
-  if (findTrigger(lower, 'ближайш', 'рядом', 'недалеко', 'поблизости') === 'affirmed') {
+  if (
+    findTrigger(lower, 'ближайш', 'рядом', 'недалеко', 'поблизости', 'поближе', 'неподал') === 'affirmed'
+    || /(?:ближе|около|возле|у)\s+(?:к\s+)?дом[ау]?(?!\p{L})/u.test(lower)
+  ) {
     constraints.selection = 'nearest';
   }
   if (ruStem('лучш').test(lower) && ruStem('рейтинг', 'врач').test(lower)) {
@@ -128,10 +133,23 @@ export const extractConstraints = (text) => {
     if (value >= 0 && value <= 5) constraints.minRating = value;
   }
 
-  const minExperience = lower.match(/стаж\p{L}*\s*(?:от|более|больше)?\s*(\d{1,2})/u);
+  // «стаж от 10 лет», «с опытом больше 15 лет», «опыт работы не менее 20».
+  const minExperience = lower.match(/(?:стаж|опыт)\p{L}*\s*(?:работы\s*)?(?:от|более|больше|не\s+менее|свыше)?\s*(\d{1,2})(?!\d)/u);
   if (minExperience) {
     const value = Number(minExperience[1]);
     if (value >= 0 && value <= 60) constraints.minExperience = value;
+  }
+
+  /*
+   * Порядок выдачи. Раньше его понимала только модель — по словам
+   * пользователя; в описании вместо текста «по рейтингу» терялось.
+   */
+  const sort = lower.match(/(?:сортир\p{L}*|отсортир\p{L}*|упорядоч\p{L}*|покаж\p{L}*|выведи|по)\s+(?:по\s+)?(рейтинг|стаж|опыт|расстояни|удал[её]нност|алфавит|фамили|расписани)/u);
+  if (sort) {
+    constraints.sortMode = {
+      рейтинг: 'rating', стаж: 'experience', опыт: 'experience', расстояни: 'distance', удаленност: 'distance',
+      удалённост: 'distance', алфавит: 'name', фамили: 'name', расписани: 'schedule',
+    }[sort[1]];
   }
 
   // «Есть ДМС», «по ДМС», «полис ДМС». «Нет ДМС» — не ставить.
@@ -140,6 +158,15 @@ export const extractConstraints = (text) => {
 
   const maxTravel = extractMaxTravelMinutes(lower);
   if (maxTravel !== null) constraints.maxTravelMinutes = maxTravel;
+
+  /*
+   * Способ передвижения. Раньше его видела только модель — в тексте. Когда
+   * вместо текста уходило описание, «пешком» и «на машине» терялись, а
+   * локальный план всегда строил маршрут на машине.
+   */
+  if (findTrigger(lower, 'пешком', 'пешочком') === 'affirmed') constraints.travelMode = 'foot';
+  else if (/(?<!\p{L})на\s+(?:велосипед|велике|самокат)\p{L}*/u.test(lower)) constraints.travelMode = 'bike';
+  else if (/(?<!\p{L})на\s+(?:машин|авто(?!бус)|такси)\p{L}*/u.test(lower)) constraints.travelMode = 'driving';
 
   return constraints;
 };
@@ -184,7 +211,8 @@ export const extractIntentSignals = (text) => {
     slots: ruStem('слот', 'талон', 'расписани').test(lower)
       || /свободн\p{L}*\s+врем|запис\p{L}*\s+на|когда\s+при[её]м/u.test(lower),
     clear: ruStem('сброс', 'сбрось', 'очист', 'отмени').test(lower),
-    service: ruStem('услуг', 'анализ', 'узи', 'мрт', 'кт', 'рентген', 'привив').test(lower),
+    // «КТ» — только отдельным словом: основа «кт» находила «кто» («а ты кто»).
+    service: ruStem('услуг', 'анализ', 'узи', 'мрт', 'рентген', 'привив').test(lower) || /(?<!\p{L})кт(?!\p{L})/u.test(lower),
     clinic: ruStem('клиник', 'больниц', 'поликлиник', 'учрежден', 'медцентр').test(lower),
   };
 };
@@ -197,11 +225,28 @@ export const extractIntentSignals = (text) => {
  */
 const KIN_BEFORE = /(\p{L}+)\s+(?:\p{Lu}\p{Ll}+\s+){0,2}$/u;
 
+/*
+ * Пользователь, который представился фамилией врача: «ФИО: Валиуллина
+ * Наталья…», «меня зовут Ризида Маслова». Раньше такая фамилия связывалась
+ * с врачом справочника, и в плане появлялся шаг «к врачу Масловой». Между
+ * указателем и фамилией допускается имя, но не «к», «врач», «доктор».
+ */
+const SELF_BEFORE = /(?:меня\s+зовут|зовут\s+меня|фио|ф\.\s*и\.\s*о\.?|на\s+имя|пишет|беспокоит|пациент\p{L}*)\s*[:,—-]?\s*(?:\p{L}+\.?\s+){0,2}$/iu;
+const SELF_AFTER = /^\s*[,—-]?\s*(?:беспокоит|беспокою|пишет|пишу|на\s+связи|звонит)(?!\p{L})/iu;
+const DOCTOR_CUE_BEFORE = /(?:^|[^\p{L}])(?:доктор|врач)\p{L}*\s+$/iu;
+const SELF_DIRECT = /(?:^|[^\p{L}])я\s*[,—-]?\s*$/iu;
+const DOCTOR_WORD_BETWEEN = /(?:^|\s)(?:к|ко|врач\p{L}*|доктор\p{L}*|специалист\p{L}*)\s/iu;
+
 export const isNamedRelative = (content, entity) => {
   if (entity.kind !== ENTITY_KIND.DOCTOR) return false;
   const before = content.slice(Math.max(0, entity.start - 60), entity.start);
   const match = before.match(KIN_BEFORE);
-  return Boolean(match) && isKinshipWord(match[1]);
+  if (match && isKinshipWord(match[1])) return true;
+  const self = before.match(SELF_BEFORE);
+  if (self && !DOCTOR_WORD_BETWEEN.test(` ${self[0]}`)) return true;
+  // «Марат Ринатович беспокоит», «Гульнара пишет».
+  if (SELF_AFTER.test(content.slice(entity.end, entity.end + 24))) return true;
+  return SELF_DIRECT.test(before);
 };
 
 /** Стыки реплик: сущность, пересекающая стык, собрана из нескольких сообщений. */
@@ -224,7 +269,28 @@ const crossTurnEntities = (contents) => {
  * @param {{mint: Function}} deps.vault хранилище токенов
  * @param {Function} [deps.classifier] классификатор жалоб (подменяется в тестах)
  */
-export const createPrivacyGateway = ({ resolver, vault, classifier = classifySymptoms, catalog = null }) => {
+/**
+ * Режим исходящего запроса (PRIVACY_OUTBOUND_MODE):
+ *   structured — по умолчанию: наружу уходит только описание из перечислимых
+ *                значений (профиль, время, места из справочника, метки
+ *                @PERSON/@DOCTOR). Ни одного слова пользователя — и поэтому
+ *                ни одного имени, телефона или адреса, распознали мы их или нет;
+ *   hybrid     — слова пользователя уходят, если все они из закрытого словаря,
+ *                иначе то же описание. Модель видит формулировку, но словарь
+ *                пропускает совпадения вроде «Жене» (жена / Женя).
+ * Цифры обоих режимов на размеченном наборе — docs/privacy-evaluation.md.
+ */
+export const OUTBOUND_MODES = Object.freeze(['structured', 'hybrid']);
+const outboundModeFromEnv = () => (OUTBOUND_MODES.includes(process.env.PRIVACY_OUTBOUND_MODE) ? process.env.PRIVACY_OUTBOUND_MODE : 'structured');
+
+export const createPrivacyGateway = ({
+  resolver,
+  vault,
+  classifier = classifySymptoms,
+  catalog = null,
+  outboundMode = outboundModeFromEnv(),
+}) => {
+  const structuredOutbound = outboundMode === 'structured';
   if (catalog) {
     registerCatalogVocabulary(catalog);
   }
@@ -272,7 +338,7 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
    * о здоровье. Слова пользователя в него НЕ попадают — только перечислимые
    * значения из справочника и классификатора.
    */
-  const buildSyntheticTurn = ({ specialties, tokens, constraints, signals, isChild, places = [], defaultProfile = true }) => {
+  const buildSyntheticTurn = ({ specialties, tokens, constraints, signals, isChild, places = [], outline = [], defaultProfile = true }) => {
     const parts = [];
     const profiles = specialties.length > 0 ? specialties : defaultProfile ? ['therapist'] : [];
     parts.push(profiles.length > 0
@@ -284,6 +350,11 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
 
     if (tokens.length > 0) {
       parts.push(`Упомянуты сущности: ${tokens.join(', ')}.`);
+    }
+
+    const order = describeOrder(outline);
+    if (order) {
+      parts.push(`Порядок в запросе: ${order}.`);
     }
     if (isChild) {
       parts.push('Приём детский.');
@@ -362,9 +433,6 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
       return token;
     };
 
-    const lastUser = [...messages].reverse().find((message) => message.role === 'user');
-    const rawLastUser = lastUser?.content || '';
-
     let analyses;
     let classification;
     try {
@@ -432,8 +500,18 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
       };
     }
 
-    const constraints = extractConstraints(rawLastUser);
-    const signals = extractIntentSignals(rawLastUser);
+    /*
+     * Ограничения и признаки намерения собираются по ВСЕМ репликам, поздние
+     * важнее ранних. Раньше брался только последний ход, и в диалоге
+     * «нужен лор для сына рядом» → «его зовут Тимур» терялись и «рядом», и
+     * детский приём: в описание для модели уходил один профиль врача.
+     */
+    const userTexts = messages.map((message) => message.content);
+    const constraints = Object.assign({}, ...userTexts.map((text) => extractConstraints(text)));
+    const signals = {};
+    for (const turnSignals of userTexts.map((text) => extractIntentSignals(text))) {
+      for (const [name, active] of Object.entries(turnSignals)) signals[name] = Boolean(signals[name] || active);
+    }
 
     const catalogSpecialties = new Set();
     const catalogDistricts = new Set();
@@ -554,6 +632,49 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
       .replace(/@[A-Z][A-Z0-9_]*/g, (token) => (contentTokens.has(token) ? 'xxxxxxxx' : ''))
       .trim().length;
 
+    const specialties = [
+      ...new Set([
+        ...catalogSpecialties,
+        ...(classification.specialties || []),
+      ]),
+    ].filter((key) => key in SPECIALTY_CANON);
+
+    /*
+     * Места для описания — только из закрытых списков и без номеров домов.
+     * Если в реплике найден адрес, улицы из неё не берутся вовсе: «живу на
+     * Чистопольской, дом пять» — улица здесь часть адреса, а не ориентир.
+     */
+    const placeText = analyses
+      .filter((analysis) => !analysis.entities.some((entity) => entity.kind === ENTITY_KIND.ADDRESS))
+      .map((analysis) => analysis.message.content)
+      .join('\n');
+    const places = [...new Set([...findKnownPlaces(placeText), ...findStreetMentions(placeText)])];
+
+    /*
+     * Есть ли модели что планировать. В режиме structured «.....», «привет»
+     * и «спасибо» превращались в «ищет врача, профиль не указан» и тратили
+     * внешний вызов на пустое описание. Метка человека (@PERSON_A) или
+     * телефона сама по себе цели поиска не задаёт.
+     */
+    const plannable = specialties.length > 0
+      || catalogDistricts.size > 0
+      || places.length > 0
+      || locationTokens.length > 0
+      || placeholders.some((item) => item.kind === ENTITY_KIND.DOCTOR || item.kind === ENTITY_KIND.CLINIC)
+      || Object.keys(constraints).length > 0
+      || Object.values(signals).some(Boolean)
+      || Boolean(classification.isChild)
+      || Boolean(classification.hasMedicalText);
+
+    /*
+     * «Хочу к доктору Пупкину»: фамилии нет в справочнике, и кроме неё в
+     * запросе ничего. Раньше ответом было общее «уточните запрос»; теперь
+     * пользователь узнаёт, что такого врача у нас нет.
+     */
+    const namedUnknownDoctor = analyses.some((analysis) => analysis.entities.some((entity) =>
+      entity.kind === ENTITY_KIND.PERSON
+      && DOCTOR_CUE_BEFORE.test(analysis.message.content.slice(Math.max(0, entity.start - 24), entity.start))));
+
     const decision = decideGatewayPolicy({
       entities: [...allEntities, ...crossTurn],
       classification,
@@ -563,14 +684,11 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
       analysisIncomplete: analyses.some((analysis) => analysis.incomplete) || crossTurn.length > 0,
       obfuscation,
       sanitizedChars,
+      structuredOutbound,
+      plannable,
+      namedUnknownDoctor,
+      explicitSpecialty: catalogSpecialties.size > 0,
     });
-
-    const specialties = [
-      ...new Set([
-        ...catalogSpecialties,
-        ...(classification.specialties || []),
-      ]),
-    ].filter((key) => key in SPECIALTY_CANON);
 
     const context = {
       sessionId: session,
@@ -613,7 +731,9 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
     const issuedTokens = [...placeholders.map((item) => item.token), ...locationTokens];
     const vocabulary = classification.hasMedicalText
       ? { ok: false, reason: 'medical' }
-      : checkClosedVocabulary(redactedTurns.map((turn) => turn.text), issuedTokens);
+      : structuredOutbound
+        ? { ok: false, reason: 'structured' }
+        : checkClosedVocabulary(redactedTurns.map((turn) => turn.text), issuedTokens);
     context.metrics.textWithheld = !vocabulary.ok;
     context.metrics.withheldReason = vocabulary.reason;
 
@@ -628,7 +748,8 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
               constraints,
               signals,
               isChild: classification.isChild,
-              places: findKnownPlaces(rawLastUser),
+              places,
+              outline,
               defaultProfile: classification.hasMedicalText,
             }),
           },
@@ -657,6 +778,39 @@ export const createPrivacyGateway = ({ resolver, vault, classifier = classifySym
   };
 
   return Object.freeze({ process, policyVersion: POLICY_VERSION, policy: POLICY });
+};
+
+/*
+ * Порядок шагов для описания вместо текста. «Сначала к терапевту Петрову,
+ * потом к ближайшему стоматологу, а потом домой» раньше превращалось в
+ * «профили: therapist, dentist; сущности: @DOCTOR_A, @HOME» — модель не
+ * знала ни порядка, ни того, что @DOCTOR_A и есть терапевт. Строка
+ * собирается только из меток и ключей профилей; специальность прямо перед
+ * врачом или клиникой уточняет их и своего шага не даёт (как в localPlanner).
+ */
+const ORDER_KINDS = new Set([ENTITY_KIND.DOCTOR, ENTITY_KIND.CLINIC, 'LOCATION', 'SPECIALTY']);
+
+export const describeOrder = (outline = []) => {
+  const items = outline.filter((item) => ORDER_KINDS.has(item.kind));
+  const steps = [];
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    const next = items[index + 1];
+    if (item.kind === 'SPECIALTY') {
+      if (!(item.specialty in SPECIALTY_CANON)) continue;
+      if (next && (next.kind === ENTITY_KIND.DOCTOR || next.kind === ENTITY_KIND.CLINIC)) {
+        steps.push(`${next.token} (${item.specialty})`);
+        index += 1;
+        continue;
+      }
+      steps.push(item.specialty);
+      continue;
+    }
+    steps.push(item.token);
+  }
+  const unique = steps.filter((step, index) => steps.indexOf(step) === index);
+  // Разделитель — слово: исходящий текст проверяется закрытым словарём, «→» в нём нет.
+  return unique.length >= 2 ? unique.join(', затем ') : '';
 };
 
 /**

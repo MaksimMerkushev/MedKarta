@@ -41,6 +41,7 @@ export const createPipeline = ({
   routing,
   logger = defaultLogger,
   metrics = defaultMetrics,
+  outboundMode = undefined,
 }) => {
   const resolver = createEntityResolver(catalog);
   const allowedServices = new Map(
@@ -51,7 +52,7 @@ export const createPipeline = ({
     ].map((service) => [String(service).toLowerCase(), String(service)]),
   );
   const repository = createCatalogRepository(catalog);
-  const gateway = createPrivacyGateway({ resolver, vault, catalog });
+  const gateway = createPrivacyGateway({ resolver, vault, catalog, ...(outboundMode ? { outboundMode } : {}) });
   const policyEngine = createPolicyEngine({ vault, repository });
   const executor = createExecutor({ repository, routing });
   let warnedNotConfigured = false;
@@ -286,6 +287,13 @@ const clarifyTextFor = (reason) => {
       return (
         'Не разобрал запрос — похоже, слова разделены пробелами или точками. ' +
         'Напишите, пожалуйста, обычным текстом: например, «маршрут к терапевту Петрову».'
+      );
+    case 'nothing_to_plan':
+      return 'Подскажу врача или клинику в Казани и построю маршрут. Напишите, например, «терапевт рядом» или «детский лор в Советском районе».';
+    case 'doctor_not_in_catalog':
+      return (
+        'Врача с такой фамилией в справочнике нет — возможно, она записана иначе или врач принимает в клинике, ' +
+        'которой у нас пока нет. Напишите специальность, например «кардиолог рядом», — подберу врачей.'
       );
     case 'residual_unredacted_risk':
     case 'redaction_ratio_too_high':

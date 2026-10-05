@@ -40,8 +40,11 @@ const catalog = buildCatalog({
   facilities: [],
 });
 
-/** Прогон одного диалога: решение шлюза и всё, что ушло бы в сеть. */
-const run = async (messages) => {
+/**
+ * Прогон одного диалога: решение шлюза и всё, что ушло бы в сеть.
+ * mode — режим исходящего запроса; без него — PRIVACY_OUTBOUND_MODE.
+ */
+const run = async (messages, { mode } = {}) => {
   const wire = [];
   const planner = createExternalPlanner({
     apiKey: 'test-key',
@@ -59,6 +62,7 @@ const run = async (messages) => {
     routing: createHaversineRoutingProvider(),
     logger: createSafeLogger({ enabled: false }),
     metrics: createMetrics(),
+    ...(mode ? { outboundMode: mode } : {}),
   });
   const normalized = messages.map((item) => (typeof item === 'string' ? { role: 'user', content: item } : item));
   const result = await pipeline.handle({ messages: normalized, sessionId: TEST_SESSION });
@@ -82,9 +86,13 @@ describe('Аудит: сдвиг индексов на эмодзи', () => {
   });
 
   it('эмодзи перед фамилией и телефоном не выводят их из-под редактуры', async () => {
-    const { outbound } = await run(['🙂'.repeat(10) + ' маршрут к доктору Петрову, пожалуйста, перезвоните +7 917 123-45-67 вечером']);
-    assertNotSent(outbound, ['Петров', '917', '45-67']);
-    assert.match(outbound, /пожалуйста/, 'токен съел соседнее слово');
+    const text = '🙂'.repeat(10) + ' маршрут к доктору Петрову, пожалуйста, перезвоните +7 917 123-45-67 вечером';
+    const hybrid = await run([text], { mode: 'hybrid' });
+    assertNotSent(hybrid.outbound, ['Петров', '917', '45-67']);
+    assert.match(hybrid.outbound, /пожалуйста/, 'токен съел соседнее слово');
+    const structured = await run([text], { mode: 'structured' });
+    assertNotSent(structured.outbound, ['Петров', '917', '45-67']);
+    assert.match(structured.outbound, /@DOCTOR_/u);
   });
 
   it('полноширинные, арабские цифры и цифры-эмодзи — тоже телефон', () => {
@@ -224,9 +232,13 @@ describe('Аудит: ложные срабатывания', () => {
   }
 
   it('«для сына» не превращается в госпиталь для ветеранов', async () => {
-    const { outbound } = await run(['построй маршрут к педиатру для сына']);
-    assert.match(outbound, /для сына/);
-    assert.doesNotMatch(outbound, /@CLINIC/);
+    const hybrid = await run(['построй маршрут к педиатру для сына'], { mode: 'hybrid' });
+    assert.match(hybrid.outbound, /для сына/);
+    assert.doesNotMatch(hybrid.outbound, /@CLINIC/);
+    const structured = await run(['построй маршрут к педиатру для сына'], { mode: 'structured' });
+    assert.match(structured.outbound, /pediatrician/);
+    assert.match(structured.outbound, /Приём детский/);
+    assert.doesNotMatch(structured.outbound, /@CLINIC/);
   });
 
   it('двенадцать слов с заглавной не выключают проверку фамилий', async () => {

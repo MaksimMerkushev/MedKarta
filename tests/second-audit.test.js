@@ -50,7 +50,7 @@ const catalog = buildCatalog({
   facilities: [],
 });
 
-const run = async (messages) => {
+const run = async (messages, { mode } = {}) => {
   const wire = [];
   const planner = createExternalPlanner({
     apiKey: 'test-key',
@@ -68,6 +68,7 @@ const run = async (messages) => {
     routing: createHaversineRoutingProvider(),
     logger: createSafeLogger({ enabled: false }),
     metrics: createMetrics(),
+    ...(mode ? { outboundMode: mode } : {}),
   });
   const normalized = messages.map((item) => (typeof item === 'string' ? { role: 'user', content: item } : item));
   const result = await pipeline.handle({ messages: normalized, sessionId: TEST_SESSION });
@@ -82,9 +83,17 @@ const assertNotSent = (outbound, fragments) => {
 };
 
 describe('Второй аудит: закрытый словарь исходящего текста', () => {
-  it('обычный запрос уходит словами пользователя', async () => {
-    const { outbound } = await run(['нужен терапевт после 18:00 рядом']);
+  it('hybrid: обычный запрос уходит словами пользователя', async () => {
+    const { outbound } = await run(['нужен терапевт после 18:00 рядом'], { mode: 'hybrid' });
     assert.match(outbound, /нужен терапевт после 18:00 рядом/);
+  });
+
+  it('structured: обычный запрос уходит описанием с тем же смыслом', async () => {
+    const { outbound } = await run(['нужен терапевт после 18:00 рядом'], { mode: 'structured' });
+    assert.doesNotMatch(outbound, /нужен терапевт/);
+    assert.match(outbound, /therapist/);
+    assert.match(outbound, /availableAfter=18:00/);
+    assert.match(outbound, /selection=nearest/);
   });
 
   for (const [text, fragments] of [
@@ -109,9 +118,13 @@ describe('Второй аудит: закрытый словарь исходя�
   });
 
   it('улица в честь человека остаётся улицей', async () => {
-    const { outbound, sent } = await run(['стоматология на Ямашева']);
-    assert.ok(sent);
-    assert.match(outbound, /на Ямашева/);
+    const hybrid = await run(['стоматология на Ямашева'], { mode: 'hybrid' });
+    assert.ok(hybrid.sent);
+    assert.match(hybrid.outbound, /на Ямашева/);
+    const structured = await run(['стоматология на Ямашева'], { mode: 'structured' });
+    assert.ok(structured.sent);
+    assert.match(structured.outbound, /Места: улица Ямашева/);
+    assert.doesNotMatch(structured.outbound, /@PERSON|@DOCTOR/);
   });
 
   it('выдуманный токен не проходит проверку словаря', () => {

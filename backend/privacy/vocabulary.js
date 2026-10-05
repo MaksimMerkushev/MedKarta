@@ -90,6 +90,8 @@ therapist neurologist cardiologist lor ophthalmologist surgeon orthopedist derma
 dentist endocrinologist gastroenterologist urologist psychiatrist traumatologist
 availableafter availablebefore evening weekend opennow onlinebooking wheelchair ownership selection nearest maxtravelminutes dmsonly
 best rated best_rated minrating minexperience true false route slots clear service clinic государственная частная
+travelmode driving foot bike
+порядок в запросе затем sortmode rating experience distance name schedule
 `;
 
 const WORDS = new Set();
@@ -129,8 +131,9 @@ export const addPublicPhrase = (phrase) => {
 };
 
 /** Тип улицы в адресе справочника: всё, что рядом с ним, — название улицы. */
+// Тип улицы — целым словом: «шоссе» внутри «Шоссейная улица» давало улицу «йная улица».
 const STREET_IN_ADDRESS =
-  /(?:^|,\s*)(?:(?:ул\.|улица|проспект|пр-т|пр\.|переулок|пер\.|бульвар|б-р|тракт|шоссе|площадь|пл\.)\s*([^,]+)|([^,]+?)\s(?:улица|проспект|тракт|шоссе|переулок|бульвар|площадь))(?=,|$)/giu;
+  /(?:^|,\s*)(?:(?:ул\.|улица|проспект|пр-т|пр\.|переулок|пер\.|бульвар|б-р|тракт|шоссе|площадь|пл\.)(?![\p{L}])\s*([^,]+)|([^,]+?)\s(?:улица|проспект|тракт|шоссе|переулок|бульвар|площадь))(?=,|$)/giu;
 
 /** Названия улиц из адресов справочника. Экспортируется для gateway. */
 export const extractStreetNames = (address) => {
@@ -182,18 +185,41 @@ const KNOWN_PLACES = [
  * контексте (см. stripStreetMentions).
  */
 const STREET_ADJECTIVE_STEMS = new Set();
+/*
+ * Название улицы в том виде, в каком оно записано в списке или справочнике.
+ * В описание для модели (режим structured) уходит ЭТА строка, а не слово
+ * пользователя: «на чистопольской» → «Чистопольская».
+ */
+const STREET_DISPLAY = new Map();
+const STREET_TYPE_WORD = /^(?:улица|улицы|проспект|тракт|шоссе|переулок|бульвар|площадь|набережная|проезд|тупик)$/u;
 
 const addStreet = (street) => {
   const normalized = normalizeRu(street);
   if (!normalized) return;
+  const display = String(street).trim();
   KNOWN_STREETS.add(normalized);
+  if (!STREET_DISPLAY.has(normalized)) STREET_DISPLAY.set(normalized, display);
   // «на Фучика», «на Ершова»: улицу с именем пишут по одной фамилии.
+  // Но не «улица» из «Бакалейная улица»: тип улицы сам по себе не улица.
   const last = normalized.split(' ').pop();
-  if (last && last.length >= 4) KNOWN_STREETS.add(last);
+  if (last && last.length >= 4 && !STREET_TYPE_WORD.test(last)) {
+    KNOWN_STREETS.add(last);
+    if (!STREET_DISPLAY.has(last)) STREET_DISPLAY.set(last, display);
+  }
   // «Чистопольская» → «на Чистопольской»: прилагательное меняет окончание.
   if (!normalized.includes(' ') && ADJECTIVE_TAIL.test(normalized) && normalized.length >= 6) {
-    STREET_ADJECTIVE_STEMS.add(normalized.slice(0, -2));
+    const stem = normalized.slice(0, -2);
+    STREET_ADJECTIVE_STEMS.add(stem);
+    if (!STREET_DISPLAY.has(`stem:${stem}`)) STREET_DISPLAY.set(`stem:${stem}`, display);
   }
+};
+
+/** Каноническое название известной улицы по любой её форме или null. */
+const streetDisplayOf = (text) => {
+  const normalized = normalizeRu(text);
+  if (STREET_DISPLAY.has(normalized)) return STREET_DISPLAY.get(normalized);
+  const stem = normalized.replace(/(?:ого|ому)$/u, '').replace(/(?:ая|ой|ую|ий|ый|ом|ем)$/u, '');
+  return STREET_DISPLAY.get(`stem:${stem}`) || null;
 };
 
 for (const street of [...MAJOR_STREETS, ...KNOWN_PLACES]) addStreet(street);
@@ -222,6 +248,8 @@ const STREET_CUE_WORDS = new Set([
   'на', 'по', 'с', 'со', 'от', 'до', 'ул', 'улица', 'улице', 'улицу', 'улицы', 'улицей', 'проспект', 'проспекте',
   'проспекта', 'пр', 'переулок', 'переулке', 'бульвар', 'бульваре', 'тракт', 'тракте', 'площадь', 'площади',
   'шоссе', 'возле', 'около', 'метро', 'район', 'районе', 'напротив', 'угол', 'углу', 'станция', 'станции',
+  // «в Азино», «в Горках»: предлог места. «к» сюда не входит — «к Пушкиной» чаще врач, чем улица.
+  'в', 'во',
 ].map((word) => normalizeRu(word)));
 const STREET_TYPE_AFTER = /^(?:улиц|проспект|тракт|шоссе|бульвар|переул|площад)/u;
 /*
@@ -231,10 +259,10 @@ const STREET_TYPE_AFTER = /^(?:улиц|проспект|тракт|шоссе|�
 const HOUSE_NUMBER_AFTER = /^\s*[,.]?\s*(?:д\.?|дом|№)?\s*(?:\d|(?:один|одна|два|две|три|четыре|пять|шесть|семь|восемь|девять|десять|одиннадцать|двенадцать|тринадцать|четырнадцать|пятнадцать|шестнадцать|семнадцать|восемнадцать|девятнадцать|двадцать|тридцать|сорок|пятьдесят|шестьдесят|семьдесят|восемьдесят|девяносто|сто|двести|триста)(?![\p{L}]))/iu;
 
 /**
- * Заменяет пробелами упоминания известных улиц и мест в «уличном»
- * контексте, если за ними не следует номер дома.
+ * Упоминания известных улиц и мест в «уличном» контексте, за которыми не
+ * следует номер дома: [{start, end, text}].
  */
-const stripStreetMentions = (text) => {
+const scanStreetMentions = (text) => {
   const words = [];
   const regex = /[\p{L}\p{M}]+(?:-[\p{L}\p{M}]+)*/gu;
   let match;
@@ -242,7 +270,7 @@ const stripStreetMentions = (text) => {
     words.push({ raw: match[0], start: match.index, end: match.index + match[0].length });
   }
 
-  let out = text;
+  const found = [];
   for (let i = 0; i < words.length; i += 1) {
     for (let size = Math.min(3, words.length - i); size >= 1; size -= 1) {
       const last = words[i + size - 1];
@@ -257,12 +285,69 @@ const stripStreetMentions = (text) => {
         || (next && STREET_TYPE_AFTER.test(normalizeRu(next.raw)));
       if (!cued || HOUSE_NUMBER_AFTER.test(text.slice(last.end))) continue;
 
-      out = out.slice(0, words[i].start) + ' '.repeat(last.end - words[i].start) + out.slice(last.end);
+      found.push({ start: words[i].start, end: last.end, text: between });
       i += size - 1;
       break;
     }
   }
+  return found;
+};
+
+/*
+ * Известная улица с номером дома — адрес, даже без «ул.» и без предлога:
+ * «адрес: Дубравная 21», «мы на Дубравная 116». Детектор адресов такое
+ * пропускал (раньше его выручало «бр» внутри «Дубравной», принятое за «б-р»),
+ * а в закрытом словаре и улица, и короткое число разрешены.
+ */
+const hasStreetWithHouseNumber = (text) => {
+  const regex = /[\p{L}\p{M}]+(?:-[\p{L}\p{M}]+)*/gu;
+  const words = [...text.matchAll(regex)].map((match) => ({ raw: match[0], start: match.index, end: match.index + match[0].length }));
+  for (let i = 0; i < words.length; i += 1) {
+    for (let size = Math.min(3, words.length - i); size >= 1; size -= 1) {
+      const last = words[i + size - 1];
+      const between = text.slice(words[i].start, last.end);
+      if (/[^\p{L}\p{M}\s-]/u.test(between) || !isKnownStreet(between)) continue;
+      if (HOUSE_NUMBER_AFTER.test(text.slice(last.end))) return true;
+    }
+  }
+  return false;
+};
+
+/** Заменяет пробелами упоминания улиц (см. scanStreetMentions). */
+const stripStreetMentions = (text) => {
+  let out = text;
+  for (const { start, end } of scanStreetMentions(text)) {
+    out = out.slice(0, start) + ' '.repeat(end - start) + out.slice(end);
+  }
   return out;
+};
+
+const HOUSE_WORDS_BEFORE = /(?:^|[^\p{L}])(?:дом\p{L}*|д\.|корп\p{L}*|к\.|кв\p{L}*|подъезд\p{L}*|стр\p{L}*|строени\p{L}*|этаж\p{L}*)/iu;
+const STREET_TYPE_IN_NAME = /(?:^|\s)(?:улица|проспект|тракт|шоссе|бульвар|переулок|площадь|слобода)(?:\s|$)/iu;
+
+/**
+ * Улицы, названные в тексте, — для описания в режиме structured.
+ *
+ * Возвращает НЕ слова пользователя, а названия из закрытого списка
+ * (MAJOR_STREETS и адреса справочника) с типом улицы впереди: «улица
+ * Ямашева», «Сибирский тракт». Тип улицы нужен выходному предохранителю:
+ * без него «Ямашева» в описании похожа на фамилию. Улица с номером дома
+ * сюда не попадает — это адрес. Известное место («в Азино») возвращается
+ * как есть.
+ */
+export const findStreetMentions = (text) => {
+  const names = [];
+  const source = String(text || '');
+  for (const mention of scanStreetMentions(source)) {
+    // «от дома 5 корпус 2 на Чистопольской»: номер стоит до улицы — это тоже адрес.
+    const before = source.slice(Math.max(0, mention.start - 32), mention.start);
+    if (/\d/u.test(before) && HOUSE_WORDS_BEFORE.test(before)) continue;
+    const display = streetDisplayOf(mention.text);
+    if (!display) continue;
+    const named = isKnownPlace(display) || STREET_TYPE_IN_NAME.test(display) ? display : `улица ${display}`;
+    if (!names.includes(named)) names.push(named);
+  }
+  return names;
 };
 
 /*
@@ -274,7 +359,7 @@ const stripStreetMentions = (text) => {
  * и выходным предохранителем planner/client.js — иначе второй отклонял бы
  * то, что пропустил первый.
  */
-const STREET_CUE = /(?:^|[^\p{L}])(?:на|по|с|со|от|до|ул\.?|улиц\p{L}*|проспект\p{L}*|пр\.|пр-т|пр-кт|переул\p{L}*|бульвар\p{L}*|тракт\p{L}*|площад\p{L}*|шоссе|возле|около|рядом\s+с|недалеко\s+от|район\p{L}*|напротив|угол\p{L}*|метро)\s+(?:\p{Lu}\p{Ll}+\s+)?$/iu;
+const STREET_CUE = /(?:^|[^\p{L}])(?:на|по|с|со|в|во|от|до|ул\.?|улиц\p{L}*|проспект\p{L}*|пр\.|пр-т|пр-кт|переул\p{L}*|бульвар\p{L}*|тракт\p{L}*|площад\p{L}*|шоссе|возле|около|рядом\s+с|недалеко\s+от|район\p{L}*|напротив|угол\p{L}*|метро)\s+(?:\p{Lu}\p{Ll}+\s+)?$/iu;
 const STREET_AFTER = /^\s+(?:улиц|проспект|пр-т|тракт|шоссе|бульвар|переул|площад)/iu;
 const STREET_KINDS = new Set([ENTITY_KIND.PERSON, ENTITY_KIND.DOCTOR, ENTITY_KIND.CLINIC]);
 
@@ -290,10 +375,42 @@ export const isStreetMention = (content, entity) => {
   return Boolean(known) && (STREET_CUE.test(before) || STREET_AFTER.test(after));
 };
 
-/** Известные публичные места, найденные в тексте, — для синтезированной реплики. */
+/**
+ * Название из закрытого списка известных мест («Азино», «Аметьево»).
+ * Нужно выходному предохранителю: в описании для модели места перечислены
+ * после «Места:», без предлога, и детектор ФИО принимал «Азино» за фамилию —
+ * запрос отменялся целиком.
+ */
+export const isKnownPlace = (text) => {
+  const normalized = normalizeRu(text);
+  return KNOWN_PLACES.some((place) => normalizeRu(place) === normalized);
+};
+
+/**
+ * Известные публичные места, найденные в тексте, — для синтезированной
+ * реплики. Место с номером дома («Дубравная 21») — это адрес, оно не
+ * возвращается.
+ */
+const PLACE_PATTERNS = KNOWN_PLACES.map((place) => ({
+  place,
+  regex: new RegExp(`(?<![\\p{L}])${place.toLowerCase().replace(/[её]/gu, '[её]').split(/\s+/u).join('\\s+')}(?![\\p{L}])`, 'giu'),
+}));
+
 export const findKnownPlaces = (text) => {
-  const normalized = ` ${normalizeRu(text)} `;
-  return KNOWN_PLACES.filter((place) => normalized.includes(` ${normalizeRu(place)} `));
+  const source = String(text || '').normalize('NFKC');
+  const found = [];
+  for (const { place, regex } of PLACE_PATTERNS) {
+    regex.lastIndex = 0;
+    for (const match of source.matchAll(regex)) {
+      const end = match.index + match[0].length;
+      const before = source.slice(Math.max(0, match.index - 32), match.index);
+      if (HOUSE_NUMBER_AFTER.test(source.slice(end))) continue;
+      if (/\d/u.test(before) && HOUSE_WORDS_BEFORE.test(before)) continue;
+      found.push(place);
+      break;
+    }
+  }
+  return found;
 };
 
 /*
@@ -406,6 +523,8 @@ export const checkClosedVocabulary = (texts, tokens = []) => {
 
     // Остатки токенов («@») и выдуманные токены («@HOME_IVAN») — не наши.
     if (/@/u.test(text)) return { ok: false, reason: 'token' };
+
+    if (hasStreetWithHouseNumber(text)) return { ok: false, reason: 'address' };
 
     for (const word of stripStreetMentions(text).match(/[\p{L}\p{M}]+/gu) || []) {
       if (!isAllowedWord(word)) {

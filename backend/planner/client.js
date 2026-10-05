@@ -25,7 +25,7 @@
 
 import { isSanitizedPlannerRequest } from '../privacy/models.js';
 import { detectEntities } from '../privacy/detectors.js';
-import { checkClosedVocabulary, isStreetMention } from '../privacy/vocabulary.js';
+import { checkClosedVocabulary, isKnownPlace, isStreetMention } from '../privacy/vocabulary.js';
 import { PLAN_JSON_SCHEMA } from './schema.js';
 import { buildHintBlock, PLANNER_SYSTEM_PROMPT } from './prompts.js';
 
@@ -59,7 +59,7 @@ export const PLANNER_ERROR = Object.freeze({
 export const assertOutboundSafe = (serialized) => {
   const { spans } = detectEntities(serialized);
   // Улица «на Ямашева» — не человек; то же правило, что и в gateway.
-  const real = spans.filter((span) => !isStreetMention(serialized, span));
+  const real = spans.filter((span) => !isStreetMention(serialized, span) && !isKnownPlace(serialized.slice(span.start, span.end)));
   return [...new Set(real.map((span) => span.kind))];
 };
 

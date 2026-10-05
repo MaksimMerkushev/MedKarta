@@ -165,8 +165,8 @@ export const planLocally = (context) => {
     steps,
     constraints,
     replyHint,
-    travelMode: null,
-    sortMode: selection === 'best_rated' ? 'rating' : null,
+    travelMode: context.constraints?.travelMode || null,
+    sortMode: context.constraints?.sortMode || (selection === 'best_rated' ? 'rating' : null),
     services: null,
     source: 'local',
   };

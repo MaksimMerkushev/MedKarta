@@ -66,7 +66,20 @@ export const reconcileEntities = (detectorSpans, catalogLinks) => {
        * справочником и вытеснила более широкий спан ФИО, — и имя «Иван»
        * уходило во внешнюю модель открытым текстом.
        */
-      if (entity.priority > previous.priority) {
+      /*
+       * Адрес с номером дома сильнее совпадения со справочником внутри
+       * него: «от улица Декабристов дом три» — это откуда едет пользователь,
+       * а не «Медцентр на Декабристов». Иначе в описании для модели адрес
+       * становился клиникой и первым шагом маршрута.
+       */
+      if (previous.kind === ENTITY_KIND.ADDRESS || entity.kind === ENTITY_KIND.ADDRESS) {
+        const address = previous.kind === ENTITY_KIND.ADDRESS ? previous : entity;
+        result[result.length - 1] = {
+          ...address,
+          start: Math.min(entity.start, previous.start),
+          end: Math.max(entity.end, previous.end),
+        };
+      } else if (entity.priority > previous.priority) {
         result[result.length - 1] = {
           ...entity,
           start: Math.min(entity.start, previous.start),

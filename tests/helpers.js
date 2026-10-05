@@ -18,13 +18,21 @@ export const TEST_SESSION = 'test-session-000001';
 export const makeVault = (options = {}) =>
   createTokenVault({ store: createMemoryStore(), secret: TEST_SECRET, ...options });
 
+/*
+ * Режим исходящего запроса. Без явного outboundMode тесты идут в режиме из
+ * PRIVACY_OUTBOUND_MODE, то есть по умолчанию — в боевом structured;
+ * `npm run test:hybrid` прогоняет тот же набор в режиме hybrid. Тесты,
+ * которые проверяют поведение одного режима, передают его явно.
+ */
+const modeOption = (outboundMode) => (outboundMode ? { outboundMode } : {});
+
 export const makeGateway = (options = {}) => {
   const catalog = options.catalog || fixtureCatalog();
   const vault = options.vault || makeVault();
   return {
     catalog,
     vault,
-    gateway: createPrivacyGateway({ resolver: createEntityResolver(catalog), vault }),
+    gateway: createPrivacyGateway({ resolver: createEntityResolver(catalog), vault, ...modeOption(options.outboundMode) }),
   };
 };
 
@@ -53,7 +61,7 @@ export const makeRecordingPlanner = (respond) => {
   };
 };
 
-export const makeTestPipeline = ({ respond = null, catalog = null, vault = null } = {}) => {
+export const makeTestPipeline = ({ respond = null, catalog = null, vault = null, outboundMode = undefined } = {}) => {
   const resolvedCatalog = catalog || fixtureCatalog();
   const resolvedVault = vault || makeVault();
   const { planner, sent } = makeRecordingPlanner(
@@ -75,6 +83,7 @@ export const makeTestPipeline = ({ respond = null, catalog = null, vault = null 
       routing: createHaversineRoutingProvider(),
       logger,
       metrics,
+      ...modeOption(outboundMode),
     }),
   };
 };

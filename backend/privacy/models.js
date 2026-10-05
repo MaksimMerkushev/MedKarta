@@ -113,4 +113,8 @@ export const FAIL_CLOSED_REASON = Object.freeze({
   VAULT_UNAVAILABLE: 'token_vault_unavailable',
   OUTBOUND_ASSERTION: 'outbound_assertion_failed',
   OBFUSCATION: 'obfuscation_unresolved',
+  // Режим structured: в запросе нет ничего, из чего модель построила бы план.
+  NOTHING_TO_PLAN: 'nothing_to_plan',
+  // То же, но пользователь назвал врача, которого нет в справочнике.
+  UNKNOWN_DOCTOR: 'doctor_not_in_catalog',
 });

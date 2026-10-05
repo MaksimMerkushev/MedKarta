@@ -16,7 +16,7 @@
  * в docs/adr/001-external-llm-privacy-boundary.md.
  */
 
-import { comparisonKeys, isNegatedBefore, normalizeRu, similarityOf, translitKey } from './normalize.js';
+import { comparisonKeys, editDistanceOf, isNegatedBefore, normalizeRu, similarityOf, translitKey } from './normalize.js';
 import { looksLikePatronymic, looksLikeSurname, stemSurname, stemWord } from './morphology.js';
 import { ENTITY_KIND } from './detectors.js';
 import { SPECIALTY_BY_LABEL, SPECIALTY_CANON } from './catalog.js';
@@ -119,6 +119,85 @@ const addToIndex = (index, key, value) => {
  *
  * @param {{doctors: Array, clinics: Array, districts: Array}} catalog
  */
+const SPECIALTY_SYNONYMS = {
+  lor: ['лор', 'лора', 'лору', 'лором', 'лоре', 'лоры', 'лоров', 'лорам', 'лорик', 'лорика', 'лорику', 'отоларинголог', 'оториноларинголог', 'ухогорлонос',
+    'лорр', 'лорра', 'лорру'],
+  ophthalmologist: ['окулист', 'окулиста', 'окулисту', 'окулистом', 'окулисты', 'глазник', 'глазника', 'глазнику', 'офтальмолог'],
+  dentist: ['зубной', 'зубного', 'зубному', 'зубник', 'зубника', 'зубнику', 'дантист', 'дантиста', 'дантисту'],
+  neurologist: ['невропатолог', 'невропатолога', 'невропатологу'],
+  gynecologist: ['гинеколог', 'гинеколога', 'гинекологу'],
+  psychiatrist: ['психиатр', 'психиатра', 'психиатру', 'психотерапевт', 'психотерапевта', 'психотерапевту'],
+  pediatrician: ['педиатр', 'педиатра', 'педиатру'],
+  traumatologist: ['травматолог', 'травматолога', 'травматологу', 'травмотолог', 'травмотологу',
+    'травмпункт', 'травмпункта', 'травмпункту', 'травмпунктом', 'травмпункте', 'травмпункты', 'травмпунктов'],
+  therapist: ['участковый', 'участкового', 'участковому', 'терапевт'],
+  dermatologist: ['кожник', 'кожника', 'кожнику', 'дерматовенеролог'],
+};
+
+/*
+ * Латиница: «zapishite mamu k terapevtu», «need dentist». Раньше такой
+ * запрос давал «профиль не указан». Транслитерация с типичными окончаниями
+ * и английские названия; normalizeRu сводит латинские двойники букв так же,
+ * как во входном тексте, поэтому формы совпадают при поиске.
+ */
+const LATIN_SPECIALTIES = Object.freeze({
+  therapist: ['terapevt', 'therapist'],
+  dentist: ['stomatolog', 'dantist', 'dentist'],
+  pediatrician: ['pediatr', 'pediatrician'],
+  cardiologist: ['kardiolog', 'cardiologist'],
+  neurologist: ['nevrolog', 'neurologist'],
+  lor: ['lor'],
+  ophthalmologist: ['okulist', 'oftalmolog', 'ophthalmologist'],
+  gynecologist: ['ginekolog', 'gynecologist', 'gynaecologist'],
+  urologist: ['urolog', 'urologist'],
+  endocrinologist: ['endokrinolog', 'endocrinologist'],
+  surgeon: ['hirurg', 'khirurg', 'surgeon'],
+  dermatologist: ['dermatolog', 'dermatologist'],
+  traumatologist: ['travmatolog', 'traumatologist'],
+  orthopedist: ['ortoped', 'orthopedist', 'orthopaedist'],
+  psychiatrist: ['psihiatr', 'psychiatrist'],
+  gastroenterologist: ['gastroenterolog', 'gastroenterologist'],
+});
+for (const [key, stems] of Object.entries(LATIN_SPECIALTIES)) {
+  const forms = stems.flatMap((stem) => (/[a-z]$/u.test(stem) && !/ist$/u.test(stem) ? [stem, `${stem}a`, `${stem}u`, `${stem}om`] : [stem, `${stem}s`]));
+  SPECIALTY_SYNONYMS[key] = Object.freeze([...(SPECIALTY_SYNONYMS[key] || []), ...forms]);
+}
+
+/*
+ * Опечатки в названии врача: «терапефт», «уралог», «эндокренолог», «артопед».
+ * Раньше такое слово не узнавалось, и в описание для модели и в локальный
+ * план уходило «профиль не указан». Допуск — одна правка для слов от пяти
+ * букв (две — от десяти), и только против названий специальностей.
+ */
+const FUZZY_SPECIALTY_FORMS = (() => {
+  const forms = [];
+  const add = (word, key) => {
+    const base = normalizeRu(word);
+    if (base.length < 5 || base.includes(' ')) return;
+    for (const ending of ['', 'а', 'у', 'ом', 'ы', 'ов']) forms.push({ form: base + ending, key });
+  };
+  for (const [key, label] of Object.entries(SPECIALTY_CANON)) add(label, key);
+  for (const [key, words] of Object.entries(SPECIALTY_SYNONYMS)) words.forEach((word) => add(word, key));
+  return forms;
+})();
+
+const fuzzySpecialty = (normalized) => {
+  if (normalized.length < 5) return undefined;
+  const limit = normalized.length >= 10 ? 2 : 1;
+  let best;
+  let bestDistance = limit + 1;
+  for (const { form, key } of FUZZY_SPECIALTY_FORMS) {
+    if (Math.abs(form.length - normalized.length) > limit) continue;
+    const distance = editDistanceOf(normalized, form, limit);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = key;
+      if (distance === 0) break;
+    }
+  }
+  return bestDistance <= limit ? best : undefined;
+};
+
 export const createEntityResolver = (catalog) => {
   const surnameIndex = new Map();
   const fullNameIndex = new Map();
@@ -185,6 +264,14 @@ export const createEntityResolver = (catalog) => {
 
   const clinicIndex = new Map();
   const clinicById = new Map();
+  // «Городская поликлиника №21» → {number: '21', kind: 'поликлиник'} для поиска по номеру.
+  const numberedClinics = [];
+  for (const clinic of catalog.clinics) {
+    const match = /(поликлиник|больниц|роддом)\p{L}*\s*(?:№|n)\s*(\d{1,3})(?!\d)/iu.exec(clinic.name || '');
+    if (match) {
+      numberedClinics.push({ id: clinic.id, kind: match[1].toLowerCase(), number: match[2], childish: /детск/iu.test(clinic.name) });
+    }
+  }
   // Однословные ключи из аббревиатур («РКБ», «МКДЦ»): им не нужна заглавная
   // буква, «поеду в ркб» — обычная запись.
   const aliasSingleKeys = new Set();
@@ -241,6 +328,15 @@ export const createEntityResolver = (catalog) => {
   const specialtyIndex = new Map();
   for (const [key, label] of Object.entries(SPECIALTY_CANON)) {
     specialtyIndex.set(stemWord(label), key);
+  }
+  /*
+   * Разговорные названия и формы, которые основа не сводит к канону:
+   * «лору», «лора» (у короткого «ЛОР» stemWord окончание не отрезает),
+   * «окулист», «глазник», «зубной». Без них «к лору» и «к окулисту» теряли
+   * профиль врача, и модель получала «профиль не указан».
+   */
+  for (const [key, words] of Object.entries(SPECIALTY_SYNONYMS)) {
+    for (const word of words) specialtyIndex.set(stemWord(normalizeRu(word)), key);
   }
   for (const label of catalog.specialties) {
     const key = SPECIALTY_BY_LABEL[String(label).toLowerCase()];
@@ -465,7 +561,11 @@ export const createEntityResolver = (catalog) => {
         const key = window.map((token) => stemWord(token.normalized)).join(' ');
 
         const district = districtIndex.get(key);
-        const specialty = size === 1 ? specialtyIndex.get(key) : undefined;
+        // Опечатка ищется только у слова со строчной буквы: «Уралова» — фамилия, «уралог» — врач.
+        const specialty = size === 1
+          ? specialtyIndex.get(key) ?? (/^\p{Ll}/u.test(window[0].raw) ? fuzzySpecialty(window[0].normalized) : undefined)
+          // «Детский врач» — педиатр: двухсловное название, которого нет в каноне.
+          : size === 2 && /^детск/u.test(window[0].normalized) && /^врач/u.test(window[1].normalized) ? 'pediatrician' : undefined;
         if (!district && !specialty) continue;
 
         if (district) districts.add(district);
@@ -492,6 +592,39 @@ export const createEntityResolver = (catalog) => {
       }
     }
 
+    /*
+     * 0.5. Учреждения с номером: «поликлиника 21», «в детскую поликлинику №7».
+     * Номер в названии — главное, что отличает их друг от друга, а n-граммы
+     * справочника его не видели: «поликлиника» — общее слово, «21» — число.
+     * Раньше такое упоминание не связывалось ни с чем, и в описание для
+     * модели учреждение не попадало.
+     */
+    const NUMBERED = /(?<!\p{L})((?:детск\p{L}*\s+)?(?:городск\p{L}*\s+)?(?:детск\p{L}*\s+)?(поликлиник|больниц|роддом|стоматологическ\p{L}*\s+поликлиник)\p{L}*\s*(?:№|n|номер)?\s*(\d{1,3}))(?!\d)/giu;
+    let numbered;
+    while ((numbered = NUMBERED.exec(scanText)) !== null) {
+      const number = numbered[3];
+      const kind = numbered[2].toLowerCase();
+      const childish = /детск/iu.test(numbered[1]);
+      const ids = numberedClinics
+        .filter((clinic) => clinic.number === number && clinic.kind.startsWith(kind.slice(0, 6)) && (!childish || clinic.childish))
+        .map((clinic) => clinic.id);
+      if (ids.length === 0) continue;
+      const start = numbered.index;
+      const end = numbered.index + numbered[1].length;
+      links.push({
+        kind: ENTITY_KIND.CLINIC,
+        start,
+        end,
+        ids,
+        ambiguous: ids.length > 1,
+        confidence: 0.9,
+        matcher: 'clinic.numbered',
+      });
+      tokens.forEach((token, index) => {
+        if (token.start >= start && token.end <= end) consumed.add(index);
+      });
+    }
+
     // 1. Клиники: жадное окно от длинного к короткому.
     for (let start = 0; start < tokens.length; start += 1) {
       if (consumed.has(start)) continue;
@@ -512,6 +645,17 @@ export const createEntityResolver = (catalog) => {
         if (!bucket) continue;
 
         /*
+         * «к доктору Садыкову»: окно «доктор садыков» совпадает с «Клиникой
+         * доктора Садыковой», но если в справочнике есть врач с такой
+         * фамилией, речь о нём — клиника пишется «в клинику доктора …».
+         */
+        if (size === 2 && /^(?:доктор|врач)/u.test(window[0].normalized)
+          && surnameIndex.has(stemSurname(window[1].normalized))
+          && !/клиник|центр/u.test(tokens[start - 1]?.normalized || '')) {
+          continue;
+        }
+
+        /*
          * Одно слово — слабое основание считать, что речь о клинике. Такое
          * совпадение принимается, только если слово не из общеупотребимых,
          * написано с заглавной не в начале предложения или стоит в кавычках.
@@ -519,6 +663,11 @@ export const createEntityResolver = (catalog) => {
          */
         if (size === 1 && !aliasSingleKeys.has(key)) {
           const token = window[0];
+          /*
+           * «к доктору Садыкову» — врач, а не «Клиника доктора Садыковой»:
+           * одно слово после «доктор»/«врач» отдаётся поиску врачей.
+           */
+          if (/^(?:доктор|врач)/u.test(tokens[start - 1]?.normalized || '')) continue;
           if (COMMON_SINGLE_TOKENS.has(key) || token.normalized.length < 4) continue;
           const before = scanText.slice(Math.max(0, token.start - 3), token.start);
           const quoted = /[«"„“]\s*$/u.test(before);
