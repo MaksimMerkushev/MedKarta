@@ -6,8 +6,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Bot, X, Send, Loader2 } from 'lucide-react';
 import { analyzeSymptoms } from './services/ai';
 import { LIMITS } from '@shared/contract.js';
+import TopPicks from './TopPicks';
+
+const bumpId = (ref) => {
+  ref.current += 1;
+  return ref.current;
+};
 
 const GREETING = {
+  id: 0,
   role: 'assistant',
   content:
     'Привет! 👋 Я ваш навигатор по МедКарте. Расскажите, какой специалист вам нужен или на что вы жалуетесь, и я помогу найти врача и построить маршрут.',
@@ -30,8 +37,20 @@ const friendlyError = (error) => {
   }
 };
 
-export default function AIAssistant({ isOpen, onClose, onApplyTriage, isMobile, avoidRoutePanel = false }) {
+export default function AIAssistant({
+  isOpen,
+  onClose,
+  onApplyTriage,
+  isMobile,
+  avoidRoutePanel = false,
+  picks = null,
+  onFocusPick,
+  onRoutePick,
+  onShowAllPicks,
+}) {
   const [messages, setMessages] = useState([GREETING]);
+  // У каждой реплики свой id: к ответу ассистента привязывается подборка «топ-3».
+  const nextIdRef = useRef(1);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef(null);
@@ -101,7 +120,7 @@ export default function AIAssistant({ isOpen, onClose, onApplyTriage, isMobile, 
     }
 
     setInputValue('');
-    const nextMessages = [...messages, { role: 'user', content: userText }];
+    const nextMessages = [...messages, { id: bumpId(nextIdRef), role: 'user', content: userText }];
     setMessages(nextMessages);
     setIsLoading(true);
 
@@ -114,13 +133,14 @@ export default function AIAssistant({ isOpen, onClose, onApplyTriage, isMobile, 
         return;
       }
 
-      setMessages((prev) => [...prev, { role: 'assistant', content: result.replyText }]);
-      onApplyTriage?.(result);
+      const messageId = bumpId(nextIdRef);
+      setMessages((prev) => [...prev, { id: messageId, role: 'assistant', content: result.replyText }]);
+      onApplyTriage?.(result, { messageId });
     } catch (error) {
       if (controller.signal.aborted) {
         return;
       }
-      setMessages((prev) => [...prev, { role: 'assistant', content: friendlyError(error) }]);
+      setMessages((prev) => [...prev, { id: bumpId(nextIdRef), role: 'assistant', content: friendlyError(error) }]);
     } finally {
       if (abortRef.current === controller) {
         abortRef.current = null;
@@ -138,17 +158,29 @@ export default function AIAssistant({ isOpen, onClose, onApplyTriage, isMobile, 
 
   const renderMessages = (bubbleClass) => (
     <div className="space-y-4">
-      {messages.map((msg, idx) => (
-        <div key={`${msg.role}-${idx}`} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-          <div
-            className={`max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-4 ${bubbleClass} leading-relaxed shadow-sm ${
-              msg.role === 'user'
-                ? 'bg-violet-600 text-white rounded-tr-sm'
-                : 'bg-slate-50 text-slate-700 border border-slate-100 rounded-tl-sm dark:bg-slate-700 dark:border-slate-600 dark:text-slate-200'
-            }`}
-          >
-            {msg.content}
+      {messages.map((msg) => (
+        <div key={msg.id}>
+          <div className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div
+              className={`max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-4 ${bubbleClass} leading-relaxed shadow-sm ${
+                msg.role === 'user'
+                  ? 'bg-violet-600 text-white rounded-tr-sm'
+                  : 'bg-slate-50 text-slate-700 border border-slate-100 rounded-tl-sm dark:bg-slate-700 dark:border-slate-600 dark:text-slate-200'
+              }`}
+            >
+              {msg.content}
+            </div>
           </div>
+          {msg.role === 'assistant' && picks?.[msg.id] && (
+            <TopPicks
+              state={picks[msg.id]}
+              compact={!isMobile}
+              autoScroll={msg.id === messages[messages.length - 1]?.id}
+              onFocus={onFocusPick}
+              onRoute={onRoutePick}
+              onShowAll={() => onShowAllPicks?.(msg.id)}
+            />
+          )}
         </div>
       ))}
       {isLoading && (
@@ -279,7 +311,7 @@ export default function AIAssistant({ isOpen, onClose, onApplyTriage, isMobile, 
         </button>
       </div>
 
-      <div className="h-[280px] overflow-y-auto p-4 scrollbar-thin" aria-live="polite">
+      <div className="h-[400px] max-h-[55vh] overflow-y-auto p-4 scrollbar-thin" aria-live="polite">
         {renderMessages('py-2.5 text-[13px]')}
       </div>
 

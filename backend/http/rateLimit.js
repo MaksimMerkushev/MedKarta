@@ -241,6 +241,12 @@ const trustedProxies = () => {
   return configured.length > 0 ? new Set(configured) : LOOPBACK;
 };
 
+/** Пришёл ли запрос от нашего прокси: только тогда можно верить X-Forwarded-*. */
+export const isFromTrustedProxy = (req) => {
+  const socketAddress = (req.socket?.remoteAddress || '').toString().slice(0, 64).toLowerCase();
+  return trustedProxyHops() > 0 && trustedProxies().has(socketAddress);
+};
+
 export const getClientIp = (req) => {
   const socketAddress = (req.socket?.remoteAddress || 'unknown').toString().slice(0, 64);
   const hops = trustedProxyHops();

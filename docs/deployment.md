@@ -88,8 +88,9 @@ sudo -u medkarta npm ci && sudo -u medkarta npm run build
 sudo -u medkarta cp .env.example .env && sudo chmod 600 .env   # заполнить .env
 ```
 
-Node — 22 LTS (`.nvmrc`). Граф `data/graph/kazan.graph` и
-`data/doctors.full.js` копируются отдельно (их нет в git).
+Node — 22 LTS (`.nvmrc`), для личного кабинета не ниже **22.13** (`node:sqlite`).
+Граф `data/graph/kazan.graph` и `data/doctors.full.js` копируются отдельно
+(их нет в git).
 
 > **Важно про `data/doctors.full.js`.** Файла нет в git, но при сборке он
 > попадает в бандл (`vite.config.js` подставляет его вместо публичного среза):
@@ -222,6 +223,8 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Host $host;
+        # Кабинет ставит cookie с флагом Secure, если запрос пришёл по HTTPS.
+        proxy_set_header X-Forwarded-Proto $scheme;
         proxy_connect_timeout 5s;
         proxy_read_timeout 30s;
         # Cache-Control, X-Robots-Tag и заголовки безопасности для API
@@ -267,8 +270,11 @@ sudo ufw enable                 # порт 3001 снаружи закрыт: Nod
 - Аналитика сама удаляет файлы старше `ANALYTICS_RETENTION_DAYS` и держит
   каталог в пределах `ANALYTICS_MAX_TOTAL_MB`.
 - Раз в сутки копируйте на другую машину: `.env`, `data/doctors.full.js`,
-  `data/graph/`, `data/collected/`, `var/analytics/`. Без копии `.env` и
-  полной базы восстановление после потери VPS займёт дни.
+  `data/graph/`, `data/collected/`, `var/analytics/` и базу кабинета.
+  Без копии `.env` и полной базы восстановление после потери VPS займёт дни.
+- База личного кабинета — `var/accounts/medkarta.sqlite`. Копия без остановки
+  сервиса: `sqlite3 var/accounts/medkarta.sqlite ".backup '/backup/accounts-$(date +%F).sqlite'"`.
+  Каталог `var/` уже открыт на запись в unit-файле (`ReadWritePaths`).
 
 ### 6. Обновление
 
@@ -300,6 +306,11 @@ nginx отсекает поток запросов и медленные сое�
 соединение пришло от самого nginx (`127.0.0.1`; другой адрес прокси —
 `TRUSTED_PROXIES`). Значение вроде `TRUST_PROXY=true` — ошибка запуска, а не
 тихий ноль.
+
+`X-Forwarded-Proto` нужен личному кабинету: по нему сервер понимает, что
+посетитель пришёл по HTTPS, и ставит cookie сессии с флагом `Secure`. При
+`NODE_ENV=production` флаг ставится всегда; `COOKIE_SECURE=off` — только для
+стенда без HTTPS.
 
 Без `TRUST_PROXY` сервер заголовкам `X-Forwarded-*` и `X-Real-IP` не верит и
 берёт адрес из сокета. Так и должно быть, если сервер открыт в интернет

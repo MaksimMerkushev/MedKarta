@@ -48,6 +48,7 @@ import {
   CalendarCheck,
   ShieldPlus,
   FlaskConical,
+  CircleUserRound,
 } from 'lucide-react';
 import { doctorsData } from '@data/doctors.legacy.js';
 import { verifiedDoctors } from '@data/doctors';
@@ -68,16 +69,19 @@ import { track } from './services/analytics';
 import { buildExternalRouteUrl, EXTERNAL_MODE_BY_TRAVEL_MODE } from './externalMaps';
 import { GOSUSLUGI_APPOINTMENT_URL, omsHint, withReferral } from './booking';
 import { fetchTravelTimes } from './services/travelTimes';
+import { describeCriteria, pickReasons, selectTopPicks, SORT_EXPLANATION, wantsTopPicks } from './bestPicks';
 import { SORT_MODES } from '@shared/contract.js';
 import { ownershipCode } from '@shared/analytics.js';
 import { isPediatricRecord, specialtyCode } from '@shared/specialties.js';
 import { parseOpeningHours, scheduleIntervals } from '@shared/openingHours.js';
 import { useDebouncedValue } from './hooks/useDebouncedValue';
 import { isBoolean, isPlanIdOrNull, isStringIdArray, useLocalStorageState } from './hooks/useLocalStorageState';
+import { useAccount } from './hooks/useAccount';
 
 // Помощник и его зависимости грузятся отдельным чанком: большинство сессий
 // открывается ради карты, а не чата, — нет смысла тянуть его в первый байт.
 const AIAssistant = lazy(() => import('./AIAssistant'));
+const AccountPanel = lazy(() => import('./AccountPanel'));
 
 delete L.Icon.Default.prototype._getIconUrl;
 
@@ -123,6 +127,19 @@ const createBeautifulArrow = (rawColor, isUser = false, rawLabel = null) => {
 };
 const dayKeys = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const FAVORITES_STORAGE_KEY = 'med-navigator-favorites';
+// Сколько ждать «устоявшейся» выдачи для подборки ассистента, мс.
+const PICKS_MAX_WAIT_MS = 6000;
+
+/** Инициалы для кнопки кабинета: «Анна (демо)» → «А», «Семья Демо» → «СД». */
+const accountInitials = (name) =>
+  String(name || '')
+    .replace(/\(.*?\)/g, '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0].toUpperCase())
+    .join('') || '·';
 const DARK_MODE_STORAGE_KEY = 'med-navigator-dark-mode';
 // Без сохранённого выбора тема следует системной (см. public/theme-init.js).
 const PREFERS_DARK = typeof window !== 'undefined'
@@ -867,6 +884,50 @@ const FLAG_KEYS = ['open', 'fav', 'weekend', 'evening', 'online', 'wheelchair', 
 
 const DMS_PLAN_STORAGE_KEY = 'medkarta.dms.plan';
 
+/*
+ * Кабинет и данные этого браузера.
+ *   GUEST_STASH_KEY   — избранное и ДМС гостя, отложенные на время входа в
+ *                       демо-аккаунт: демо не должен их забирать, а после
+ *                       выхода они возвращаются.
+ *   ACCOUNT_OWNED_KEY — «избранное и ДМС в localStorage сейчас принадлежат
+ *                       аккаунту». Если сессия кончилась, пока сайт был
+ *                       закрыт, при следующем открытии их нужно убрать.
+ */
+const GUEST_STASH_KEY = 'medkarta.guest-stash';
+const ACCOUNT_OWNED_KEY = 'medkarta.account-owned';
+
+const readStorage = (key) => {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+
+const writeStorage = (key, value) => {
+  try {
+    if (value === null) window.localStorage.removeItem(key);
+    else window.localStorage.setItem(key, value);
+  } catch {
+    // Приватный режим или переполненное хранилище: кабинет работает и без этого.
+  }
+};
+
+const readGuestStash = () => {
+  try {
+    const parsed = JSON.parse(readStorage(GUEST_STASH_KEY) || 'null');
+    if (!parsed || typeof parsed !== 'object') return null;
+    return {
+      favorites: isStringIdArray(parsed.favorites) ? [...new Set(parsed.favorites)].slice(0, 500) : [],
+      dmsPlanId: isPlanIdOrNull(parsed.dmsPlanId) ? parsed.dmsPlanId : null,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const unionIds = (...lists) => [...new Set(lists.flat())].slice(0, 500);
+
 // Частные клиники, собранные сборщиком (npm run data:build), и результаты
 // проверки госврачей на сайтах учреждений (npm run data:verify).
 const COLLECTED_FACILITIES = flattenPrivateCatalog(collectedCatalog);
@@ -1058,12 +1119,107 @@ export default function App() {
   }, [setFavorites]);
   const [now, setNow] = useState(() => kazanWallClock());
   const [isLocationReady, setIsLocationReady] = useState(!hasGeolocationSupport);
+  const { toast, showToast, dismiss: dismissToast } = useToast();
+
+  /*
+   * Личный кабинет. Пока пользователь не вошёл, избранное и программа ДМС
+   * живут в этом браузере, как и раньше. После входа источник правды —
+   * аккаунт: избранное браузера сливается с ним, программа берётся из него.
+   * Демо-аккаунт — исключение: он общий для всех зрителей, поэтому данные
+   * гостя в него не переносятся, а откладываются и возвращаются после выхода.
+   */
+  const favoritesRef = useRef(favorites);
+  const dmsPlanIdRef = useRef(dmsPlanId);
+  const accountRef = useRef(null);
+  useEffect(() => {
+    favoritesRef.current = favorites;
+  }, [favorites]);
+  useEffect(() => {
+    dmsPlanIdRef.current = dmsPlanId;
+  }, [dmsPlanId]);
+
+  const handleSignedIn = useCallback((payload, origin) => {
+    const remote = Array.isArray(payload.favorites) ? payload.favorites : [];
+    const remotePlan = payload.user?.dmsPlanId || null;
+    const local = favoritesRef.current;
+    const localPlan = dmsPlanIdRef.current;
+    // Данные гостя — только если до входа браузер не держал данные другого аккаунта.
+    const fromGuest = origin === 'login' && readStorage(ACCOUNT_OWNED_KEY) !== '1';
+    const isDemo = Boolean(payload.user?.isDemo);
+    let stashed = false;
+
+    if (isDemo || !fromGuest) {
+      if (isDemo && fromGuest && (local.length > 0 || localPlan)) {
+        writeStorage(GUEST_STASH_KEY, JSON.stringify({ favorites: local, dmsPlanId: localPlan }));
+        stashed = true;
+      }
+      setFavorites(remote);
+      setDmsPlanId(remotePlan);
+    } else {
+      if (local.length > 0) {
+        // Сразу показываем объединение, ответ сервера его уточнит.
+        setFavorites(unionIds(remote, local));
+        accountRef.current?.syncFavorites('merge', local).then(setFavorites, (error) => {
+          if (error?.status === 401) return;
+          showToast('Не удалось перенести избранное этого браузера в кабинет — оно осталось здесь.', 'warning');
+        });
+      } else {
+        setFavorites(remote);
+      }
+      if (remotePlan) {
+        setDmsPlanId(remotePlan);
+      } else if (localPlan) {
+        accountRef.current?.setPlan(localPlan).catch(() => {});
+      }
+    }
+    writeStorage(ACCOUNT_OWNED_KEY, '1');
+    if (origin === 'login') {
+      showToast(stashed
+        ? `Вы вошли: ${payload.user.displayName}. Ваше избранное и ДМС вернутся после выхода.`
+        : `Вы вошли: ${payload.user.displayName}`, 'success');
+    }
+  }, [setFavorites, setDmsPlanId, showToast]);
+
+  // Убрать с устройства данные аккаунта; вернуть отложенные данные гостя, если они есть.
+  const releaseAccountData = useCallback(() => {
+    const stash = readGuestStash();
+    writeStorage(GUEST_STASH_KEY, null);
+    writeStorage(ACCOUNT_OWNED_KEY, null);
+    setFavorites(stash?.favorites || []);
+    setDmsPlanId(stash?.dmsPlanId || null);
+    setDmsOnly(false);
+    return Boolean(stash);
+  }, [setFavorites, setDmsPlanId]);
+
+  const handleSignedOut = useCallback((reason) => {
+    // На общем устройстве после выхода не должно оставаться чужих данных.
+    const restored = releaseAccountData();
+    if (reason === 'expired') {
+      showToast('Сессия кабинета закончилась — войдите снова. Избранное и ДМС сохранены в аккаунте.', 'warning');
+    } else if (reason === 'deleted') {
+      showToast('Аккаунт удалён вместе с избранным и программой ДМС.', 'info');
+    } else if (restored) {
+      showToast('Вы вышли из демо-аккаунта. Вернули ваше избранное и ДМС.', 'info');
+    } else {
+      showToast('Вы вышли из кабинета. Избранное и ДМС сохранены в аккаунте.', 'info');
+    }
+  }, [releaseAccountData, showToast]);
+
+  // Сайт открыт, а входа нет: если сессия кончилась, пока он был закрыт, — прибраться.
+  const handleGuest = useCallback(() => {
+    if (readStorage(ACCOUNT_OWNED_KEY) === '1') releaseAccountData();
+  }, [releaseAccountData]);
+
+  const account = useAccount({ onSignedIn: handleSignedIn, onSignedOut: handleSignedOut, onGuest: handleGuest });
+  useEffect(() => {
+    accountRef.current = account;
+  }, [account]);
+  const [isAccountOpen, setIsAccountOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
   const [mobileSheetDragOffset, setMobileSheetDragOffset] = useState(0);
   const [isDarkMode, setIsDarkMode] = useLocalStorageState(DARK_MODE_STORAGE_KEY, PREFERS_DARK, isBoolean);
-  const { toast, showToast, dismiss: dismissToast } = useToast();
 
   const [isAIAssistantOpen, setIsAIAssistantOpen] = useState(false);
   // После первого открытия ассистент остаётся смонтированным и прячется, а не
@@ -1074,6 +1230,13 @@ export default function App() {
     setIsAIAssistantOpen((current) => !current);
   }, []);
   const [isRoutePanelCollapsed, setIsRoutePanelCollapsed] = useState(false);
+  /*
+   * «Топ-3» под ответами ассистента: id реплики → подборка. Подборка — снимок
+   * на момент ответа: если потом поменять фильтры, старый ответ не меняется.
+   */
+  const [assistantPicks, setAssistantPicks] = useState({});
+  const pendingPicksRef = useRef(null);
+  const [picksTick, setPicksTick] = useState(0);
   const [buildRouteTrigger, setBuildRouteTrigger] = useState(false);
   const [targetStopsTrigger, setTargetStopsTrigger] = useState(null); // Apply processing results to UI state
 
@@ -1085,8 +1248,16 @@ export default function App() {
   const doctorProfileSetRef = useRef(new Set());
   const serviceSetRef = useRef(new Set());
 
-  const handleApplyTriage = useCallback((result) => {
+  const handleApplyTriage = useCallback((result, meta = {}) => {
     searchSourceRef.current = { source: 'assistant', at: Date.now() };
+    if (Number.isInteger(meta.messageId) && wantsTopPicks(result)) {
+      pendingPicksRef.current = { messageId: meta.messageId, at: Date.now() };
+      setAssistantPicks((current) => {
+        // Хранятся подборки последних 20 ответов — переписка длинной не бывает.
+        const kept = Object.entries(current).slice(-19);
+        return { ...Object.fromEntries(kept), [meta.messageId]: { status: 'pending' } };
+      });
+    }
     // === МАРШРУТ ===
     // «Сбрось маршрут и фильтры» — это и то и другое. Раньше при обоих
     // флагах маршрут оставался на месте.
@@ -2150,6 +2321,72 @@ export default function App() {
 
   const resultCount = sortedDoctors.length;
   const resultsSettled = travelEstimateState !== 'loading';
+
+  /*
+   * Подборка для ответа ассистента собирается, когда выдача «устоялась»:
+   * строка поиска дошла до фильтра, а время в пути посчитано. Ждём не
+   * дольше PICKS_MAX_WAIT_MS — дальше берём оценку по прямой.
+   */
+  useEffect(() => {
+    const pending = pendingPicksRef.current;
+    if (!pending) return undefined;
+    const settled = deferredSearchQuery === searchQuery && resultsSettled;
+    if (!settled && Date.now() - pending.at < PICKS_MAX_WAIT_MS) {
+      const timerId = setTimeout(() => setPicksTick((tick) => tick + 1), 300);
+      return () => clearTimeout(timerId);
+    }
+    pendingPicksRef.current = null;
+
+    const exclude = new Set(routeTargets.map((target) => target.id));
+    const { picks, total } = selectTopPicks(sortedDoctors, { exclude });
+    const query = normalizeText(deferredSearchQuery).trim();
+    const queryProfile = query ? doctorProfiles.find((item) => normalizeText(item) === query) : null;
+    const profile = selectedDoctorProfile !== 'all'
+      ? selectedDoctorProfile
+      : queryProfile || (deferredSearchQuery.trim() ? `«${deferredSearchQuery.trim()}»` : null);
+
+    const snapshot = {
+      status: 'ready',
+      total,
+      sortText: SORT_EXPLANATION[sortBy] || null,
+      criteria: describeCriteria({
+        profile,
+        childrenOnly,
+        maxTravelMinutes,
+        travelMode,
+        travelActive: travelFilterActive,
+        dmsPlanName: dmsFilterActive ? dmsPlan?.name : null,
+        openOnly,
+        eveningOnly,
+        weekendOnly,
+        ownership: selectedOwnership,
+        district: selectedDistrict,
+      }),
+      picks: picks.map((doc) => ({
+        id: doc.id,
+        name: doc.name,
+        specialty: doc.specialty,
+        doctorProfile: doc.doctorProfile,
+        facilityType: doc.facilityType,
+        entityKind: doc.entityKind,
+        clinic: doc.clinic,
+        address: doc.address,
+        lat: doc.lat,
+        lng: doc.lng,
+        demo: Boolean(doc.demo),
+        reasons: pickReasons(doc, { travelMode, childrenOnly }),
+      })),
+    };
+    // Состояние меняется вне тела эффекта — как и в остальных эффектах файла.
+    // Таймер не отменяется при перерисовке: ожидание уже снято, и без него
+    // подборка навсегда осталась бы «подбираю…».
+    setTimeout(() => setAssistantPicks((current) => ({ ...current, [pending.messageId]: snapshot })), 0);
+    return undefined;
+    // Снимок зависит от выдачи и условий на момент ответа; перечислять всё,
+    // что входит в снимок, незачем — эффект ждёт только «устоявшейся» выдачи.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assistantPicks, picksTick, sortedDoctors, deferredSearchQuery, searchQuery, resultsSettled]);
+
   const lastTrackedSearchRef = useRef('');
   const firstSearchRef = useRef(true);
 
@@ -2360,8 +2597,16 @@ export default function App() {
 
   // Toggle favorite status
   const toggleFavorite = useCallback((id) => {
+    const adding = !favoritesRef.current.includes(id);
     setFavorites((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
-  }, [setFavorites]);
+    if (accountRef.current?.user) {
+      accountRef.current.syncFavorites(adding ? 'add' : 'remove', [id]).catch((error) => {
+        // 401 — сессия кончилась, об этом уже сказал кабинет.
+        if (error?.status === 401) return;
+        showToast('Не удалось сохранить избранное в кабинете — изменение осталось в этом браузере.', 'warning');
+      });
+    }
+  }, [setFavorites, showToast]);
 
   const handleRouteClick = useCallback((doc) => {
     if (!activeOrigin) {
@@ -2383,6 +2628,60 @@ export default function App() {
       return [...prev, doc];
     });
   }, [activeOrigin, showToast]);
+
+  const focusPick = useCallback((pick) => {
+    if (!Number.isFinite(pick?.lat) || !Number.isFinite(pick?.lng)) return;
+    setIsFollowingUser(false);
+    setFlyToTarget([pick.lat, pick.lng]);
+    if (isMobile) setIsAIAssistantOpen(false);
+  }, [isMobile]);
+
+  const routePick = useCallback((pick) => {
+    const doc = enrichedDoctorsRef.current.find((item) => item.id === pick.id);
+    if (!doc) {
+      showToast('Этот вариант больше не найден в справочнике.', 'warning');
+      return;
+    }
+    handleRouteClick(doc);
+    if (isMobile) setIsAIAssistantOpen(false);
+  }, [handleRouteClick, isMobile, showToast]);
+
+  const showAllPicks = useCallback(() => {
+    setIsSidebarCollapsed(false);
+    if (isMobile) {
+      setIsAIAssistantOpen(false);
+      setIsMobileFiltersOpen(true);
+    }
+    setTimeout(() => document.getElementById('results-heading')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
+  }, [isMobile]);
+
+  // Избранное для кабинета: id из аккаунта → записи справочника на карте.
+  const favoriteDetails = useMemo(() => {
+    if (!isAccountOpen) return [];
+    const byId = new Map(enrichedDoctors.map((doc) => [doc.id, doc]));
+    return [...favorites].reverse().map((id) => {
+      const doc = byId.get(id);
+      if (!doc) return { id, name: 'Запись больше не найдена', subtitle: 'Её убрали из справочника — можно удалить', found: false };
+      const subtitle = doc.entityKind === 'doctor'
+        ? [doc.doctorProfile || doc.specialty, doc.clinic].filter(Boolean).join(' · ')
+        : [doc.facilityType, doc.address].filter(Boolean).join(' · ');
+      return { id, name: doc.name, subtitle, lat: doc.lat, lng: doc.lng, found: true };
+    });
+  }, [isAccountOpen, enrichedDoctors, favorites]);
+
+  const focusFavorite = useCallback((item) => {
+    if (!Number.isFinite(item?.lat) || !Number.isFinite(item?.lng)) return;
+    setIsAccountOpen(false);
+    setIsFollowingUser(false);
+    setFlyToTarget([item.lat, item.lng]);
+    if (isMobile) setIsMobileFiltersOpen(false);
+  }, [isMobile]);
+
+  const selectPlanFromAccount = useCallback(async (planId) => {
+    await account.setPlan(planId);
+    setDmsPlanId(planId);
+    if (!planId) setDmsOnly(false);
+  }, [account, setDmsPlanId]);
 
   const handleGoToNearest = () => {
     if (!nearestOpenDoctor) {
@@ -3271,6 +3570,24 @@ export default function App() {
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
+                  {(account.user || account.features.available) && (
+                    <button
+                      type="button"
+                      className="sidebar-icon-button relative"
+                      onClick={() => setIsAccountOpen(true)}
+                      aria-label={account.user ? `Личный кабинет: ${account.user.displayName}` : 'Войти в личный кабинет'}
+                      title={account.user ? account.user.displayName : 'Личный кабинет'}
+                      data-testid="account-button"
+                    >
+                      {account.user ? (
+                        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-blue-600 to-violet-600 text-[11px] font-bold text-white" aria-hidden="true">
+                          {accountInitials(account.user.displayName)}
+                        </span>
+                      ) : (
+                        <CircleUserRound size={20} aria-hidden="true" />
+                      )}
+                    </button>
+                  )}
                   {insurance && (
                     <button
                       type="button"
@@ -3383,7 +3700,14 @@ export default function App() {
                     setDmsPlanId(planId);
                     setIsDmsPanelOpen(false);
                     if (!planId) setDmsOnly(false);
-                    else showToast('Программа сохранена в этом браузере. Карточки отмечены по ней.', 'success');
+                    if (account.user) {
+                      account.setPlan(planId).then(
+                        () => planId && showToast('Программа сохранена в личном кабинете. Карточки отмечены по ней.', 'success'),
+                        (error) => error?.status !== 401 && showToast('Не удалось сохранить программу в кабинете — она сохранена в этом браузере.', 'warning'),
+                      );
+                    } else if (planId) {
+                      showToast('Программа сохранена в этом браузере. Карточки отмечены по ней.', 'success');
+                    }
                   }}
                 />
               )}
@@ -3401,7 +3725,7 @@ export default function App() {
                 onNearest={handleGoToNearest}
               />
               <div className="sidebar-results mt-1">
-                <h2 role="status" aria-live="polite">Найдено {sortedDoctors.length.toLocaleString('ru-RU')}</h2>
+                <h2 id="results-heading" role="status" aria-live="polite">Найдено {sortedDoctors.length.toLocaleString('ru-RU')}</h2>
                 <div className="sidebar-results-actions">
                   <label className="filter-select-wrap">
                     <span className="sr-only">Сортировка результатов</span>
@@ -3941,12 +4265,33 @@ export default function App() {
           </>
         )}
 
+        {isAccountOpen && (
+          <Suspense fallback={null}>
+            <AccountPanel
+              account={account}
+              insurance={insurance}
+              today={todayKey}
+              planId={dmsPlanId}
+              onSelectPlan={selectPlanFromAccount}
+              favorites={favoriteDetails}
+              onFocusFavorite={focusFavorite}
+              onRemoveFavorite={toggleFavorite}
+              onClose={() => setIsAccountOpen(false)}
+              isMobile={isMobile}
+            />
+          </Suspense>
+        )}
+
         {isAIAssistantMounted && (
           <Suspense fallback={null}>
             <AIAssistant
               isOpen={isAIAssistantOpen}
               onClose={() => setIsAIAssistantOpen(false)}
               onApplyTriage={handleApplyTriage}
+              picks={assistantPicks}
+              onFocusPick={focusPick}
+              onRoutePick={routePick}
+              onShowAllPicks={showAllPicks}
               isMobile={isMobile}
               avoidRoutePanel={!isMobile && routeTargets.length > 0 && !isRoutePanelCollapsed}
             />
