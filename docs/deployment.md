@@ -347,8 +347,12 @@ OpenRouter не принимает запросы с российских адр
 AI_UPSTREAM_URL=https://openrouter.ai/api/v1/chat/completions
 AI_MODEL=openai/gpt-5.4-mini
 AI_PROXY_URL=login:password@203.0.113.10:8000
-AI_REASONING_EFFORT=low
 ```
+
+Замер на реальных запросах через прокси (октябрь 2026, `openai/gpt-5.4-mini`):
+ответ модели — около 2 с, рассуждений нет (0 токенов), на входе ~2 000
+токенов, на выходе ~100 — примерно $2 за 1000 запросов ассистента.
+`AI_REASONING_EFFORT` для этой модели не нужен.
 
 - **Формат прокси** — как выдают продавцы: `login:password@ip:port`
   (HTTP-прокси), `ip:port:login:password` или
