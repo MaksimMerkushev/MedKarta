@@ -1,0 +1,34 @@
+{
+  "$comment": "Источники сборщика данных (npm run data:collect). Демо-источники — локальные файлы вымышленных клиник; в справочник приложения (data:build) они не попадают.",
+  "sources": [
+    {
+      "id": "demo-zdorovie-center-site",
+      "kind": "clinic-site",
+      "demo": true,
+      "type": "file",
+      "path": "data/demo/sites/demo-zdorovie/{version}.html",
+      "defaults": { "version": "v1" },
+      "parser": ["jsonld", "price-table"],
+      "clinicId": "demo-zdorovie",
+      "clinicName": "Демо-Здоровье",
+      "branchId": "demo-zdorovie-center",
+      "branchName": "на Баумана",
+      "district": "Вахитовский"
+    },
+    {
+      "id": "demo-malysh-gorki-site",
+      "kind": "clinic-site",
+      "demo": true,
+      "type": "file",
+      "path": "data/demo/sites/demo-malysh/{version}.html",
+      "defaults": { "version": "v1" },
+      "parser": ["jsonld", "price-table"],
+      "clinicId": "demo-malysh",
+      "clinicName": "Детская клиника Демо-Малыш",
+      "branchId": "demo-malysh-gorki",
+      "branchName": "в Горках",
+      "district": "Приволжский",
+      "geo": { "lat": 55.765, "lng": 49.163 }
+    }
+  ]
+}

@@ -1,18 +1,28 @@
 {
-  "name": "med-navigator",
+  "name": "medkarta",
   "private": true,
   "license": "UNLICENSED",
   "version": "1.0.0",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": "^20.19.0 || >=22.12.0"
   },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "start": "node server.js",
+    "start": "node backend/server.js",
+    "build:graph": "node scripts/build-road-graph.mjs",
+    "report:searches": "node scripts/search-report.mjs",
+    "data:collect": "node scripts/data-collect.mjs",
+    "data:review": "node scripts/data-review.mjs",
+    "data:build": "node scripts/data-build.mjs",
+    "data:verify": "node scripts/data-verify.mjs",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
+    "test": "node --test tests/*.test.js",
+    "test:hybrid": "PRIVACY_OUTBOUND_MODE=hybrid node --test tests/*.test.js",
+    "test:security": "node --test tests/*.test.js && PRIVACY_OUTBOUND_MODE=hybrid node --test tests/*.test.js",
+    "eval:privacy": "node scripts/privacy-eval.mjs",
     "preview": "vite preview",
     "audit:security": "npm audit --omit=dev",
     "prices:doctors": "node scripts/generate-doctor-service-prices.mjs",
@@ -21,7 +31,6 @@
   "dependencies": {
     "@tailwindcss/postcss": "^4.2.1",
     "leaflet": "^1.9.4",
-    "leaflet-routing-machine": "^3.2.12",
     "leaflet.markercluster": "^1.5.3",
     "lucide-react": "^0.577.0",
     "react": "^19.2.4",

@@ -1,11 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { kazanFacilities } from '../src/kazanFacilities.js';
+import { kazanFacilities } from '../data/facilities.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const facilitiesPath = path.resolve(__dirname, '../src/kazanFacilities.js');
+const facilitiesPath = path.resolve(__dirname, '../data/facilities.js');
 
 const GOV_RE = /(мвд|военн|госпитал(?:ь|я)|минздрав|гбуз|гауз|государ|городск|ркб|фкуз|росгвард|фсб|уфсин|диспансер|больниц|поликлиник|поликлиническ|станц(?:ия)? скорой|мсч|медсанчаст|ветеран|женск.*консультац|травмпункт|врач[а-я\s]+общей практики|амбулатор(?:ия|ное отделение))/i;
 const PRIVATE_RE = /(ооо|ao\b|зао|клиника\s+сем|медцентр\s+сем|частн|платн|premium|private)/i;

@@ -1,0 +1,3960 @@
+/*
+ * © 2026 MedКарта Казань. Все права защищены.
+ * Этот код является интеллектуальной собственностью автора.
+ */
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AttributionControl, MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import MarkerClusterGroup from 'react-leaflet-cluster';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
+import 'leaflet.markercluster/dist/MarkerCluster.css';
+import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
+import {
+  Bike,
+  Building2,
+  Car,
+  ChevronDown,
+  ChevronUp,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Footprints,
+  Heart,
+  HeartOff,
+  Hospital,
+  Loader2,
+  MapPin,
+  Moon,
+  Navigation,
+  RefreshCcw,
+  Search,
+  ShieldCheck,
+  Star,
+  Sun,
+  TrendingUp,
+  UserRound,
+  XCircle,
+  X,
+  Bot,
+  GripVertical,
+  Phone,
+  Globe,
+  Share2,
+  ExternalLink,
+  Wallet,
+  HelpCircle,
+  Timer,
+  Bus,
+  CalendarCheck,
+  ShieldPlus,
+  FlaskConical,
+} from 'lucide-react';
+import { doctorsData } from '@data/doctors.legacy.js';
+import { verifiedDoctors } from '@data/doctors';
+import { kazanFacilities } from '@data/facilities.js';
+import { ClinicsData } from '@data/clinics.js';
+import collectedCatalog from '@data/private/catalog.json';
+import verificationData from '@data/verification.json';
+import { flattenPrivateCatalog } from '@shared/privateCatalog.js';
+import Toast from './Toast';
+import { useToast } from './hooks/useToast';
+import SearchFilters from './SearchFilters';
+import PlaceDoctorList from './PlaceDoctorList';
+import { DataReportButton, SearchFeedbackPrompt } from './FeedbackWidgets';
+import DmsPanel from './DmsPanel';
+import { fetchServerDemoFlag, loadDemoData, readDemoPreference, setDemoPreference } from './demoMode';
+import { coverageBadge, coverageFor, findPlan, findProvider } from '@shared/dms.js';
+import { track } from './services/analytics';
+import { buildExternalRouteUrl, EXTERNAL_MODE_BY_TRAVEL_MODE } from './externalMaps';
+import { GOSUSLUGI_APPOINTMENT_URL, omsHint, withReferral } from './booking';
+import { fetchTravelTimes } from './services/travelTimes';
+import { SORT_MODES } from '@shared/contract.js';
+import { ownershipCode } from '@shared/analytics.js';
+import { isPediatricRecord, specialtyCode } from '@shared/specialties.js';
+import { parseOpeningHours, scheduleIntervals } from '@shared/openingHours.js';
+import { useDebouncedValue } from './hooks/useDebouncedValue';
+import { isBoolean, isPlanIdOrNull, isStringIdArray, useLocalStorageState } from './hooks/useLocalStorageState';
+
+// Помощник и его зависимости грузятся отдельным чанком: большинство сессий
+// открывается ради карты, а не чата, — нет смысла тянуть его в первый байт.
+const AIAssistant = lazy(() => import('./AIAssistant'));
+
+delete L.Icon.Default.prototype._getIconUrl;
+
+// L.divIcon вставляет строку через innerHTML. Даже если сейчас сюда приходят
+// только константы, значения приводим к безопасному виду — чтобы будущая
+// правка не превратила это в точку внедрения разметки.
+const SAFE_COLOR = /^#[0-9a-f]{3,8}$/i;
+const sanitizeColor = (value) => (SAFE_COLOR.test(String(value)) ? String(value) : '#3b82f6');
+const sanitizeLabel = (value) => {
+  const digits = String(value ?? '').replace(/\D/g, '');
+  return digits ? digits.slice(0, 2) : null;
+};
+
+const createBeautifulArrow = (rawColor, isUser = false, rawLabel = null) => {
+  const color = sanitizeColor(rawColor);
+  const label = sanitizeLabel(rawLabel);
+  const size = isUser ? [26, 26] : [34, 46];
+  const anchor = isUser ? [13, 13] : [17, 46];
+  const popupAnchor = isUser ? [0, -13] : [0, -42];
+
+  let innerContent = '<circle cx="12" cy="12" r="5" fill="white"/>';
+  if (label) {
+    innerContent = `
+      <circle cx="12" cy="12" r="8" fill="white"/>
+      <text x="12" y="15.5" font-family="Arial, sans-serif" font-weight="bold" font-size="10" text-anchor="middle" fill="${color}">${label}</text>
+    `;
+  }
+
+  const svgHtml = isUser
+    ? '<div class="user-location-marker"><div class="user-location-dot"></div></div>'
+    : `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 36" width="34" height="46" style="filter: drop-shadow(0px 3px 5px rgba(0,0,0,0.22));">
+        <path d="M12 0C5.373 0 0 5.373 0 12c0 9.07 10.667 21.6 11.23 22.251a1 1 0 0 0 1.54 0C13.333 33.6 24 21.07 24 12c0-6.627-5.373-12-12-12z" fill="${color}" stroke="white" stroke-width="1.5"/>
+        ${innerContent}
+      </svg>`;
+
+  return L.divIcon({
+    html: svgHtml,
+    className: isUser ? 'user-div-icon cursor-grab active:cursor-grabbing' : 'doctor-div-icon',
+    iconSize: size,
+    iconAnchor: anchor,
+    popupAnchor,
+  });
+};
+const dayKeys = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+const FAVORITES_STORAGE_KEY = 'med-navigator-favorites';
+const DARK_MODE_STORAGE_KEY = 'med-navigator-dark-mode';
+// Без сохранённого выбора тема следует системной (см. public/theme-init.js).
+const PREFERS_DARK = typeof window !== 'undefined'
+  && window.matchMedia?.('(prefers-color-scheme: dark)').matches === true;
+const MAX_ROUTE_STOPS = 5;
+const PAGE_SIZE = 30;
+const EMPTY_SERVICES = [];
+const sortRu = (left, right) => String(left).localeCompare(String(right), 'ru');
+const uniqueSorted = (values) => [...new Set(values.filter(Boolean))].sort(sortRu);
+
+const TRAVEL_MODE_OPTIONS = [
+  { id: 'driving', icon: Car, label: 'На автомобиле' },
+  { id: 'foot', icon: Footprints, label: 'Пешком' },
+  { id: 'bike', icon: Bike, label: 'На велосипеде' },
+];
+
+const blueArrowIcon = createBeautifulArrow('#3b82f6');
+
+const violetArrowIcon = createBeautifulArrow('#8b5cf6');
+const amberArrowIcon = createBeautifulArrow('#f59e0b');
+const userDotIcon = createBeautifulArrow('#ef4444', true);
+const hasGeolocationSupport = typeof navigator !== 'undefined' && Boolean(navigator.geolocation);
+const defaultLocation = [55.7963, 49.1088];
+const institutionTypes = ['Клиника', 'Больница', 'Госпиталь', 'Медцентр', 'Поликлиника', 'Амбулатория', 'Медучреждение', 'Стоматология'];
+const institutionTypeSet = new Set(institutionTypes);
+
+const resolveFacilityType = (item) => {
+  if (item.facilityType) {
+    return item.facilityType;
+  }
+
+  if (institutionTypeSet.has(item.specialty)) {
+    return item.specialty;
+  }
+
+  return 'Клиника';
+};
+
+const resolveDoctorProfile = (item) => {
+  if (!item.specialty || institutionTypeSet.has(item.specialty)) {
+    return null;
+  }
+
+  return item.specialty;
+};
+
+const normalizeScheduleValue = (value) => {
+  if (value === null || value === undefined) {
+    return 'Выходной';
+  }
+
+  const text = String(value).trim();
+  if (!text || text.toLowerCase() === 'null') {
+    return 'Выходной';
+  }
+
+  return text;
+};
+
+const extractClinicsSchedule = (doctorSchedule, clinicHours) => {
+  const source = doctorSchedule || clinicHours;
+  if (!source) {
+    return null;
+  }
+
+  return {
+    mon: normalizeScheduleValue(source.mon),
+    tue: normalizeScheduleValue(source.tue),
+    wed: normalizeScheduleValue(source.wed),
+    thu: normalizeScheduleValue(source.thu),
+    fri: normalizeScheduleValue(source.fri),
+    sat: normalizeScheduleValue(source.sat),
+    sun: normalizeScheduleValue(source.sun),
+  };
+};
+
+const mapClinicsToFacilities = (payload) => {
+  if (!payload || !Array.isArray(payload.clinics)) {
+    return [];
+  }
+
+  const facilities = [];
+
+  payload.clinics.forEach((clinic) => {
+    const clinicTitle = clinic.branch_name ? `${clinic.name} (${clinic.branch_name})` : clinic.name;
+    const clinicDoctors = Array.isArray(clinic.doctors) && clinic.doctors.length > 0 ? clinic.doctors : [null];
+
+    clinicDoctors.forEach((doctor, index) => {
+      // Клиника без списка врачей — это карточка самой клиники, а не
+      // «Врач клиники №1»: раньше так назывались карточки КОРЛ и МКДЦ.
+      const doctorName = doctor?.full_name || (doctor ? `Врач клиники №${index + 1}` : clinicTitle);
+      const specialty = doctor?.specialty || clinic.facility_type || 'Специалист';
+      const website = clinic.website || '';
+      const booking = clinic.booking_url || '';
+      const phone = Array.isArray(clinic.phones) && clinic.phones.length > 0 ? clinic.phones[0] : '';
+      const hoursRaw = doctor?.schedule?.raw || clinic.working_hours?.raw || 'График не указан';
+
+      facilities.push({
+        id: `clinics-${clinic.clinic_id}-${doctor?.doctor_id || index}`,
+        name: doctorName,
+        specialty,
+        clinic: clinicTitle,
+        address: clinic.address_full || '',
+        district: clinic.district || '',
+        ownership: clinic.ownership || 'Не определено',
+        rating: 0,
+        experience: doctor?.experience_years || 0,
+        schedule: extractClinicsSchedule(doctor?.schedule, clinic.working_hours),
+        hours: hoursRaw,
+        phone,
+        website,
+        // Без повторов: specialty по умолчанию равна типу учреждения, и
+        // карточка показывала «Клиника» дважды (и дублирующиеся ключи React).
+        services: [...new Set([clinic.facility_type, specialty].filter(Boolean))],
+        features: {
+          onlineBooking: Boolean(booking || website),
+          wheelchair: false,
+          parking: false,
+          children: /дет/i.test(clinicTitle),
+          eveningReception: false,
+          weekendReception: false,
+        },
+        description: clinic.doctor_list_completeness === 'partial' ? 'Состав врачей частично подтвержден.' : 'Данные клиники подтверждены.',
+        lat: clinic.coordinates?.lat,
+        lng: clinic.coordinates?.lng,
+        facilityType: clinic.facility_type || specialty,
+        source: 'ClinicsData',
+      });
+    });
+  });
+
+  return facilities.filter((item) => typeof item.lat === 'number' && typeof item.lng === 'number');
+};
+
+// Initial map view reset (once)
+const InitialCenterMap = ({ location }) => {
+  const map = useMap();
+  const doneRef = useRef(false);
+
+  useEffect(() => {
+    if (location && !doneRef.current) {
+      doneRef.current = true;
+      map.setView(location, 13, { animate: false });
+    }
+  }, [location, map]);
+
+  return null;
+};
+
+// Animate map transition to coordinates
+/*
+ * Открытое окно маркера и панель маршрута. Если окно уже открыто, а панель
+ * появляется (нажали «в маршрут» прямо в окне), окно оставалось под ней.
+ * Здесь окну задаётся отступ справа и оно заново вписывается в видимую часть.
+ */
+const PopupPanGuard = ({ rightPadding }) => {
+  const map = useMap();
+  const popupRef = useRef(null);
+  const paddingRef = useRef(rightPadding);
+
+  // Параметры окна react-leaflet задаёт один раз, при создании маркера, —
+  // тогда маршрута ещё не было. Поэтому отступ выставляется при каждом
+  // открытии окна и при каждом изменении панели.
+  const fit = useCallback((popup) => {
+    if (!popup?.isOpen()) return;
+    popup.options.autoPanPaddingBottomRight = L.point(paddingRef.current, 24);
+    popup.update();
+  }, []);
+
+  useEffect(() => {
+    const onOpen = (event) => {
+      popupRef.current = event.popup;
+      fit(event.popup);
+    };
+    const onClose = (event) => {
+      if (popupRef.current === event.popup) popupRef.current = null;
+    };
+    map.on('popupopen', onOpen);
+    map.on('popupclose', onClose);
+    return () => {
+      map.off('popupopen', onOpen);
+      map.off('popupclose', onClose);
+    };
+  }, [map, fit]);
+
+  useEffect(() => {
+    paddingRef.current = rightPadding;
+    fit(popupRef.current);
+  }, [rightPadding, fit]);
+
+  return null;
+};
+
+const FlyToPoint = ({ target, onDone, offsetRatio = 0 }) => {
+  const map = useMap();
+  const prevTarget = useRef(null);
+  useEffect(() => {
+    if (target && target !== prevTarget.current) {
+      prevTarget.current = target;
+      const zoom = map.getZoom() < 14 ? 15 : map.getZoom();
+      let center = target;
+      if (offsetRatio > 0) {
+        // Центр сдвигается вниз — точка оказывается выше середины экрана.
+        const shifted = map.project(target, zoom).add([0, map.getSize().y * offsetRatio]);
+        center = map.unproject(shifted, zoom);
+      }
+      map.flyTo(center, zoom, { duration: 1.0 });
+      if (onDone) setTimeout(onDone, 1100);
+    }
+  }, [target, map, onDone, offsetRatio]);
+  return null;
+};
+
+/*
+ * Стабильные позиции и иконки маркеров.
+ *
+ * react-leaflet вызывает marker.setLatLng(), как только массив позиции —
+ * НОВЫЙ объект, даже с теми же числами. Внутри кластера это «переезд»
+ * маркера: он снимается с карты и ставится заново, а открытое окно
+ * закрывается. Из-за этого окно со списком врачей закрывалось от любого
+ * действия в нём — сердечко, «в маршрут», — и найденного врача приходилось
+ * искать заново. Поэтому один и тот же массив на одни и те же координаты,
+ * и одна и та же иконка на один и тот же номер в маршруте.
+ */
+const markerPositions = new Map();
+const stablePosition = (key, lat, lng) => {
+  let position = markerPositions.get(key);
+  if (!position) {
+    position = [lat, lng];
+    markerPositions.set(key, position);
+  }
+  return position;
+};
+
+const routeIcons = new Map();
+const routeIconFor = (number) => {
+  let icon = routeIcons.get(number);
+  if (!icon) {
+    icon = createBeautifulArrow('#ef4444', false, String(number));
+    routeIcons.set(number, icon);
+  }
+  return icon;
+};
+
+const InvalidateMapSize = () => {
+  const map = useMap();
+
+  useEffect(() => {
+    const container = map.getContainer();
+    const observer = new ResizeObserver(() => {
+      // Avoid ResizeObserver loop limit error
+      window.requestAnimationFrame(() => {
+        map.invalidateSize(false);
+      });
+    });
+    observer.observe(container);
+
+    return () => observer.disconnect();
+  }, [map]);
+
+  return null;
+};
+
+/** Понятная причина, по которой маршрут не построен. Коды — из backend/routing/engine.js. */
+const ROUTE_ERROR_TEXT = {
+  point_far_from_road_network: 'Точка слишком далеко от дорог',
+  no_route_between_points: 'Для этого транспорта пути по дорогам нет',
+  route_too_complex: 'Маршрут слишком длинный для расчёта',
+  routing_graph_unavailable: 'Карта дорог не загружена на сервере',
+  outside_region: 'Точка вне Казани и окрестностей — маршрут здесь не строится',
+  rate_limited: 'Слишком много запросов маршрута — попробуйте через минуту',
+  bad_request: 'Не удалось построить маршрут по этим точкам',
+  server_error: 'Сервер маршрутов временно недоступен',
+  timeout: 'Сервер маршрутов не ответил вовремя',
+  offline: 'Нет соединения с интернетом',
+  network: 'Нет связи с сервером маршрутов — проверьте интернет',
+};
+
+/* Ошибки, после которых имеет смысл просто повторить запрос. */
+const RETRYABLE_ROUTE_ERRORS = new Set([null, undefined, 'rate_limited', 'server_error', 'timeout', 'offline', 'network', 'route_too_complex']);
+
+/** Код ответа сервера маршрутов → причина для интерфейса. */
+const routeFailureReason = (status, code) => {
+  if (code) return code;
+  if (status === 429) return 'rate_limited';
+  if (status === 400) return 'bad_request';
+  if (status >= 500) return 'server_error';
+  return null;
+};
+
+const ROUTE_TIMEOUT_MS = 15_000;
+const routeErrorText = (routeData, targets, fallback) => {
+  if (routeData?.reason === 'point_far_from_road_network' && Number.isInteger(routeData.point)) {
+    if (routeData.point === 0) return 'Точка старта слишком далеко от дорог';
+    const target = targets?.[routeData.point - 1];
+    const label = target ? target.clinic || target.name : null;
+    if (label) return `Точка «${label}» слишком далеко от дорог`;
+  }
+  return ROUTE_ERROR_TEXT[routeData?.reason] || fallback;
+};
+
+/** Причина, по которой маршрут не построен, и «Повторить» для временных сбоев. */
+const RouteErrorNotice = ({ routeData, routeTargets, fallback, onRetry }) => (
+  <div className="flex flex-col items-center gap-2" role="alert">
+    <div className="text-sm font-medium text-red-500">{routeErrorText(routeData, routeTargets, fallback)}</div>
+    {RETRYABLE_ROUTE_ERRORS.has(routeData?.reason) && (
+      <button
+        type="button"
+        onClick={onRetry}
+        className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-semibold text-blue-600 transition-colors hover:bg-blue-50 dark:border-slate-600 dark:text-blue-400 dark:hover:bg-slate-700"
+      >
+        Повторить
+      </button>
+    )}
+  </div>
+);
+
+const RoutingMachine = ({ originLocation, routeTargets, travelMode, routeData, setRouteData }) => {
+  const map = useMap();
+  const layerRef = useRef(null);
+  /*
+   * Повторный запрос при неизменном наборе точек. Многие действия
+   * интерфейса сбрасывают результат (setRouteData(null)) — выбор того же
+   * транспорта, «к моему местоположению», перестановка точек одной клиники,
+   * — но ключ маршрута при этом не меняется, и эффект не перезапускался:
+   * панель вечно показывала «Строим маршрут...». Теперь сброшенный
+   * результат без запроса в полёте означает «построй заново»; так же
+   * работает кнопка «Повторить».
+   */
+  const [attempt, setAttempt] = useState(0);
+  const inFlightRef = useRef(false);
+
+  // Стабилизация: округляем координаты до 4 знаков (~11 метров), чтобы
+  // дрожание геолокации не перестраивало маршрут на каждом обновлении.
+  const roundCoord = (val) => Number(Number(val).toFixed(4));
+  const routeKey = JSON.stringify({
+    o: originLocation ? [roundCoord(originLocation[0]), roundCoord(originLocation[1])] : null,
+    t: (routeTargets || []).map((r) => [roundCoord(r.lat), roundCoord(r.lng)]),
+    m: travelMode,
+  });
+
+  useEffect(() => {
+    const clear = () => {
+      if (layerRef.current && map) {
+        map.removeLayer(layerRef.current);
+      }
+      layerRef.current = null;
+    };
+
+    if (!map || !originLocation || !routeTargets || routeTargets.length === 0) {
+      clear();
+      return undefined;
+    }
+
+    const lineColors = { driving: '#3b82f6', foot: '#10b981', bike: '#a855f7' };
+    const mode = lineColors[travelMode] ? travelMode : 'driving';
+
+    const waypoints = [
+      { lat: originLocation[0], lng: originLocation[1] },
+      ...routeTargets.map((t) => ({ lat: t.lat, lng: t.lng })),
+    ];
+
+    const controller = new AbortController();
+    let cancelled = false;
+    let timedOut = false;
+    inFlightRef.current = true;
+    // Без предела ожидания зависший сервер оставлял «Строим маршрут...» навсегда.
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, ROUTE_TIMEOUT_MS);
+
+    /*
+     * Маршрут строит НАШ сервер (backend/routing), а не сторонний сервис.
+     * Раньше координаты пользователя и всех точек уходили на публичный
+     * демо-сервер OSRM — при том что языковой модели мы отдаём @HOME вместо
+     * адреса. Теперь координаты дальше нашего бекенда не идут.
+     */
+    const draw = async () => {
+      try {
+        const response = await fetch('/api/route', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          signal: controller.signal,
+          body: JSON.stringify({ waypoints, profile: mode }),
+        });
+
+        if (cancelled) return;
+
+        if (!response.ok) {
+          // Прямую между точками НЕ рисуем: линия через дома и реку выглядит
+          // как маршрут и вводит в заблуждение. Показываем причину отказа.
+          const failure = await response.json().catch(() => null);
+          if (cancelled) return;
+          clear();
+          setRouteData({
+            distance: 0,
+            time: 0,
+            error: true,
+            reason: routeFailureReason(response.status, failure?.code),
+            point: Number.isInteger(failure?.point) ? failure.point : null,
+          });
+          return;
+        }
+
+        const payload = await response.json();
+        if (cancelled) return;
+        if (!Array.isArray(payload.geometry) || payload.geometry.length < 2) {
+          clear();
+          setRouteData({ distance: 0, time: 0, error: true, reason: null });
+          return;
+        }
+
+        clear();
+        const group = L.layerGroup();
+        L.polyline(payload.geometry, {
+          color: lineColors[mode],
+          weight: 6,
+          opacity: 0.9,
+        }).addTo(group);
+
+        // Короткая пунктирная «подводка» от здания до места, где маршрут
+        // выходит на дорогу, — как в навигаторах. Сам маршрут идёт по улицам.
+        (payload.snaps || []).forEach((snap, index) => {
+          const point = waypoints[index];
+          if (!point || !(snap?.distanceM > 10)) return;
+          L.polyline([[point.lat, point.lng], [snap.lat, snap.lng]], {
+            color: '#64748b',
+            weight: 3,
+            opacity: 0.8,
+            dashArray: '2 7',
+            lineCap: 'round',
+          }).addTo(group);
+        });
+
+        layerRef.current = group.addTo(map);
+
+        setRouteData({ distance: payload.distance, time: payload.time, error: false });
+      } catch (error) {
+        if (cancelled) return;
+        if (error?.name === 'AbortError' && !timedOut) return;
+        clear();
+        const reason = timedOut ? 'timeout' : typeof navigator !== 'undefined' && navigator.onLine === false ? 'offline' : 'network';
+        setRouteData({ distance: 0, time: 0, error: true, reason });
+      } finally {
+        clearTimeout(timer);
+        if (!cancelled) inFlightRef.current = false;
+      }
+    };
+
+    draw();
+
+    return () => {
+      cancelled = true;
+      inFlightRef.current = false;
+      clearTimeout(timer);
+      controller.abort();
+      clear();
+    };
+    // routeKey намеренно заменяет собой список зависимостей: он и есть
+    // огрублённый снимок входных данных.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map, routeKey, attempt]);
+
+  // Объявлен ПОСЛЕ эффекта запроса: если ключ сменился в том же рендере,
+  // запрос уже в полёте, и повтор не нужен.
+  useEffect(() => {
+    if (routeData === null && !inFlightRef.current && originLocation && routeTargets?.length > 0) {
+      setAttempt((value) => value + 1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeData]);
+
+  return null;
+};
+
+const normalizeText = (value) => (value ? value.toString().toLowerCase() : '');
+
+const normalizeClinicKey = (value) =>
+  (value || '')
+    .toString()
+    .toLowerCase()
+    .replace(/[«»"'`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+/*
+ * Охват дня: начало первого интервала и конец последнего — для сортировки
+ * и фильтра «вечерний приём». Для «открыто сейчас» охват не годится: у
+ * «09:00-12:30,13:00-17:30» он закрывает обеденный перерыв. Там
+ * используются сами интервалы (scheduleIntervals из shared/openingHours.js:
+ * круглосуточно, переход через полночь, перерывы).
+ */
+const scheduleTextToRange = (value) => {
+  const intervals = scheduleIntervals(value);
+  if (!intervals) return null;
+  return {
+    start: Math.min(...intervals.map((interval) => interval.start)),
+    end: Math.max(...intervals.map((interval) => interval.end)),
+  };
+};
+
+// Расписание бывает трёх видов, и раньше два последних не различались.
+// 487 объектов из OpenStreetMap приходят с schedule: null — графика попросту
+// нет в данных. Старая логика возвращала для них false, и карточка показывала
+// красное «Закрыто», противореча собственной строке «График уточняется».
+// OPEN_STATE.UNKNOWN отделяет «точно закрыто» от «мы не знаем».
+const OPEN_STATE = { OPEN: 'open', CLOSED: 'closed', UNKNOWN: 'unknown' };
+
+/*
+ * Расписание учреждений из OSM восстанавливается из исходной строки часов:
+ * импорт закрывал субботу и воскресенье у 293 учреждений из 327 с часами,
+ * включая «Mo-Su» и круглосуточные. См. shared/openingHours.js.
+ */
+const withOsmSchedule = (item) => {
+  const parsed = parseOpeningHours(item.hours);
+  return parsed ? { ...item, schedule: parsed } : item;
+};
+
+/*
+ * Часы работы в справочнике — казанские. Раньше «открыто сейчас» считалось
+ * по часовому поясу устройства: у пользователя с ноутбуком на другом поясе
+ * клиники открывались и закрывались со сдвигом. Возвращается Date, у которого
+ * getDay/getHours/getMinutes дают московское время, — только для сравнения
+ * с расписанием, не для хранения.
+ */
+const MOSCOW_CLOCK = (() => {
+  try {
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Europe/Moscow',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    });
+  } catch {
+    return null;
+  }
+})();
+
+const kazanWallClock = (date = new Date()) => {
+  if (!MOSCOW_CLOCK) return date;
+  const parts = Object.fromEntries(MOSCOW_CLOCK.formatToParts(date).map((part) => [part.type, part.value]));
+  return new Date(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute));
+};
+
+const hasAnyScheduleData = (schedule) =>
+  Boolean(schedule) && dayKeys.some((dayKey) => {
+    const value = schedule[dayKey];
+    return typeof value === 'string' && value.trim().length > 0;
+  });
+
+const resolveOpenState = (schedule, now) => {
+  if (!hasAnyScheduleData(schedule)) {
+    return OPEN_STATE.UNKNOWN;
+  }
+
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const today = scheduleIntervals(schedule[dayKeys[now.getDay()]]) || [];
+  if (today.some((interval) => currentMinutes >= interval.start && currentMinutes < interval.end)) {
+    return OPEN_STATE.OPEN;
+  }
+
+  // Вчерашняя смена, перешедшая за полночь: «пт 20:00-08:00» в субботу в 03:00.
+  const yesterday = scheduleIntervals(schedule[dayKeys[(now.getDay() + 6) % 7]]) || [];
+  if (yesterday.some((interval) => interval.end > 24 * 60 && currentMinutes + 24 * 60 < interval.end)) {
+    return OPEN_STATE.OPEN;
+  }
+
+  return OPEN_STATE.CLOSED;
+};
+
+const isWeekendReception = (schedule) => {
+  if (!schedule) {
+    return false;
+  }
+
+  return Boolean(schedule.sat && !/выход/i.test(schedule.sat)) || Boolean(schedule.sun && !/выход/i.test(schedule.sun));
+};
+
+const hasEveningReception = (schedule) => {
+  if (!schedule) {
+    return false;
+  }
+
+  return dayKeys.some((dayKey) => {
+    const range = scheduleTextToRange(schedule[dayKey]);
+    return range && range.end >= 20 * 60;
+  });
+};
+
+const getTodaySchedule = (schedule, now) => {
+  if (!schedule) {
+    return 'График уточняется';
+  }
+
+  const today = schedule[dayKeys[now.getDay()]];
+  const intervals = scheduleIntervals(today);
+  if (intervals?.length === 1 && intervals[0].start === 0 && intervals[0].end === 24 * 60) return 'Круглосуточно';
+  // «09:00-12:30,13:00-17:30» — с пробелом, чтобы перерыв читался.
+  return today ? today.replace(/,(?=\d)/g, ', ') : 'График уточняется';
+};
+
+const WEEK_DAY_LABELS = {
+  mon: 'Понедельник',
+  tue: 'Вторник',
+  wed: 'Среда',
+  thu: 'Четверг',
+  fri: 'Пятница',
+  sat: 'Суббота',
+  sun: 'Воскресенье',
+};
+const WEEK_ORDER = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+
+const buildWeekSchedule = (schedule, now) => {
+  if (!hasAnyScheduleData(schedule)) {
+    return null;
+  }
+
+  const todayKey = dayKeys[now.getDay()];
+  return WEEK_ORDER.map((dayKey) => ({
+    key: dayKey,
+    label: WEEK_DAY_LABELS[dayKey],
+    value: schedule[dayKey] || 'Не указано',
+    isToday: dayKey === todayKey,
+    isDayOff: /выход/i.test(String(schedule[dayKey] || '')),
+  }));
+};
+
+// --- Контакты -------------------------------------------------------------
+
+// tel: не переносит пробелы и скобки — в ссылку идёт только «+» и цифры,
+// а на экране остаётся человекочитаемый вид из данных.
+const toTelHref = (phone) => {
+  // «+» допустим только в начале номера: из «…//+7 843…» раньше получалось «tel:5+7843…».
+  // Несколько номеров через «;» — звоним по первому (раньше цифры склеивались в один «номер»).
+  const raw = String(phone || '').split(/[;,]/)[0].trim();
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length < 6 || digits.length > 15) return null;
+  return `tel:${raw.startsWith('+') ? '+' : ''}${digits}`;
+};
+
+// Ссылка из данных считается недоверенной: разрешаем только http(s),
+// чтобы исключить javascript: и data: в href.
+/** Enter и пробел на элементе с role="button" — как клик, для клавиатуры. */
+const activateOnKey = (action) => (event) => {
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    action();
+  }
+};
+
+const toSafeUrl = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+
+  try {
+    const url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : null;
+  } catch {
+    return null;
+  }
+};
+
+const formatPriceRange = (entry) => {
+  if (!entry) return null;
+  const min = Number(entry.minRub);
+  const max = Number(entry.maxRub);
+  if (!Number.isFinite(min) && !Number.isFinite(max)) return null;
+
+  const format = (value) => new Intl.NumberFormat('ru-RU').format(Math.round(value));
+  // «от 1 000 ₽» — нижняя граница из прайса, показывать её как точную цену нельзя.
+  const prefix = entry.from ? 'от ' : '';
+  if (Number.isFinite(min) && Number.isFinite(max) && min !== max) {
+    return `${prefix}${format(min)}–${format(max)} ₽`;
+  }
+  return `${prefix}${format(Number.isFinite(min) ? min : max)} ₽`;
+};
+
+// --- Внешние карты, запись и время в пути ---------------------------------
+
+/*
+ * Средние городские скорости для оценки «по прямой», пока сервер считает
+ * настоящее время в пути (или если он недоступен). Те же значения, что
+ * у серверного запасного провайдера; поправка на извилистость улиц — 1,3.
+ */
+const FALLBACK_SPEED_KMH = { driving: 28, bike: 14, foot: 4.5 };
+const DETOUR_FACTOR = 1.3;
+const TRAVEL_MODE_LABEL = { driving: 'на машине', foot: 'пешком', bike: 'на велосипеде' };
+const MAX_TRAVEL_POINTS = 600;
+
+const pointKey = (lat, lng) => `${Number(lat).toFixed(5)},${Number(lng).toFixed(5)}`;
+
+/** Тот же формат идентификатора места, что принимает сервер аналитики. */
+const PLACE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:_.-]{0,79}$/;
+
+const formatVerifiedAt = (value) => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}/.test(value)) return null;
+  const [year, month, day] = value.slice(0, 10).split('-');
+  return `${day}.${month}.${year}`;
+};
+
+const daysSince = (value, now) => {
+  const date = typeof value === 'string' ? new Date(`${value.slice(0, 10)}T00:00:00+03:00`) : null;
+  if (!date || Number.isNaN(date.getTime())) return null;
+  return Math.max(0, Math.floor((now.getTime() - date.getTime()) / 86_400_000));
+};
+
+/** Через сколько дней без проверки запись считается устаревшей. */
+const STALE_AFTER_DAYS = 60;
+
+// --- Состояние в адресной строке -----------------------------------------
+
+/*
+ * Фильтры живут в URL, чтобы ссылку можно было переслать или сохранить.
+ * Параметры из адресной строки — недоверенный ввод: значения из перечислений
+ * сверяются со списком, числа зажимаются в диапазон, строки обрезаются.
+ * Дальше их всё равно фильтрует справочник, но проверять надо на входе.
+ */
+const URL_KEYS = {
+  q: 'q',
+  clinic: 'clinic',
+  district: 'district',
+  facilityType: 'type',
+  doctorProfile: 'profile',
+  ownership: 'owner',
+  cardDisplayMode: 'show',
+  sortBy: 'sort',
+  services: 'services',
+  minRating: 'rating',
+  minExperience: 'exp',
+  maxDistance: 'dist',
+  maxTravel: 'travel',
+  flags: 'flags',
+  focus: 'doc',
+};
+
+const FLAG_KEYS = ['open', 'fav', 'weekend', 'evening', 'online', 'wheelchair', 'children', 'dms'];
+
+const DMS_PLAN_STORAGE_KEY = 'medkarta.dms.plan';
+
+// Частные клиники, собранные сборщиком (npm run data:build), и результаты
+// проверки госврачей на сайтах учреждений (npm run data:verify).
+const COLLECTED_FACILITIES = flattenPrivateCatalog(collectedCatalog);
+const VERIFICATION = verificationData?.results && typeof verificationData.results === 'object' ? verificationData.results : {};
+const EMPTY_LIST = Object.freeze([]);
+const EMPTY_DEMO = Object.freeze({ enabled: false, items: EMPTY_LIST, insurance: null });
+
+/** Варианты фильтра «не дольше N минут в пути». */
+const TRAVEL_LIMIT_OPTIONS = [10, 15, 20, 30, 45, 60];
+
+const readUrlState = () => {
+  if (typeof window === 'undefined') {
+    return {};
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  const text = (key, maxLength = 80) => {
+    const value = params.get(URL_KEYS[key]);
+    return value ? value.slice(0, maxLength) : null;
+  };
+  const number = (key, min, max) => {
+    const value = Number(params.get(URL_KEYS[key]));
+    return Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : null;
+  };
+  const oneOf = (key, allowed) => {
+    const value = params.get(URL_KEYS[key]);
+    return value && allowed.includes(value) ? value : null;
+  };
+
+  const flags = new Set((params.get(URL_KEYS.flags) || '').split(',').filter((f) => FLAG_KEYS.includes(f)));
+
+  return {
+    q: text('q', 100),
+    clinic: text('clinic'),
+    district: text('district'),
+    facilityType: text('facilityType'),
+    doctorProfile: text('doctorProfile'),
+    ownership: oneOf('ownership', ['Государственная', 'Частная']),
+    cardDisplayMode: oneOf('cardDisplayMode', ['all', 'doctor', 'facility']),
+    sortBy: oneOf('sortBy', SORT_MODES),
+    services: (params.get(URL_KEYS.services) || '')
+      .split('|')
+      .map((s) => s.trim().slice(0, 80))
+      .filter(Boolean)
+      .slice(0, 6),
+    minRating: number('minRating', 0, 5),
+    minExperience: number('minExperience', 0, 40),
+    maxDistance: number('maxDistance', 0, 50),
+    maxTravel: TRAVEL_LIMIT_OPTIONS.includes(Number(params.get(URL_KEYS.maxTravel))) ? Number(params.get(URL_KEYS.maxTravel)) : 0,
+    focus: text('focus', 120),
+    flags,
+  };
+};
+
+const buildUrlQuery = (state) => {
+  const params = new URLSearchParams();
+  const put = (key, value, skip) => {
+    if (value !== null && value !== undefined && value !== '' && value !== skip) {
+      params.set(URL_KEYS[key], String(value));
+    }
+  };
+
+  put('q', state.q);
+  put('clinic', state.clinic, 'all');
+  put('district', state.district, 'all');
+  put('facilityType', state.facilityType, 'all');
+  put('doctorProfile', state.doctorProfile, 'all');
+  put('ownership', state.ownership, 'all');
+  put('cardDisplayMode', state.cardDisplayMode, 'all');
+  put('sortBy', state.sortBy, 'recommendation');
+  put('minRating', state.minRating || null, 0);
+  put('minExperience', state.minExperience || null, 0);
+  put('maxDistance', state.maxDistance || null, 0);
+  put('maxTravel', state.maxTravel || null, 0);
+  put('focus', state.focus);
+
+  if (state.services?.length) {
+    params.set(URL_KEYS.services, state.services.join('|'));
+  }
+  if (state.flags?.length) {
+    params.set(URL_KEYS.flags, state.flags.join(','));
+  }
+
+  return params.toString();
+};
+
+const INITIAL_URL_STATE = readUrlState();
+
+const calculateDistanceKm = (origin, target) => {
+  if (!origin || !target) {
+    return null;
+  }
+
+  const [lat1, lon1] = origin;
+  const [lat2, lon2] = target;
+  const earthRadius = 6371;
+  const toRadians = (value) => (value * Math.PI) / 180;
+
+  const latDelta = toRadians(lat2 - lat1);
+  const lonDelta = toRadians(lon2 - lon1);
+  const a =
+    Math.sin(latDelta / 2) * Math.sin(latDelta / 2) +
+    Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(lonDelta / 2) * Math.sin(lonDelta / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return earthRadius * c;
+};
+
+const formatDistance = (meters) => {
+  if (meters == null) {
+    return '—';
+  }
+
+  if (meters < 1000) {
+    return `${Math.round(meters)} м`;
+  }
+
+  return `${(meters / 1000).toFixed(1)} км`;
+};
+
+const formatTime = (seconds) => {
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes} мин`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return `${hours} ч ${mins} мин`;
+};
+
+export default function App() {
+  const [userLocation, setUserLocation] = useState(defaultLocation);
+  const [routeTargets, setRouteTargets] = useState([]);
+  const [searchQuery, setSearchQuery] = useState(INITIAL_URL_STATE.q || '');
+  const [locationError, setLocationError] = useState(!hasGeolocationSupport);
+  const [isFollowingUser, setIsFollowingUser] = useState(true);
+  const [flyToTarget, setFlyToTarget] = useState(null);
+  const [customOrigin, setCustomOrigin] = useState(null);
+  const [isManualOrigin, setIsManualOrigin] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(420);
+  const [isDraggingPanel, setIsDraggingPanel] = useState(false);
+  const [travelMode, setTravelMode] = useState('driving');
+  const [routeData, setRouteData] = useState(null);
+  const [isRouteStarted, setIsRouteStarted] = useState(false);
+  // «Маршрут начат» имеет смысл, только пока в нём есть точки.
+  const routeStarted = isRouteStarted && routeTargets.length > 0;
+  const [sortBy, setSortBy] = useState(INITIAL_URL_STATE.sortBy || 'recommendation');
+  const [selectedFacilityType, setSelectedFacilityType] = useState(INITIAL_URL_STATE.facilityType || 'all');
+  const [selectedClinic, setSelectedClinic] = useState(INITIAL_URL_STATE.clinic || 'all');
+  const [selectedDistrict, setSelectedDistrict] = useState(INITIAL_URL_STATE.district || 'all');
+  const [selectedDoctorProfile, setSelectedDoctorProfile] = useState(INITIAL_URL_STATE.doctorProfile || 'all');
+  const [selectedOwnership, setSelectedOwnership] = useState(INITIAL_URL_STATE.ownership || 'all');
+  const [cardDisplayMode, setCardDisplayMode] = useState(INITIAL_URL_STATE.cardDisplayMode || 'all');
+  const [selectedServices, setSelectedServices] = useState(INITIAL_URL_STATE.services || []);
+  const [favoritesOnly, setFavoritesOnly] = useState(() => Boolean(INITIAL_URL_STATE.flags?.has('fav')));
+  const [openOnly, setOpenOnly] = useState(() => Boolean(INITIAL_URL_STATE.flags?.has('open')));
+  const [weekendOnly, setWeekendOnly] = useState(() => Boolean(INITIAL_URL_STATE.flags?.has('weekend')));
+  const [eveningOnly, setEveningOnly] = useState(() => Boolean(INITIAL_URL_STATE.flags?.has('evening')));
+  const [onlineOnly, setOnlineOnly] = useState(() => Boolean(INITIAL_URL_STATE.flags?.has('online')));
+  const [wheelchairOnly, setWheelchairOnly] = useState(() => Boolean(INITIAL_URL_STATE.flags?.has('wheelchair')));
+  const [childrenOnly, setChildrenOnly] = useState(() => Boolean(INITIAL_URL_STATE.flags?.has('children')));
+  const [minRating, setMinRating] = useState(INITIAL_URL_STATE.minRating ?? 0);
+  const [minExperience, setMinExperience] = useState(INITIAL_URL_STATE.minExperience ?? 0);
+  const [maxDistance, setMaxDistance] = useState(INITIAL_URL_STATE.maxDistance ?? 0);
+  const [maxTravelMinutes, setMaxTravelMinutes] = useState(INITIAL_URL_STATE.maxTravel ?? 0);
+  // Демо-набор (вымышленные частные клиники и ДМС) и выбранная программа ДМС.
+  // В браузере хранится только id программы — см. DmsPanel.
+  const [demoState, setDemoState] = useState(EMPTY_DEMO);
+  const [dmsPlanId, setDmsPlanId] = useLocalStorageState(DMS_PLAN_STORAGE_KEY, null, isPlanIdOrNull);
+  const [dmsOnly, setDmsOnly] = useState(() => Boolean(INITIAL_URL_STATE.flags?.has('dms')));
+  const [isDmsPanelOpen, setIsDmsPanelOpen] = useState(false);
+  const [dmsPromptPending, setDmsPromptPending] = useState(false);
+  // Время в пути от точки отправления до каждого адреса — для фильтра
+  // «не дольше N минут». Считает сервер по графу дорог.
+  const [travelTimes, setTravelTimes] = useState({ key: null, status: 'idle', byPoint: null });
+  // Откуда пришёл последний поиск: от ассистента, из ссылки или из фильтров.
+  const searchSourceRef = useRef({ source: INITIAL_URL_STATE.q || INITIAL_URL_STATE.doctorProfile ? 'url' : 'filters', at: Date.now() });
+  // Избранное и тема читаются из localStorage через валидатор: испорченное или
+  // подменённое значение раньше роняло приложение на favorites.includes(...).
+  const [favorites, setFavorites] = useLocalStorageState(FAVORITES_STORAGE_KEY, [], isStringIdArray);
+  // Сохранённый список мог разрастись повторами (или быть подменён):
+  // он пересохраняется при каждом нажатии на сердечко.
+  useEffect(() => {
+    setFavorites((current) => {
+      const unique = [...new Set(current)].slice(0, 500);
+      return unique.length === current.length ? current : unique;
+    });
+  }, [setFavorites]);
+  const [now, setNow] = useState(() => kazanWallClock());
+  const [isLocationReady, setIsLocationReady] = useState(!hasGeolocationSupport);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
+  const [mobileSheetDragOffset, setMobileSheetDragOffset] = useState(0);
+  const [isDarkMode, setIsDarkMode] = useLocalStorageState(DARK_MODE_STORAGE_KEY, PREFERS_DARK, isBoolean);
+  const { toast, showToast, dismiss: dismissToast } = useToast();
+
+  const [isAIAssistantOpen, setIsAIAssistantOpen] = useState(false);
+  // После первого открытия ассистент остаётся смонтированным и прячется, а не
+  // уничтожается: иначе каждое закрытие стирало переписку.
+  const [isAIAssistantMounted, setIsAIAssistantMounted] = useState(false);
+  const toggleAIAssistant = useCallback(() => {
+    setIsAIAssistantMounted(true);
+    setIsAIAssistantOpen((current) => !current);
+  }, []);
+  const [isRoutePanelCollapsed, setIsRoutePanelCollapsed] = useState(false);
+  const [buildRouteTrigger, setBuildRouteTrigger] = useState(false);
+  const [targetStopsTrigger, setTargetStopsTrigger] = useState(null); // Apply processing results to UI state
+
+  // Справочники в ref: handleApplyTriage не должен пересоздаваться на каждый
+  // пересчёт списков, иначе AIAssistant перерисовывается впустую.
+  const districtSetRef = useRef(new Set());
+  const clinicSetRef = useRef(new Set());
+  const facilityTypeSetRef = useRef(new Set());
+  const doctorProfileSetRef = useRef(new Set());
+  const serviceSetRef = useRef(new Set());
+
+  const handleApplyTriage = useCallback((result) => {
+    searchSourceRef.current = { source: 'assistant', at: Date.now() };
+    // === МАРШРУТ ===
+    // «Сбрось маршрут и фильтры» — это и то и другое. Раньше при обоих
+    // флагах маршрут оставался на месте.
+    if (result.clearRoute) {
+      setRouteTargets([]);
+      setRouteData(null);
+      setIsRouteStarted(false);
+    }
+
+    // === СБРОС ФИЛЬТРОВ (НЕ трогает маршрут!) ===
+    if (result.clearFilters) {
+      setSearchQuery('');
+      setIsSearchFocused(false);
+      setSelectedFacilityType('all');
+      setSelectedClinic('all');
+      setSelectedDistrict('all');
+      setSelectedDoctorProfile('all');
+      setSelectedOwnership('all');
+      setCardDisplayMode('all');
+      setSelectedServices([]);
+      setFavoritesOnly(false);
+      setOpenOnly(false);
+      setWeekendOnly(false);
+      setEveningOnly(false);
+      setOnlineOnly(false);
+      setWheelchairOnly(false);
+      setChildrenOnly(false);
+      setMinRating(0);
+      setMinExperience(0);
+      setMaxDistance(0);
+      setMaxTravelMinutes(0);
+      setDmsOnly(false);
+      setSortBy('recommendation');
+    }
+
+    // === ТЁМНАЯ ТЕМА ===
+    if (result.darkMode === true) setIsDarkMode(true);
+    if (result.darkMode === false) setIsDarkMode(false);
+
+    // === РЕЖИМ ПЕРЕДВИЖЕНИЯ ===
+    if (result.travelMode && ['driving', 'foot', 'bike'].includes(result.travelMode)) {
+      setTravelMode(result.travelMode);
+    }
+
+    // === ФИЛЬТРЫ ===
+    if (result.ownership && ['Государственная', 'Частная'].includes(result.ownership)) {
+      setSelectedOwnership(result.ownership);
+    }
+    // Значения справочников принимаются только если реально есть в данных:
+    // модель может выдумать несуществующий район и «обнулить» выдачу.
+    if (result.district && districtSetRef.current.has(result.district)) {
+      setSelectedDistrict(result.district);
+    }
+    if (result.cardDisplayMode && ['all', 'doctor', 'facility'].includes(result.cardDisplayMode)) {
+      setCardDisplayMode(result.cardDisplayMode);
+    }
+    if (result.openOnly === true) setOpenOnly(true);
+    if (result.openOnly === false) setOpenOnly(false);
+    if (result.favoritesOnly === true) setFavoritesOnly(true);
+    if (result.favoritesOnly === false) setFavoritesOnly(false);
+    if (result.weekendOnly === true) setWeekendOnly(true);
+    if (result.weekendOnly === false) setWeekendOnly(false);
+    if (result.eveningOnly === true) setEveningOnly(true);
+    if (result.eveningOnly === false) setEveningOnly(false);
+    if (result.onlineOnly === true) setOnlineOnly(true);
+    if (result.onlineOnly === false) setOnlineOnly(false);
+    if (result.wheelchairOnly === true) setWheelchairOnly(true);
+    if (result.wheelchairOnly === false) setWheelchairOnly(false);
+    if (result.isChild) setChildrenOnly(true);
+
+    if (typeof result.minRating === 'number' && !Number.isNaN(result.minRating)) {
+      setMinRating(Math.max(0, Math.min(5, result.minRating)));
+    }
+    if (typeof result.minExperience === 'number' && !Number.isNaN(result.minExperience)) {
+      setMinExperience(Math.max(0, Math.min(40, result.minExperience)));
+    }
+    if (typeof result.maxDistance === 'number' && !Number.isNaN(result.maxDistance)) {
+      setMaxDistance(Math.max(0, Math.min(50, result.maxDistance)));
+    }
+    if (result.dmsOnly) {
+      // Есть ли справочник и выбрана ли программа, проверит эффект ниже:
+      // здесь их значения могли устареть.
+      setDmsOnly(true);
+      setDmsPromptPending(true);
+    }
+    if (Number.isInteger(result.maxTravelMinutes)) {
+      // Ближайший вариант из списка не меньше запрошенного: «25 минут» → 30.
+      const option = TRAVEL_LIMIT_OPTIONS.find((value) => value >= result.maxTravelMinutes) || TRAVEL_LIMIT_OPTIONS[TRAVEL_LIMIT_OPTIONS.length - 1];
+      setMaxTravelMinutes(option);
+    }
+
+    if (result.clinic && clinicSetRef.current.has(result.clinic)) {
+      setSelectedClinic(result.clinic);
+    }
+    if (result.facilityType && facilityTypeSetRef.current.has(result.facilityType)) {
+      setSelectedFacilityType(result.facilityType);
+    }
+    if (result.doctorProfile && doctorProfileSetRef.current.has(result.doctorProfile)) {
+      setSelectedDoctorProfile(result.doctorProfile);
+    }
+    if (Array.isArray(result.services) && result.services.length > 0) {
+      const knownServices = result.services.filter((service) => serviceSetRef.current.has(service));
+      if (knownServices.length > 0) {
+        setSelectedServices(knownServices);
+      }
+    }
+
+    // === СОРТИРОВКА ===
+    if (SORT_MODES.includes(result.sortMode)) {
+      setSortBy(result.sortMode);
+    }
+
+    // Если только clearRoute/clearFilters без дополнительных действий — выходим
+    if ((result.clearRoute || result.clearFilters) && !result.specialty && !result.service && !result.searchQuery && !result.buildRoute && !result.targetStops?.length) {
+      return;
+    }
+
+    // Complex routing
+    if (result.targetStops && result.targetStops.length > 0) {
+      setTimeout(() => setTargetStopsTrigger(result.targetStops), 100);
+      return;
+    }
+
+    // === ПОИСК ===
+    // searchQuery — универсальный поиск (по клинике, адресу, врачу и т.д.)
+    const isGenericRouteQuery = (value) => {
+      if (!value || typeof value !== 'string') {
+        return false;
+      }
+
+      const text = value.trim().toLowerCase();
+      if (!text) {
+        return false;
+      }
+
+      return /маршрут|путь|дорог|ближайш\s+маршрут|построй\s+маршрут/.test(text);
+    };
+
+    if (result.searchQuery && !isGenericRouteQuery(result.searchQuery)) {
+      setSearchQuery(result.searchQuery);
+    } else if (result.specialty) {
+      setSearchQuery(result.specialty);
+    } else if (result.service) {
+      setSearchQuery(result.service);
+    }
+
+    // === ПОСТРОИТЬ МАРШРУТ ===
+    if (result.buildRoute && !result.clearRoute && !result.clearFilters) {
+      const candidates = enrichedDoctorsRef.current.filter((doc) => {
+        const specialtyMatch = result.specialty
+          ? (doc.specialty && doc.specialty.toLowerCase().includes(result.specialty.toLowerCase()))
+          : true;
+        const queryMatch = result.searchQuery && !result.specialty
+          ? [doc.name, doc.specialty, doc.clinic, doc.address].join(' ').toLowerCase().includes(result.searchQuery.toLowerCase())
+          : true;
+
+        return specialtyMatch && queryMatch;
+      });
+
+      const sortedCandidates = [...candidates].sort((left, right) => (left.distanceKm || Infinity) - (right.distanceKm || Infinity));
+      setRouteTargets((prev) => {
+        const bestMatch = sortedCandidates.find((doc) => !prev.some((target) => target.id === doc.id));
+
+        if (!bestMatch || prev.length >= MAX_ROUTE_STOPS) {
+          return prev;
+        }
+
+        setRouteData(null);
+        setFlyToTarget([bestMatch.lat, bestMatch.lng]);
+        return [...prev, bestMatch];
+      });
+    }
+    // Сеттеры useState стабильны; перечислены явно, чтобы правило
+    // exhaustive-deps не считало их пропущенными зависимостями.
+  }, [setIsDarkMode]);
+
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768);
+  const [isTablet, setIsTablet] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 768 && window.innerWidth <= 1024);
+
+  const sidebarRef = useRef(null);
+  const mobileSheetTouchStartYRef = useRef(null);
+  const pendingSidebarWidthRef = useRef(sidebarWidth);
+  const resizeFrameRef = useRef(null);
+  const enrichedDoctorsRef = useRef([]);
+  const clinicsFacilities = useMemo(() => mapClinicsToFacilities(ClinicsData), []);
+  const sourceFacilities = useMemo(() => {
+    // Источники: проверенные врачи с официальных сайтов больниц,
+    // учреждения из OpenStreetMap и данные по клиникам.
+    const base = [...verifiedDoctors, ...doctorsData, ...kazanFacilities.map(withOsmSchedule), ...clinicsFacilities, ...COLLECTED_FACILITIES, ...demoState.items];
+    const clinicAddressMap = new Map();
+    const clinicCoordsMap = new Map();
+
+    base.forEach((item) => {
+      const clinicName = (item.clinic || '').trim();
+      const clinicKey = normalizeClinicKey(clinicName);
+      const address = (item.address || '').trim();
+      const hasCoords = typeof item.lat === 'number' && typeof item.lng === 'number';
+      const isDoctor = Boolean(resolveDoctorProfile(item));
+
+      if (clinicKey && address && !/уточняется/i.test(address) && !clinicAddressMap.has(clinicKey)) {
+        clinicAddressMap.set(clinicKey, address);
+      }
+
+      if (clinicKey && hasCoords && !isDoctor && !clinicCoordsMap.has(clinicKey)) {
+        clinicCoordsMap.set(clinicKey, { lat: item.lat, lng: item.lng });
+      }
+    });
+
+    base.forEach((item) => {
+      const clinicKey = normalizeClinicKey(item.clinic || '');
+      const hasCoords = typeof item.lat === 'number' && typeof item.lng === 'number';
+      if (clinicKey && hasCoords && !clinicCoordsMap.has(clinicKey)) {
+        clinicCoordsMap.set(clinicKey, { lat: item.lat, lng: item.lng });
+      }
+    });
+
+    return base
+      .map((item) => {
+        const clinicName = (item.clinic || '').trim();
+        const clinicKey = normalizeClinicKey(clinicName);
+        const fallbackAddress = clinicKey ? clinicAddressMap.get(clinicKey) : null;
+        const fallbackCoords = clinicKey ? clinicCoordsMap.get(clinicKey) : null;
+        const currentAddress = (item.address || '').trim();
+        const normalizedAddress = currentAddress && !/уточняется/i.test(currentAddress)
+          ? currentAddress
+          : fallbackAddress || '';
+        const isDoctor = Boolean(resolveDoctorProfile(item));
+        const normalizedLat = isDoctor && fallbackCoords ? fallbackCoords.lat : item.lat;
+        const normalizedLng = isDoctor && fallbackCoords ? fallbackCoords.lng : item.lng;
+
+        return {
+          ...item,
+          address: normalizedAddress,
+          lat: normalizedLat,
+          lng: normalizedLng,
+        };
+      })
+      .filter((item) => {
+        const address = (item.address || '').trim();
+        const hasCoords = typeof item.lat === 'number' && typeof item.lng === 'number';
+        return Boolean(address) && !/уточняется/i.test(address) && hasCoords;
+      });
+  }, [clinicsFacilities, demoState.items]);
+
+  const activeOrigin = isManualOrigin && customOrigin ? customOrigin : userLocation;
+  // Поле ввода обновляется мгновенно, тяжёлая фильтрация — с задержкой.
+  const deferredSearchQuery = useDebouncedValue(searchQuery, 180);
+
+  useEffect(() => {
+    const timerId = setInterval(() => setNow(kazanWallClock()), 300000);
+    return () => clearInterval(timerId);
+  }, []);
+
+  useEffect(() => {
+    pendingSidebarWidthRef.current = sidebarWidth;
+    if (sidebarRef.current) {
+      // На планшете ширина фиксирована (340): раньше сюда попадала ширина
+      // с десктопа, CSS обрезал её до 360, и после сворачивания на −340
+      // оставалась полоса в 20 пикселей.
+      sidebarRef.current.style.width = `${isTablet ? 340 : sidebarWidth}px`;
+    }
+  }, [sidebarWidth, isTablet]);
+
+  useEffect(() => {
+    if (!isDraggingPanel) {
+      document.body.style.cursor = 'default';
+      document.body.style.userSelect = '';
+      return undefined;
+    }
+
+    const applyWidth = () => {
+      resizeFrameRef.current = null;
+      if (sidebarRef.current) {
+        sidebarRef.current.style.width = `${pendingSidebarWidthRef.current}px`;
+      }
+    };
+
+    const handleMouseMove = (event) => {
+      pendingSidebarWidthRef.current = Math.max(360, Math.min(event.clientX, window.innerWidth / 2.1));
+      if (!resizeFrameRef.current) {
+        resizeFrameRef.current = requestAnimationFrame(applyWidth);
+      }
+    };
+
+    const handleMouseUp = () => {
+      if (resizeFrameRef.current) {
+        cancelAnimationFrame(resizeFrameRef.current);
+        resizeFrameRef.current = null;
+      }
+      setSidebarWidth(pendingSidebarWidthRef.current);
+      setIsDraggingPanel(false);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = 'default';
+      document.body.style.userSelect = '';
+      if (resizeFrameRef.current) {
+        cancelAnimationFrame(resizeFrameRef.current);
+        resizeFrameRef.current = null;
+      }
+    };
+  }, [isDraggingPanel]);
+
+  useEffect(() => {
+    if (!hasGeolocationSupport) {
+      return undefined;
+    }
+
+    let watchId;
+    // Была ли хоть одна успешная позиция. После неё единичный таймаут или
+    // «позиция недоступна» (в помещении — обычное дело) не должны
+    // переносить пользователя в центр Казани и пересчитывать все расстояния.
+    let hadFix = false;
+    const fallbackTimer = window.setTimeout(() => {
+      // Use fallback location on timeout
+      setUserLocation(defaultLocation);
+      setLocationError(true);
+      setIsLocationReady(true);
+    }, 8000);
+
+    watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        window.clearTimeout(fallbackTimer);
+        hadFix = true;
+        setLocationError(false);
+        const next = [position.coords.latitude, position.coords.longitude];
+        setUserLocation((prev) => {
+          // watchPosition срабатывает несколько раз в секунду, а каждая новая
+          // ссылка пересчитывала расстояния до всех ~1000 объектов.
+          // Игнорируем дрожание меньше ~5 метров.
+          if (prev && Math.abs(prev[0] - next[0]) < 0.00005 && Math.abs(prev[1] - next[1]) < 0.00005) {
+            return prev;
+          }
+          return next;
+        });
+        setIsLocationReady(true);
+      },
+      (error) => {
+        window.clearTimeout(fallbackTimer);
+        if (hadFix && error?.code !== error?.PERMISSION_DENIED) {
+          return;
+        }
+        setUserLocation(defaultLocation);
+        setLocationError(true);
+        setIsLocationReady(true);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 2000 },
+    );
+
+    return () => {
+      window.clearTimeout(fallbackTimer);
+      if (watchId) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    let resizeTimer;
+    const handleResize = () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        const w = window.innerWidth;
+        setIsMobile(w < 768);
+        setIsTablet(w >= 768 && w <= 1024);
+        if (w < 768) {
+          setSidebarWidth(420);
+        } else if (w <= 1024) {
+          setSidebarWidth(340);
+        } else {
+          setIsMobileFiltersOpen(false);
+        }
+      }, 150);
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      clearTimeout(resizeTimer);
+    };
+  }, []);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.add('theme-switching');
+    if (isDarkMode) {
+      root.classList.add('dark');
+    } else {
+      root.classList.remove('dark');
+    }
+
+    const rafId = requestAnimationFrame(() => {
+      root.classList.remove('theme-switching');
+    });
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      root.classList.remove('theme-switching');
+    };
+  }, [isDarkMode]);
+
+  // Тяжёлая часть: расстояния, расписание, бейджи. Пересчитывается только при
+  // смене точки отсчёта, времени или набора данных.
+  const baseEnrichedDoctors = useMemo(
+    () =>
+      sourceFacilities.map((doc) => {
+        const distanceKm = activeOrigin ? calculateDistanceKm(activeOrigin, [doc.lat, doc.lng]) : null;
+        const openState = resolveOpenState(doc.schedule, now);
+        const openNow = openState === OPEN_STATE.OPEN;
+        const weekendReception = isWeekendReception(doc.schedule);
+        const eveningReception = hasEveningReception(doc.schedule);
+        const todayHours = getTodaySchedule(doc.schedule, now);
+        const weekSchedule = buildWeekSchedule(doc.schedule, now);
+        const facilityType = resolveFacilityType(doc);
+        const doctorProfile = resolveDoctorProfile(doc);
+        const entityKind = doctorProfile ? 'doctor' : 'facility';
+        const telHref = toTelHref(doc.phone);
+        const websiteUrl = toSafeUrl(doc.website);
+        const servicePrices = Array.isArray(doc.servicePrices)
+          ? doc.servicePrices
+              .map((entry) => ({ service: entry?.service, label: formatPriceRange(entry) }))
+              .filter((entry) => entry.service && entry.label)
+          : EMPTY_SERVICES;
+        // Часть источников (OSM, ClinicsData) может прийти без features/services —
+        // раньше это роняло рендер на doc.features.children.
+        // «Детский ЛОР», «Педиатр», «Детская поликлиника» — детский приём,
+        // даже если в источнике флаг не проставлен (а он не проставлен ни у кого).
+        const features = { ...(doc.features || {}), children: isPediatricRecord(doc) };
+        const services = Array.isArray(doc.services) ? doc.services : EMPTY_SERVICES;
+
+        /*
+         * Проверка на сайте учреждения (npm run data:verify): «на месте» —
+         * свежая дата проверки; «не найден» — предупреждение в карточке.
+         */
+        const check = VERIFICATION[doc.id];
+        const verifiedAt = check?.status === 'present' && typeof check.verifiedAt === 'string'
+          && (!doc.verifiedAt || check.verifiedAt > doc.verifiedAt)
+          ? check.verifiedAt
+          : doc.verifiedAt;
+        const missingSince = check?.status === 'missing' && typeof check.checkedAt === 'string' ? check.checkedAt : null;
+
+        // Бейджи раньше дублировали друг друга: врач со стажем 20+ получал
+        // сразу «Опытный врач» и «Высший стаж», а с рейтингом 4.9 — ещё
+        // «Топ-врач» и «Популярный». Оставляем по одному, самому сильному.
+        const trustBadges = [];
+        if (entityKind === 'doctor') {
+          if (doc.experience >= 20) trustBadges.push('Высший стаж');
+          else if (doc.experience >= 15) trustBadges.push('Опытный врач');
+
+          if (doc.rating >= 4.8) trustBadges.push('Топ-врач');
+          else if (doc.rating >= 4.5) trustBadges.push('Популярный');
+
+          if (features.children) trustBadges.push('Детский врач');
+        } else {
+          if (doc.ownership === 'Государственная') trustBadges.push('Государственное');
+          trustBadges.push(facilityType || 'Медучреждение');
+        }
+
+        return {
+          ...doc,
+          features,
+          services,
+          rating: Number(doc.rating) || 0,
+          experience: Number(doc.experience) || 0,
+          distanceKm,
+          openState,
+          openNow,
+          weekendReception,
+          eveningReception,
+          todayHours,
+          weekSchedule,
+          telHref,
+          websiteUrl,
+          servicePrices,
+          facilityType,
+          doctorProfile,
+          entityKind,
+          trustBadges,
+          verifiedAt,
+          missingSince,
+        };
+      }),
+    [activeOrigin, now, sourceFacilities],
+  );
+
+  // Set вместо массива: раньше на каждую из ~1000 записей выполнялся
+  // линейный favorites.includes(), то есть O(записи × избранное).
+  const favoriteIds = useMemo(() => new Set(favorites), [favorites]);
+
+  const enrichedDoctors = useMemo(
+    () => baseEnrichedDoctors.map((doc) => ({ ...doc, isFavorite: favoriteIds.has(doc.id) })),
+    [baseEnrichedDoctors, favoriteIds],
+  );
+
+  // --- Демо-режим и ДМС ---------------------------------------------------
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const preference = readDemoPreference();
+      const enabled = preference ?? (await fetchServerDemoFlag());
+      if (!enabled || cancelled) return;
+      try {
+        const data = await loadDemoData();
+        if (!cancelled) setDemoState({ enabled: true, ...data });
+      } catch {
+        // Демо-набор необязателен: без него работает обычный справочник.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const insurance = demoState.insurance;
+  const dmsPlan = insurance && dmsPlanId ? findPlan(insurance, dmsPlanId) : null;
+  const dmsProvider = dmsPlan ? findProvider(insurance, dmsPlan.providerId) : null;
+  // «Сегодня» по Казани — из того же часового сдвига, что и «открыто сейчас».
+  const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const dmsFilterActive = dmsOnly && Boolean(dmsPlan);
+
+  /*
+   * Покрытие считается в браузере: программа никуда не отправляется,
+   * а справочник ДМС — публичный (какие клиники входят в какую программу).
+   */
+  const dmsAnnotatedDoctors = useMemo(() => {
+    if (!insurance || !dmsPlan) return enrichedDoctors;
+    return enrichedDoctors.map((doc) => ({
+      ...doc,
+      dmsCoverage: coverageFor(insurance, dmsPlan.id, {
+        clinicId: doc.clinicId,
+        branchId: doc.branchId,
+        entityKind: doc.entityKind,
+        specialtyKey: specialtyCode(doc.doctorProfile || doc.specialty),
+        pediatric: Boolean(doc.features?.children),
+      }, { today: todayKey }),
+    }));
+  }, [enrichedDoctors, insurance, dmsPlan, todayKey]);
+
+  useEffect(() => {
+    if (!dmsPromptPending) return undefined;
+    // Отложено на кадр: состояние меняется не в теле эффекта.
+    const timerId = setTimeout(() => {
+      setDmsPromptPending(false);
+      if (!insurance) {
+        showToast('Справочника программ ДМС пока нет — показываю все варианты.', 'info', 5000);
+      } else if (!dmsPlan) {
+        setIsDmsPanelOpen(true);
+        setIsMobileFiltersOpen(true);
+        showToast('Выберите свою программу ДМС — отмечу, что в неё входит.', 'info', 5000);
+      }
+    }, 0);
+    return () => clearTimeout(timerId);
+  }, [dmsPromptPending, insurance, dmsPlan, showToast]);
+
+  const disableDemo = useCallback(() => {
+    setDemoPreference(false);
+    setDemoState(EMPTY_DEMO);
+    setDmsOnly(false);
+    setIsDmsPanelOpen(false);
+  }, []);
+
+  useEffect(() => {
+    enrichedDoctorsRef.current = enrichedDoctors;
+  }, [enrichedDoctors]);
+
+  const clinics = useMemo(() => uniqueSorted(sourceFacilities.map((doc) => doc.clinic)), [sourceFacilities]);
+  const districts = useMemo(() => uniqueSorted(sourceFacilities.map((doc) => doc.district)), [sourceFacilities]);
+  const doctorProfiles = useMemo(
+    () => uniqueSorted(sourceFacilities.map((doc) => resolveDoctorProfile(doc))),
+    [sourceFacilities],
+  );
+  const facilityTypes = useMemo(
+    () => uniqueSorted(sourceFacilities.map((doc) => resolveFacilityType(doc))),
+    [sourceFacilities],
+  );
+  const allServices = useMemo(
+    () => uniqueSorted(sourceFacilities.flatMap((doc) => doc.services || [])),
+    [sourceFacilities],
+  );
+
+  useEffect(() => {
+    districtSetRef.current = new Set(districts);
+    clinicSetRef.current = new Set(clinics);
+    facilityTypeSetRef.current = new Set(facilityTypes);
+    doctorProfileSetRef.current = new Set(doctorProfiles);
+    serviceSetRef.current = new Set(allServices);
+  }, [districts, clinics, facilityTypes, doctorProfiles, allServices]);
+
+  // Индекс подсказок строится ОДИН раз на набор данных. Раньше эта Map на
+  // несколько тысяч ключей пересобиралась на каждое нажатие клавиши.
+  const suggestionIndex = useMemo(() => {
+    const unique = new Map();
+    const add = (value, type) => {
+      if (!value) return;
+      const key = normalizeText(value);
+      if (key && !unique.has(key)) {
+        unique.set(key, { value, type, key });
+      }
+    };
+
+    for (const doc of sourceFacilities) {
+      add(doc.name, 'Имя');
+      add(doc.clinic, 'Клиника');
+      add(doc.specialty, 'Специальность');
+      add(doc.district, 'Район');
+      for (const service of doc.services || EMPTY_SERVICES) {
+        add(service, 'Услуга');
+      }
+    }
+
+    return [...unique.values()];
+  }, [sourceFacilities]);
+
+  const searchSuggestions = useMemo(() => {
+    if (!isSearchFocused) {
+      return [];
+    }
+
+    const query = normalizeText(deferredSearchQuery).trim();
+    if (query.length < 2) {
+      return [];
+    }
+
+    const results = suggestionIndex.filter((item) => item.key.includes(query));
+
+    results.sort((left, right) => {
+      const leftStarts = left.key.startsWith(query);
+      const rightStarts = right.key.startsWith(query);
+      if (leftStarts !== rightStarts) {
+        return Number(rightStarts) - Number(leftStarts);
+      }
+      return left.key.length - right.key.length;
+    });
+
+    return results.slice(0, 8);
+  }, [deferredSearchQuery, suggestionIndex, isSearchFocused]);
+
+  const filteredDoctors = useMemo(() => {
+    const query = normalizeText(deferredSearchQuery).trim();
+    const routeTargetIds = new Set(routeTargets.map(t => t.id));
+    const selectedServiceList = selectedServices;
+    const knownDoctorProfileQuery = doctorProfiles.find((profile) => normalizeText(profile) === query);
+
+    return dmsAnnotatedDoctors.filter((doc) => {
+      // Keep route targets visible
+      if (routeTargetIds.has(doc.id)) return true;
+
+      const matchesQuery = (() => {
+        if (!query) {
+          return true;
+        }
+
+        if (knownDoctorProfileQuery) {
+          return doc.entityKind === 'doctor' && normalizeText(doc.doctorProfile) === query;
+        }
+
+        return [doc.name, doc.specialty, doc.clinic, doc.address, doc.district, doc.description, ...(doc.services || [])]
+          .join(' ')
+          .toLowerCase()
+          .includes(query);
+      })();
+
+      const matchesClinic = selectedClinic === 'all' || doc.clinic === selectedClinic;
+      const matchesFacilityType = selectedFacilityType === 'all' || doc.facilityType === selectedFacilityType;
+      const matchesDistrict = selectedDistrict === 'all' || doc.district === selectedDistrict;
+      const matchesDoctorProfile = selectedDoctorProfile === 'all' || doc.doctorProfile === selectedDoctorProfile;
+      const matchesCardDisplayMode = cardDisplayMode === 'all' || doc.entityKind === cardDisplayMode;
+      const matchesOwnership = selectedOwnership === 'all' || doc.ownership === selectedOwnership;
+      const matchesRating = doc.rating >= minRating;
+      const matchesExperience = doc.experience >= minExperience;
+      // Скобки расставлены явно: без них тернарник читался как (a || b) ? true : c.
+      const matchesDistance = maxDistance === 0 || doc.distanceKm == null || doc.distanceKm <= maxDistance;
+      const matchesOpen = !openOnly || doc.openNow;
+      const matchesFavorites = !favoritesOnly || doc.isFavorite;
+      const matchesWeekend = !weekendOnly || doc.weekendReception;
+      const matchesEvening = !eveningOnly || doc.eveningReception;
+      const matchesOnline = !onlineOnly || doc.features.onlineBooking;
+      const matchesWheelchair = !wheelchairOnly || doc.features.wheelchair;
+      const matchesChildren = !childrenOnly || doc.features.children;
+      const matchesServices =
+        selectedServiceList.length === 0 || selectedServiceList.every((service) => doc.services.includes(service));
+      const matchesDms = !dmsFilterActive || doc.dmsCoverage?.status === 'covered';
+
+      return (
+        matchesDms &&
+        matchesQuery &&
+        matchesClinic &&
+        matchesFacilityType &&
+        matchesDistrict &&
+        matchesDoctorProfile &&
+        matchesCardDisplayMode &&
+        matchesOwnership &&
+        matchesRating &&
+        matchesExperience &&
+        matchesDistance &&
+        matchesOpen &&
+        matchesFavorites &&
+        matchesWeekend &&
+        matchesEvening &&
+        matchesOnline &&
+        matchesWheelchair &&
+        matchesChildren &&
+        matchesServices
+      );
+    });
+  }, [
+    dmsAnnotatedDoctors,
+    dmsFilterActive,
+    deferredSearchQuery,
+    doctorProfiles,
+    selectedFacilityType,
+    selectedClinic,
+    selectedDistrict,
+    selectedDoctorProfile,
+    cardDisplayMode,
+    selectedOwnership,
+    minRating,
+    minExperience,
+    maxDistance,
+    openOnly,
+    favoritesOnly,
+    weekendOnly,
+    eveningOnly,
+    onlineOnly,
+    wheelchairOnly,
+    childrenOnly,
+    selectedServices,
+    routeTargets,
+  ]);
+
+  /*
+   * Фильтр «не дольше N минут». Точка отправления должна быть настоящей:
+   * если геолокации нет и точку не выбрали вручную, «20 минут от центра
+   * Казани» ничего не значат, и фильтр не применяется (форма это объясняет).
+   */
+  const travelOriginKnown = isManualOrigin || !locationError;
+  const travelFilterActive = maxTravelMinutes > 0 && travelOriginKnown && Boolean(activeOrigin);
+  const travelKey = travelFilterActive
+    ? `${travelMode}|${maxTravelMinutes}|${activeOrigin[0].toFixed(3)},${activeOrigin[1].toFixed(3)}`
+    : null;
+
+  // Уникальные адреса справочника: на одном адресе бывают десятки врачей.
+  const travelPoints = useMemo(() => {
+    const unique = new Map();
+    for (const doc of sourceFacilities) {
+      const key = pointKey(doc.lat, doc.lng);
+      if (!unique.has(key)) unique.set(key, [Number(Number(doc.lat).toFixed(5)), Number(Number(doc.lng).toFixed(5))]);
+    }
+    return [...unique.entries()];
+  }, [sourceFacilities]);
+
+  useEffect(() => {
+    if (!travelKey) return undefined;
+    const controller = new AbortController();
+    const origin = activeOrigin;
+    const mode = travelMode;
+    const limit = maxTravelMinutes;
+
+    // «Считаем…» выводится из несовпадения ключа — отдельный setState не нужен.
+    const timerId = setTimeout(async () => {
+      // Больше 600 адресов сервер за раз не считает — берём ближайшие по прямой.
+      const points = travelPoints.length > MAX_TRAVEL_POINTS
+        ? [...travelPoints]
+          .sort((left, right) => calculateDistanceKm(origin, left[1]) - calculateDistanceKm(origin, right[1]))
+          .slice(0, MAX_TRAVEL_POINTS)
+        : travelPoints;
+      try {
+        const durations = await fetchTravelTimes({
+          origin,
+          mode,
+          maxMinutes: limit,
+          points: points.map(([, coords]) => coords),
+          signal: controller.signal,
+        });
+        const byPoint = new Map(points.map(([key], index) => [key, durations[index]]));
+        setTravelTimes({ key: travelKey, status: 'ready', byPoint });
+      } catch {
+        if (controller.signal.aborted) return;
+        setTravelTimes({ key: travelKey, status: 'error', byPoint: null });
+      }
+    }, 250);
+
+    return () => {
+      clearTimeout(timerId);
+      controller.abort();
+    };
+    // travelKey огрубляет точку до ~100 м: дрожание GPS не перезапрашивает время.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [travelKey, travelPoints]);
+
+  const travelEstimateState = !travelFilterActive
+    ? 'off'
+    : travelTimes.key === travelKey && travelTimes.status === 'ready'
+      ? 'exact'
+      : travelTimes.key === travelKey && travelTimes.status === 'error'
+        ? 'approximate'
+        : 'loading';
+
+  const travelFilteredDoctors = useMemo(() => {
+    if (!travelFilterActive) return filteredDoctors;
+    const limitSeconds = maxTravelMinutes * 60;
+    const routeTargetIds = new Set(routeTargets.map((target) => target.id));
+    const exact = travelEstimateState === 'exact';
+    const speedKmh = FALLBACK_SPEED_KMH[travelMode] || FALLBACK_SPEED_KMH.driving;
+
+    return filteredDoctors
+      .map((doc) => {
+        const seconds = exact
+          ? travelTimes.byPoint.get(pointKey(doc.lat, doc.lng)) ?? null
+          // Пока сервер считает (или если он недоступен) — грубая оценка по
+          // прямой с поправкой на извилистость улиц. Помечается как «≈».
+          : doc.distanceKm == null
+            ? null
+            : Math.round(((doc.distanceKm * DETOUR_FACTOR) / speedKmh) * 3600);
+        return { ...doc, travelSeconds: seconds, travelApproximate: !exact };
+      })
+      .filter((doc) => routeTargetIds.has(doc.id) || (doc.travelSeconds != null && doc.travelSeconds <= limitSeconds));
+  }, [filteredDoctors, travelFilterActive, maxTravelMinutes, travelEstimateState, travelTimes, travelMode, routeTargets]);
+
+  const sortedDoctors = useMemo(() => {
+    const list = [...travelFilteredDoctors];
+    const currentDayKey = dayKeys[now.getDay()];
+
+    const compareByRecommendation = (left, right) => {
+      const leftDistance = left.distanceKm == null ? Number.POSITIVE_INFINITY : left.distanceKm;
+      const rightDistance = right.distanceKm == null ? Number.POSITIVE_INFINITY : right.distanceKm;
+
+      return (
+        Number(right.openNow) - Number(left.openNow) ||
+        Number(right.isFavorite) - Number(left.isFavorite) ||
+        right.rating - left.rating ||
+        leftDistance - rightDistance ||
+        right.experience - left.experience
+      );
+    };
+
+    const compareBySchedule = (left, right) => {
+      const leftRange = scheduleTextToRange(left.schedule?.[currentDayKey]);
+      const rightRange = scheduleTextToRange(right.schedule?.[currentDayKey]);
+      const leftStart = leftRange ? leftRange.start : Number.POSITIVE_INFINITY;
+      const rightStart = rightRange ? rightRange.start : Number.POSITIVE_INFINITY;
+
+      return Number(right.openNow) - Number(left.openNow) || leftStart - rightStart || right.rating - left.rating;
+    };
+
+    const comparators = {
+      recommendation: compareByRecommendation,
+      rating: (left, right) => right.rating - left.rating || right.experience - left.experience,
+      experience: (left, right) => right.experience - left.experience || right.rating - left.rating,
+      distance: (left, right) => {
+        // С фильтром по времени «ближе» — это быстрее доехать, а не короче по прямой.
+        if (left.travelSeconds != null && right.travelSeconds != null) {
+          return left.travelSeconds - right.travelSeconds || Number(right.openNow) - Number(left.openNow);
+        }
+        const leftDistance = left.distanceKm == null ? Number.POSITIVE_INFINITY : left.distanceKm;
+        const rightDistance = right.distanceKm == null ? Number.POSITIVE_INFINITY : right.distanceKm;
+
+        return leftDistance - rightDistance || Number(right.openNow) - Number(left.openNow);
+      },
+      schedule: compareBySchedule,
+      // Цена первичного приёма; без цены — в конце, а не «бесплатно».
+      price: (left, right) =>
+        (left.consultPrice ?? Number.POSITIVE_INFINITY) - (right.consultPrice ?? Number.POSITIVE_INFINITY)
+        || compareByRecommendation(left, right),
+      name: (left, right) => left.name.localeCompare(right.name, 'ru'),
+      clinic: (left, right) => left.clinic.localeCompare(right.clinic, 'ru'),
+    };
+
+    list.sort(comparators[sortBy] || compareByRecommendation);
+    return list;
+  }, [travelFilteredDoctors, now, sortBy]);
+
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [expandedSchedules, setExpandedSchedules] = useState(() => new Set());
+
+  const toggleSchedule = useCallback((id) => {
+    setExpandedSchedules((current) => {
+      const next = new Set(current);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
+  // Отражаем фильтры в адресной строке через replaceState: ссылку можно
+  // переслать или сохранить, но история браузера не засоряется — иначе
+  // каждое движение ползунка добавляло бы запись, и «Назад» не работал бы.
+  const urlQuery = useMemo(
+    () =>
+      buildUrlQuery({
+        q: deferredSearchQuery,
+        clinic: selectedClinic,
+        district: selectedDistrict,
+        facilityType: selectedFacilityType,
+        doctorProfile: selectedDoctorProfile,
+        ownership: selectedOwnership,
+        cardDisplayMode,
+        sortBy,
+        services: selectedServices,
+        minRating,
+        minExperience,
+        maxDistance,
+        maxTravel: maxTravelMinutes,
+        flags: [
+          openOnly && 'open',
+          favoritesOnly && 'fav',
+          weekendOnly && 'weekend',
+          eveningOnly && 'evening',
+          onlineOnly && 'online',
+          wheelchairOnly && 'wheelchair',
+          childrenOnly && 'children',
+          dmsOnly && 'dms',
+        ].filter(Boolean),
+      }),
+    [
+      deferredSearchQuery,
+      selectedClinic,
+      selectedDistrict,
+      selectedFacilityType,
+      selectedDoctorProfile,
+      selectedOwnership,
+      cardDisplayMode,
+      sortBy,
+      selectedServices,
+      minRating,
+      minExperience,
+      maxDistance,
+      maxTravelMinutes,
+      openOnly,
+      favoritesOnly,
+      weekendOnly,
+      eveningOnly,
+      onlineOnly,
+      wheelchairOnly,
+      childrenOnly,
+      dmsOnly,
+    ],
+  );
+
+  useEffect(() => {
+    const next = `${window.location.pathname}${urlQuery ? `?${urlQuery}` : ''}`;
+    if (next !== `${window.location.pathname}${window.location.search}`) {
+      window.history.replaceState(null, '', next);
+    }
+  }, [urlQuery]);
+
+  const handleShare = useCallback(async () => {
+    const link = `${window.location.origin}${window.location.pathname}${urlQuery ? `?${urlQuery}` : ''}`;
+
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: 'МедКарта Казань', url: link });
+        return;
+      }
+      await navigator.clipboard.writeText(link);
+      showToast('Ссылка на подборку скопирована.', 'success');
+    } catch (error) {
+      // Пользователь закрыл системное окно «Поделиться» — это не ошибка.
+      if (error?.name === 'AbortError') {
+        return;
+      }
+      showToast('Не удалось скопировать ссылку. Скопируйте адрес из строки браузера.', 'warning');
+    }
+  }, [urlQuery, showToast]);
+
+  // Раньше пагинация не сбрасывалась при смене фильтра: после «показать ещё»
+  // новый поиск сразу отдавал сотни карточек и подвешивал прокрутку.
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [
+    deferredSearchQuery,
+    selectedFacilityType,
+    selectedClinic,
+    selectedDistrict,
+    selectedDoctorProfile,
+    selectedOwnership,
+    cardDisplayMode,
+    selectedServices,
+    favoritesOnly,
+    openOnly,
+    weekendOnly,
+    eveningOnly,
+    onlineOnly,
+    wheelchairOnly,
+    childrenOnly,
+    minRating,
+    minExperience,
+    maxDistance,
+    maxTravelMinutes,
+    dmsOnly,
+    dmsPlanId,
+    sortBy,
+  ]);
+
+  // --- Аналитика и обратная связь -----------------------------------------
+
+  /*
+   * Какие фильтры включены — без значений: в событие уходит «был фильтр по
+   * клинике», а не какая клиника, и тем более не текст поиска.
+   */
+  const activeFilterKeys = useMemo(() => {
+    const keys = [];
+    if (deferredSearchQuery.trim()) keys.push('query');
+    if (selectedDoctorProfile !== 'all') keys.push('profile');
+    if (selectedFacilityType !== 'all') keys.push('facilityType');
+    if (selectedOwnership !== 'all') keys.push('ownership');
+    if (selectedClinic !== 'all') keys.push('clinic');
+    if (selectedDistrict !== 'all') keys.push('district');
+    if (selectedServices.length > 0) keys.push('services');
+    if (childrenOnly) keys.push('children');
+    if (openOnly) keys.push('open');
+    if (weekendOnly) keys.push('weekend');
+    if (eveningOnly) keys.push('evening');
+    if (onlineOnly) keys.push('online');
+    if (wheelchairOnly) keys.push('wheelchair');
+    if (favoritesOnly) keys.push('favorites');
+    if (minRating > 0) keys.push('minRating');
+    if (minExperience > 0) keys.push('minExperience');
+    if (maxDistance > 0) keys.push('maxDistance');
+    if (maxTravelMinutes > 0) keys.push('maxTravel');
+    if (dmsFilterActive) keys.push('dms');
+    return keys;
+  }, [
+    deferredSearchQuery, selectedDoctorProfile, selectedFacilityType, selectedOwnership, selectedClinic,
+    selectedDistrict, selectedServices, childrenOnly, openOnly, weekendOnly, eveningOnly, onlineOnly,
+    wheelchairOnly, favoritesOnly, minRating, minExperience, maxDistance, maxTravelMinutes, dmsFilterActive,
+  ]);
+
+  // Подпись поиска — только для сравнения внутри вкладки, наружу не уходит.
+  const searchSignature = activeFilterKeys.length === 0
+    ? ''
+    : JSON.stringify([
+      normalizeText(deferredSearchQuery).trim(), selectedDoctorProfile, selectedFacilityType, selectedOwnership,
+      selectedClinic, selectedDistrict, selectedServices, cardDisplayMode, childrenOnly, openOnly, weekendOnly,
+      eveningOnly, onlineOnly, wheelchairOnly, favoritesOnly, minRating, minExperience, maxDistance,
+      maxTravelMinutes, maxTravelMinutes > 0 ? travelMode : null, dmsFilterActive ? dmsPlanId : null,
+    ]);
+
+  /*
+   * Специальность — только если она выбрана из справочника: в фильтре или
+   * строка поиска совпала с названием профиля целиком. Свободный текст
+   * поиска не разбирается и не отправляется.
+   */
+  const searchSpecialty = useMemo(() => {
+    if (selectedDoctorProfile !== 'all') return specialtyCode(selectedDoctorProfile);
+    const query = normalizeText(deferredSearchQuery).trim();
+    const profile = query ? doctorProfiles.find((item) => normalizeText(item) === query) : null;
+    return profile ? specialtyCode(profile) : null;
+  }, [selectedDoctorProfile, deferredSearchQuery, doctorProfiles]);
+
+  const resultCount = sortedDoctors.length;
+  const resultsSettled = travelEstimateState !== 'loading';
+  const lastTrackedSearchRef = useRef('');
+  const firstSearchRef = useRef(true);
+
+  useEffect(() => {
+    if (!searchSignature || !resultsSettled || searchSignature === lastTrackedSearchRef.current) return undefined;
+    // Событие — когда поиск «устоялся», а не на каждую нажатую букву.
+    const timerId = setTimeout(() => {
+      lastTrackedSearchRef.current = searchSignature;
+      const origin = searchSourceRef.current;
+      const source = origin.source === 'assistant' && Date.now() - origin.at < 5000
+        ? 'assistant'
+        : origin.source === 'url' && firstSearchRef.current
+          ? 'url'
+          : 'filters';
+      firstSearchRef.current = false;
+      track('search', {
+        source,
+        specialty: searchSpecialty,
+        ownership: selectedOwnership === 'all' ? 'any' : ownershipCode(selectedOwnership),
+        filters: activeFilterKeys,
+        results: Math.min(resultCount, 5000),
+        hasLocation: travelOriginKnown,
+        maxTravel: maxTravelMinutes || undefined,
+        dmsPlan: insurance ? Boolean(dmsPlan) : undefined,
+      });
+    }, 1500);
+    return () => clearTimeout(timerId);
+  }, [searchSignature, resultsSettled, resultCount, searchSpecialty, selectedOwnership, activeFilterKeys, travelOriginKnown, maxTravelMinutes, insurance, dmsPlan]);
+
+  // Вопрос «Нашли, куда обратиться?»: после целевого действия или через
+  // 45 секунд на выдаче. Не чаще трёх раз за сессию и один раз на поиск.
+  const [feedbackFor, setFeedbackFor] = useState(null);
+  const feedbackDoneRef = useRef(new Set());
+  const feedbackShownRef = useRef(new Set());
+
+  const requestFeedback = useCallback((signature) => {
+    if (!signature || feedbackDoneRef.current.has(signature)) return;
+    if (!feedbackShownRef.current.has(signature) && feedbackShownRef.current.size >= 3) return;
+    feedbackShownRef.current.add(signature);
+    setFeedbackFor(signature);
+  }, []);
+
+  useEffect(() => {
+    if (!searchSignature || resultCount === 0) return undefined;
+    const timerId = setTimeout(() => requestFeedback(searchSignature), 45_000);
+    return () => clearTimeout(timerId);
+  }, [searchSignature, resultCount, requestFeedback]);
+
+  const handleFeedbackAnswer = useCallback((answer, reason) => {
+    track('feedback', { context: 'list', answer, reason: reason || undefined });
+    if (feedbackFor) feedbackDoneRef.current.add(feedbackFor);
+  }, [feedbackFor]);
+
+  const handleFeedbackDismiss = useCallback(() => {
+    if (feedbackFor) feedbackDoneRef.current.add(feedbackFor);
+    setFeedbackFor(null);
+  }, [feedbackFor]);
+
+  const showFeedbackPrompt = Boolean(feedbackFor) && feedbackFor === searchSignature && resultCount > 0;
+
+  /** Поля карточки для событий: тип, форма собственности, профиль, id записи. */
+  const placeFields = useCallback((doc) => ({
+    kind: doc.entityKind === 'doctor' ? 'doctor' : 'facility',
+    ownership: ownershipCode(doc.ownership),
+    specialty: doc.entityKind === 'doctor' ? specialtyCode(doc.doctorProfile || doc.specialty) ?? undefined : undefined,
+    placeId: PLACE_ID_PATTERN.test(String(doc.id)) ? String(doc.id) : undefined,
+  }), []);
+
+  /** Целевое действие: звонок, сайт, Госуслуги, внешние карты. */
+  const trackContact = useCallback((doc, channel) => {
+    track('contact_click', { channel, ...placeFields(doc) });
+    requestFeedback(searchSignature);
+  }, [placeFields, requestFeedback, searchSignature]);
+
+  const trackExternalMap = useCallback((provider, mode, targets, doc = null) => {
+    track('external_map_click', {
+      provider,
+      mode,
+      stops: Math.max(1, Math.min(6, targets.length)),
+      placeId: doc && PLACE_ID_PATTERN.test(String(doc.id)) ? String(doc.id) : undefined,
+    });
+    requestFeedback(searchSignature);
+  }, [requestFeedback, searchSignature]);
+
+  const lastRouteDataRef = useRef(null);
+  useEffect(() => {
+    if (!routeData || routeData === lastRouteDataRef.current || routeTargets.length === 0) return undefined;
+    lastRouteDataRef.current = routeData;
+    track('route_build', {
+      mode: travelMode,
+      stops: Math.min(6, routeTargets.length),
+      outcome: routeData.error ? 'failed' : 'ok',
+    });
+    if (routeData.error) return undefined;
+    const timerId = setTimeout(() => requestFeedback(searchSignature), 1200);
+    return () => clearTimeout(timerId);
+  }, [routeData, routeTargets.length, travelMode, requestFeedback, searchSignature]);
+
+  const favoritesCount = enrichedDoctors.filter((doc) => doc.isFavorite).length;
+  // Сортировка «сначала дешевле» имеет смысл, только когда в справочнике есть цены.
+  const hasPrices = useMemo(() => sourceFacilities.some((doc) => Number.isFinite(doc.consultPrice)), [sourceFacilities]);
+  // Сколько записей фильтр «Открытые сейчас» прячет не потому, что они закрыты,
+  // а потому, что графика нет в данных. Молча терять половину базы нечестно.
+  const unknownScheduleCount = enrichedDoctors.filter((doc) => doc.openState === OPEN_STATE.UNKNOWN).length;
+  // Только действительно открытые сейчас: раньше при отсутствии открытых
+  // кнопка молча вела в ближайшее закрытое место или место без графика.
+  const nearestOpenDoctor = useMemo(() => {
+    const byDistance = [...enrichedDoctors].sort((a, b) => (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity));
+    return byDistance.find((doc) => doc.openNow) || null;
+  }, [enrichedDoctors]);
+  const doctorCards = useMemo(() => sortedDoctors.filter((item) => item.entityKind === 'doctor'), [sortedDoctors]);
+
+  /*
+   * Ссылка вида ?doc=<id> раньше разбиралась и тут же терялась: параметр
+   * читался, но нигде не использовался и пропадал из адреса. Теперь карта
+   * летит к этому врачу или учреждению, а список сужается до него.
+   */
+  const deepLinkHandledRef = useRef(false);
+  useEffect(() => {
+    if (deepLinkHandledRef.current || !INITIAL_URL_STATE.focus || enrichedDoctors.length === 0) return;
+    deepLinkHandledRef.current = true;
+    const target = enrichedDoctors.find((doc) => String(doc.id) === INITIAL_URL_STATE.focus);
+    if (!target) return;
+    setSearchQuery(target.name);
+    if (Number.isFinite(target.lat) && Number.isFinite(target.lng)) {
+      setFlyToTarget([target.lat, target.lng]);
+    }
+  }, [enrichedDoctors]);
+  const facilityCards = useMemo(() => sortedDoctors.filter((item) => item.entityKind === 'facility'), [sortedDoctors]);
+
+  useEffect(() => {
+    if (targetStopsTrigger && targetStopsTrigger.length > 0 && enrichedDoctors.length > 0) {
+      const requested = targetStopsTrigger.length;
+      const foundTargets = [];
+      targetStopsTrigger.forEach(stop => {
+        const candidates = enrichedDoctors.filter(doc => {
+          const specialtyMatch = stop.specialty
+            ? (doc.specialty && doc.specialty.toLowerCase().includes(stop.specialty.toLowerCase()))
+            : true;
+          const clinicMatch = stop.clinic
+            ? ((doc.clinic && doc.clinic.toLowerCase().includes(stop.clinic.toLowerCase())) ||
+              (doc.name && doc.name.toLowerCase().includes(stop.clinic.toLowerCase())))
+            : true;
+          // Остановка может указывать на конкретного врача: backend разрешил
+          // плейсхолдер @DOCTOR_A в реальную запись и передал её имя сюда.
+          const doctorMatch = stop.doctor
+            ? (doc.name && doc.name.toLowerCase().includes(stop.doctor.toLowerCase()))
+            : true;
+          return specialtyMatch && clinicMatch && doctorMatch;
+        });
+
+        if (candidates.length > 0) {
+          const sorted = [...candidates].sort((a, b) => (a.distanceKm || Infinity) - (b.distanceKm || Infinity));
+          const best = sorted.find(c => !foundTargets.some(t => t.id === c.id));
+          if (best && foundTargets.length < MAX_ROUTE_STOPS) {
+            foundTargets.push(best);
+          }
+        }
+      });
+
+      /*
+       * Честно говорим, сколько точек реально добавлено. Раньше ответ
+       * ассистента «построил маршрут: 3 точки» мог сопровождаться пустым
+       * маршрутом (точек нет в данных карты) или молча обрезанным до пяти.
+       */
+      const room = Math.max(0, MAX_ROUTE_STOPS - routeTargets.length);
+      const fresh = foundTargets.filter((ft) => !routeTargets.some((t) => t.id === ft.id));
+      const added = Math.min(fresh.length, room);
+      const alreadyThere = foundTargets.length - fresh.length;
+      if (added + alreadyThere < requested) {
+        const reason = fresh.length > room || requested > MAX_ROUTE_STOPS
+          ? `в маршруте не больше ${MAX_ROUTE_STOPS} точек`
+          : 'остальные не найдены на карте';
+        showToast(
+          added === 0
+            ? `Точки из ответа не добавлены: ${reason}.`
+            : `Добавлено точек: ${added} из ${requested} — ${reason}.`,
+          'warning',
+        );
+      }
+
+      if (foundTargets.length > 0) {
+        setRouteTargets(prev => {
+          const merged = [...prev];
+          foundTargets.forEach(ft => {
+            if (merged.length < MAX_ROUTE_STOPS && !merged.some(t => t.id === ft.id)) {
+              merged.push(ft);
+            }
+          });
+          return merged;
+        });
+        setRouteData(null);
+        if (foundTargets[0]) {
+          setFlyToTarget([foundTargets[0].lat, foundTargets[0].lng]);
+        }
+      }
+      setTargetStopsTrigger(null);
+    } else if (buildRouteTrigger && enrichedDoctors.length > 0) {
+      const bestMatch = sortedDoctors.find(d => !routeTargets.some(t => t.id === d.id));
+      if (bestMatch && routeTargets.length < MAX_ROUTE_STOPS) {
+        setRouteTargets(prev => [...prev, bestMatch]);
+        setRouteData(null);
+        setFlyToTarget([bestMatch.lat, bestMatch.lng]);
+      }
+      setBuildRouteTrigger(false);
+    }
+  }, [buildRouteTrigger, targetStopsTrigger, enrichedDoctors, sortedDoctors, routeTargets, showToast]);
+
+  // Toggle favorite status
+  const toggleFavorite = useCallback((id) => {
+    setFavorites((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
+  }, [setFavorites]);
+
+  const handleRouteClick = useCallback((doc) => {
+    if (!activeOrigin) {
+      showToast('Точка отправления не найдена. Разрешите геолокацию или перетащите красный маркер.', 'warning');
+      return;
+    }
+
+    setRouteTargets((prev) => {
+      if (prev.length >= MAX_ROUTE_STOPS) {
+        showToast(`Достигнут лимит в ${MAX_ROUTE_STOPS} точек для маршрута.`, 'warning');
+        return prev;
+      }
+      if (prev.some((target) => target.id === doc.id)) {
+        return prev;
+      }
+
+      setRouteData(null);
+      setFlyToTarget([doc.lat, doc.lng]);
+      return [...prev, doc];
+    });
+  }, [activeOrigin, showToast]);
+
+  const handleGoToNearest = () => {
+    if (!nearestOpenDoctor) {
+      showToast('Сейчас нет открытых мест с известным графиком работы.', 'warning');
+      return;
+    }
+    if (routeTargets.length > 0) {
+      // Не затираем собранный маршрут: добавляем точку, как кнопка
+      // «В маршрут» у карточки. Раньше три точки молча заменялись одной.
+      handleRouteClick(nearestOpenDoctor);
+      setIsFollowingUser(false);
+      return;
+    }
+    setRouteTargets([nearestOpenDoctor]);
+    setRouteData(null);
+    setIsFollowingUser(false);
+    setFlyToTarget([nearestOpenDoctor.lat, nearestOpenDoctor.lng]);
+  };
+
+  /*
+   * Ссылки «Как добраться» в Яндекс Карты и 2ГИС. МедКарта подбирает, куда
+   * обратиться; вести до двери — с пробками, автобусами и голосом — лучше
+   * умеют навигаторы. Без настоящей точки отправления ссылка строится «от
+   * моего местоположения», а не от центра Казани.
+   */
+  const renderExternalRouteLinks = (targets, { doc = null, label = 'Как добраться:', className = '' } = {}) => {
+    if (!targets || targets.length === 0) return null;
+    const origin = travelOriginKnown ? activeOrigin : null;
+    const mode = EXTERNAL_MODE_BY_TRAVEL_MODE[travelMode] || 'auto';
+    const links = [
+      { provider: 'yandex', mode, text: 'Яндекс Карты' },
+      { provider: '2gis', mode, text: '2ГИС' },
+      // Общественного транспорта в нашем движке нет — честно отправляем туда, где он есть.
+      { provider: 'yandex', mode: 'transit', text: 'На транспорте', icon: Bus },
+    ];
+    return (
+      <div className={`flex flex-wrap items-center gap-1.5 text-xs ${className}`}>
+        {label && <span className="mr-0.5 text-slate-500 dark:text-slate-400">{label}</span>}
+        {links.map((link) => {
+          const href = buildExternalRouteUrl(link.provider, origin, targets, link.mode);
+          if (!href) return null;
+          return (
+            <a
+              key={`${link.provider}-${link.mode}`}
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() => trackExternalMap(link.provider, link.mode, targets, doc)}
+              className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 font-semibold text-slate-600 transition-colors hover:border-blue-300 hover:text-blue-700 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:text-blue-300"
+            >
+              {link.icon && <link.icon size={12} aria-hidden="true" />}
+              {link.text}
+              <ExternalLink size={10} className="opacity-50" aria-hidden="true" />
+            </a>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const stableSetRouteData = useCallback((data) => {
+    setRouteData(data);
+  }, []);
+
+  const clearRoute = useCallback(() => {
+    setRouteTargets([]);
+    setRouteData(null);
+    setIsRoutePanelCollapsed(false);
+    setIsRouteStarted(false);
+  }, []);
+
+  const removeFromRoute = useCallback((docId) => {
+    setRouteTargets(prev => prev.filter(t => t.id !== docId));
+    setRouteData(null);
+    // Убрали последнюю точку — режим «маршрут начат» заканчивается. Иначе
+    // карта продолжала прятать все маркеры, кроме точек маршрута, которых
+    // уже нет, а панель с кнопками исчезала: вернуть маркеры было нечем.
+    if (routeTargets.every((target) => target.id === docId)) {
+      setIsRouteStarted(false);
+    }
+  }, [routeTargets]);
+
+  const [draggedTargetIndex, setDraggedTargetIndex] = useState(null);
+
+  const [dragOverIndex, setDragOverIndex] = useState(null);
+
+  const handleDragStart = (e, idx) => {
+    e.dataTransfer.setData('text/plain', idx.toString());
+    setDraggedTargetIndex(idx);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e, idx) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (draggedTargetIndex !== null && draggedTargetIndex !== idx) {
+      setDragOverIndex(idx);
+    }
+  };
+
+  const handleDrop = (e, idx) => {
+    e.preventDefault();
+    /*
+     * Индекс берётся из состояния, а не из перетаскиваемого текста: на список
+     * можно бросить любой текст со страницы — например, выделенный номер
+     * «+7 (843)…», — и parseInt превращал его в индекс. Индекс за пределами
+     * списка вставлял в маршрут undefined, и приложение падало.
+     */
+    const sourceIdx = draggedTargetIndex;
+
+    if (sourceIdx === null || sourceIdx === idx) {
+      setDragOverIndex(null);
+      return;
+    }
+
+    setRouteTargets(prev => {
+      if (sourceIdx < 0 || sourceIdx >= prev.length || idx < 0 || idx >= prev.length) {
+        return prev;
+      }
+      const newTargets = [...prev];
+      const [movedItem] = newTargets.splice(sourceIdx, 1);
+      newTargets.splice(idx, 0, movedItem);
+      return newTargets;
+    });
+
+    setRouteData(null);
+    setDraggedTargetIndex(null);
+    setDragOverIndex(null);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedTargetIndex(null);
+    setDragOverIndex(null);
+  };
+
+  // Touch-friendly: move route target up/down by index
+  const moveRouteTarget = useCallback((fromIdx, toIdx) => {
+    setRouteTargets(prev => {
+      if (toIdx < 0 || toIdx >= prev.length) return prev;
+      const newTargets = [...prev];
+      const [moved] = newTargets.splice(fromIdx, 1);
+      newTargets.splice(toIdx, 0, moved);
+      return newTargets;
+    });
+    setRouteData(null);
+  }, []);
+
+  const markerNodes = useMemo(() => {
+    const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 390;
+    // Группируем врачей и клиники по координатам, чтобы избежать наложения
+    // десятков одинаковых маркеров друг на друга (что вызывало черный ореол из теней)
+    const groupsMap = new Map();
+
+    sortedDoctors.forEach((doc) => {
+      const routeIndex = routeTargets.findIndex((t) => t.id === doc.id);
+      const isRouteTarget = routeIndex !== -1;
+
+      // Если пользователь нажал "Начать маршрут" — скрываем все остальные маркеры
+      if (routeStarted && !isRouteTarget) {
+        return;
+      }
+
+      // Если маршрут не начат — применяем обычный фильтр по типу карточки
+      if (!routeStarted && cardDisplayMode !== 'all' && doc.entityKind !== cardDisplayMode) {
+        return;
+      }
+
+      const key = `${Number(doc.lat).toFixed(5)},${Number(doc.lng).toFixed(5)}`;
+      if (!groupsMap.has(key)) {
+        groupsMap.set(key, {
+          key,
+          lat: doc.lat,
+          lng: doc.lng,
+          items: [],
+        });
+      }
+      groupsMap.get(key).items.push({ ...doc, routeIndex, isRouteTarget });
+    });
+
+    return Array.from(groupsMap.values()).map((group) => {
+      const { key, lat, lng, items } = group;
+      // Если среди специалистов точки есть точка маршрута — маркер должен быть красным маршрутным
+      const targetItem = items.find((it) => it.isRouteTarget);
+      const isRouteTarget = Boolean(targetItem);
+      const routeIndex = targetItem ? targetItem.routeIndex : -1;
+
+      const hasFavorite = items.some((it) => it.isFavorite);
+      const isGovernment = items.some((it) => /государ/i.test(String(it.ownership || '')));
+      const ownershipIcon = isGovernment ? blueArrowIcon : violetArrowIcon;
+
+      // Приоритет иконки: Маршрут -> Избранное -> Государственная/Частная
+      const icon = isRouteTarget
+        ? routeIconFor(routeIndex + 1)
+        : hasFavorite
+          ? amberArrowIcon
+          : ownershipIcon;
+
+      const primary = targetItem || items[0];
+      const isSingle = items.length === 1;
+
+      const popupRouteButtonClasses = (isTarget) =>
+        isTarget
+          ? 'mt-2 w-full text-xs font-medium py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition-all bg-red-50 text-red-600 border border-red-200'
+          : 'mt-2 w-full text-xs font-medium py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition-all bg-blue-50 text-blue-600 border border-blue-200 dark:bg-blue-900 dark:text-blue-300 dark:border-blue-800';
+
+      return (
+        <Marker
+          key={`group-${key}`}
+          position={stablePosition(key, lat, lng)}
+          icon={icon}
+          eventHandlers={{ popupopen: () => track('result_open', { surface: 'map', ...placeFields(primary) }) }}
+        >
+          <Popup
+            // На телефоне окно не шире экрана: раньше CSS ограничивал обёртку
+            // 280 px при содержимом 300 px, и поиск, сердечки и счётчики
+            // вылезали за край. Высоту держат полосы прокрутки внутри списка
+            // (PlaceDoctorList); maxHeight самого окна не используется —
+            // с ним прокрутка списка пальцем сдвигала карту.
+            maxWidth={isMobile ? Math.min(320, viewportWidth - 48) : isSingle ? 300 : 360}
+            minWidth={isMobile ? Math.min(260, viewportWidth - 64) : isSingle ? 240 : 300}
+            // Открытая панель маршрута (справа) не должна закрывать окно.
+            // У Leaflet отступ справа задаётся парой «снизу-справа».
+            autoPanPaddingBottomRight={!isMobile && routeTargets.length > 0 ? [360, 24] : [24, 24]}
+          >
+            {/*
+              Клик внутри окна не должен доходить до карты. Leaflet отличает
+              клик по окну от клика по карте, поднимаясь по DOM от цели события.
+              Но React успевает перерисовать список раньше, чем событие доходит
+              до карты: нажатая кнопка (сердечко, «в маршрут») уже удалена из
+              DOM, Leaflet не находит окно среди её предков, считает это кликом
+              по карте и закрывает окно. Останавливаем всплытие здесь.
+            */}
+            <div
+              className={`${isSingle ? 'min-w-[240px] max-w-[300px]' : 'w-full'} pb-1 dark:text-white`}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <strong className="mb-1 block text-lg font-bold leading-tight text-blue-600 dark:text-blue-400">
+                {primary.clinic || primary.name}
+              </strong>
+              {primary.address && (
+                <div className="mb-2 text-xs text-slate-500 dark:text-slate-400">{primary.address}</div>
+              )}
+
+              {isSingle ? (
+                <div>
+                  <span className="text-sm font-medium text-slate-600 dark:text-slate-400">{primary.specialty}</span>
+                  <br />
+                  <span className="text-base text-slate-800 dark:text-white">{primary.name}</span>
+                  <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
+                    <span
+                      className={`rounded-full px-2 py-1 font-semibold ${
+                        primary.openState === OPEN_STATE.OPEN
+                          ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-100'
+                          : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
+                      }`}
+                    >
+                      {primary.openState === OPEN_STATE.OPEN
+                        ? 'Открыто'
+                        : primary.openState === OPEN_STATE.CLOSED
+                          ? 'Закрыто'
+                          : 'График не указан'}
+                    </span>
+                    <span
+                      className={`rounded-full px-2 py-1 font-semibold ${
+                        isGovernment
+                          ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-200'
+                          : 'bg-violet-100 text-violet-700 dark:bg-violet-900 dark:text-violet-200'
+                      }`}
+                    >
+                      {primary.ownership || 'Не указано'}
+                    </span>
+                    {primary.district && (
+                      <span className="rounded-full bg-slate-100 px-2 py-1 font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
+                        {primary.district}
+                      </span>
+                    )}
+                  </div>
+                  {primary.todayHours && (
+                    <div className="mt-2 text-xs text-slate-600 dark:text-slate-400">Сегодня: {primary.todayHours}</div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => (primary.isRouteTarget ? removeFromRoute(primary.id) : handleRouteClick(primary))}
+                    className={popupRouteButtonClasses(primary.isRouteTarget)}
+                  >
+                    {primary.isRouteTarget ? <XCircle size={15} /> : <Navigation size={15} />}
+                    {primary.isRouteTarget ? 'Убрать из маршрута' : 'Добавить в маршрут'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => toggleFavorite(primary.id)}
+                    className={`mt-1.5 inline-flex w-full items-center justify-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-all ${
+                      primary.isFavorite
+                        ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-900 dark:text-amber-200'
+                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-400'
+                    }`}
+                  >
+                    {primary.isFavorite ? <Heart size={14} fill="currentColor" /> : <HeartOff size={14} />}{' '}
+                    {primary.isFavorite ? 'В избранном' : 'В избранное'}
+                  </button>
+                </div>
+              ) : (
+                <PlaceDoctorList
+                  items={items}
+                  onAddToRoute={handleRouteClick}
+                  onRemoveFromRoute={removeFromRoute}
+                  onToggleFavorite={toggleFavorite}
+                />
+              )}
+            </div>
+          </Popup>
+        </Marker>
+      );
+    });
+  }, [sortedDoctors, routeTargets, cardDisplayMode, routeStarted, removeFromRoute, handleRouteClick, toggleFavorite, isMobile, placeFields]);
+
+  const resetToGPS = () => {
+    setIsManualOrigin(false);
+    setCustomOrigin(null);
+    setIsFollowingUser(true); // Включаем для синей иконки кнопки
+    setRouteData(null);
+    // Плавный перелёт к текущему местоположению
+    setFlyToTarget(userLocation);
+  };
+
+  const clearFilters = () => {
+    setSearchQuery('');
+    setIsSearchFocused(false);
+    setSelectedFacilityType('all');
+    setSelectedClinic('all');
+    setSelectedDistrict('all');
+    setSelectedDoctorProfile('all');
+    setSelectedOwnership('all');
+    setCardDisplayMode('all');
+    setSelectedServices([]);
+    setFavoritesOnly(false);
+    setOpenOnly(false);
+    setWeekendOnly(false);
+    setEveningOnly(false);
+    setOnlineOnly(false);
+    setWheelchairOnly(false);
+    setChildrenOnly(false);
+    setMinRating(0);
+    setMinExperience(0);
+    setMaxDistance(0);
+    setMaxTravelMinutes(0);
+    setDmsOnly(false);
+    setSortBy('recommendation');
+    setVisibleCount(PAGE_SIZE);
+  };
+
+  const handleSearchSuggestionSelect = (value) => {
+    setSearchQuery(value);
+    setIsSearchFocused(false);
+  };
+
+  const handleMobileSheetTouchStart = (event) => {
+    if (!isMobile) {
+      return;
+    }
+    mobileSheetTouchStartYRef.current = event.touches[0].clientY;
+  };
+
+  const handleMobileSheetTouchMove = (event) => {
+    if (!isMobile || mobileSheetTouchStartYRef.current == null) {
+      return;
+    }
+
+    const currentY = event.touches[0].clientY;
+    const delta = Math.max(0, currentY - mobileSheetTouchStartYRef.current);
+    setMobileSheetDragOffset(delta);
+  };
+
+  const handleMobileSheetTouchEnd = () => {
+    if (!isMobile) {
+      return;
+    }
+
+    if (mobileSheetDragOffset > 90) {
+      setIsMobileFiltersOpen(false);
+    }
+
+    mobileSheetTouchStartYRef.current = null;
+    setMobileSheetDragOffset(0);
+  };
+
+  // Mouse support for drag handle (desktop testing)
+  const handleMobileSheetMouseDown = (event) => {
+    if (!isMobile) return;
+    mobileSheetTouchStartYRef.current = event.clientY;
+    const onMouseMove = (e) => {
+      if (mobileSheetTouchStartYRef.current == null) return;
+      const delta = Math.max(0, e.clientY - mobileSheetTouchStartYRef.current);
+      setMobileSheetDragOffset(delta);
+    };
+    const onMouseUp = () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      handleMobileSheetTouchEnd();
+    };
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
+
+  const renderRouteButton = (doc, isPopup = false) => {
+    const isTarget = routeTargets.some(t => t.id === doc.id);
+    const commonClasses = isPopup
+      ? 'mt-3 w-full text-sm font-medium py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition-all'
+      : 'w-full flex-1 bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white font-medium px-5 py-2.5 rounded-xl inline-flex items-center justify-center gap-2.5 transition-all border border-blue-200 dark:bg-blue-900 dark:text-blue-300 dark:border-blue-800 dark:hover:bg-blue-700 dark:hover:text-blue-100';
+
+    const redClasses = isPopup
+      ? `${commonClasses} bg-red-50 text-red-600 border border-red-200`
+      : `${commonClasses} bg-red-50 text-red-600 hover:bg-red-600 hover:text-white border-red-200 dark:bg-red-900 dark:text-red-300 dark:hover:bg-red-700 dark:hover:text-red-100 dark:border-red-800`;
+
+    if (isTarget) {
+      return (
+        <button type="button" onClick={() => removeFromRoute(doc.id)} className={redClasses}>
+          <XCircle size={isPopup ? 16 : 18} /> {isPopup ? 'Убрать' : 'Убрать из маршрута'}
+        </button>
+      );
+    }
+
+    return (
+      <button
+        type="button"
+        onClick={() => handleRouteClick(doc)}
+        className={isPopup ? `${commonClasses} bg-blue-50 text-blue-600 border border-blue-200 dark:bg-blue-900 dark:text-blue-300 dark:border-blue-800` : commonClasses}
+      >
+        <Navigation size={isPopup ? 16 : 18} /> {isPopup ? 'Показать путь' : 'Добавить в маршрут'}
+      </button>
+    );
+  };
+
+  const renderListingCard = (doc, index = 0) => {
+    const isTarget = routeTargets.some(t => t.id === doc.id);
+    const isDoctorCard = doc.entityKind === 'doctor';
+    const distanceLabel = doc.distanceKm == null ? 'Геолокация недоступна' : formatDistance(doc.distanceKm * 1000);
+    const hasVisibleDescription = Boolean((doc.description || '').trim()) && !/данные из openstreetmap/i.test(String(doc.description));
+    const isScheduleOpen = expandedSchedules.has(doc.id);
+    const isState = doc.ownership === 'Государственная';
+    const oms = omsHint(doc);
+    const referralUrl = withReferral(doc.websiteUrl, 'card');
+    const verifiedLabel = formatVerifiedAt(doc.verifiedAt);
+    const verifiedDays = daysSince(doc.verifiedAt, now);
+    const isOsm = /^osm$/i.test(String(doc.source || '')) || /^osm-/.test(String(doc.id || ''));
+    const dmsBadge = dmsPlan && doc.dmsCoverage ? coverageBadge(doc.dmsCoverage, dmsPlan) : null;
+    const pultHref = dmsProvider ? toTelHref(dmsProvider.pultPhone) : null;
+
+    return (
+      <div
+        key={doc.id}
+        className={`card-fade-in rounded-2xl sm:rounded-3xl border bg-white p-3 sm:p-5 shadow-sm transition-all dark:bg-slate-800 dark:text-white ${isTarget ? 'border-blue-400 ring-2 ring-blue-100 dark:border-blue-500 dark:ring-blue-900' : isDoctorCard ? 'border-blue-100 hover:shadow-md dark:border-blue-900' : 'border-emerald-100 hover:shadow-md dark:border-emerald-900'
+          }`}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-lg font-extrabold text-slate-800 dark:text-white">{doc.name}</h3>
+              <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.18em] ${isDoctorCard ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-100' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-100'}`}>
+                {isDoctorCard ? 'Врач' : 'Учреждение'}
+              </span>
+              {doc.demo && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.12em] text-amber-800 dark:bg-amber-900 dark:text-amber-100" title="Вымышленная запись для проверки сценариев">
+                  <FlaskConical size={12} aria-hidden="true" /> Демо
+                </span>
+              )}
+              {doc.openState === OPEN_STATE.OPEN && (
+                <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.18em] text-emerald-700 dark:bg-emerald-900 dark:text-emerald-100">
+                  Открыто сейчас
+                </span>
+              )}
+              {doc.openState === OPEN_STATE.CLOSED && (
+                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:bg-slate-700 dark:text-slate-300">
+                  Закрыто
+                </span>
+              )}
+              {doc.openState === OPEN_STATE.UNKNOWN && (
+                <span
+                  className="inline-flex items-center gap-1 rounded-full bg-slate-100/70 px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400 dark:bg-slate-700/60 dark:text-slate-400"
+                  title="В источнике данных нет расписания этого объекта"
+                >
+                  <HelpCircle size={12} aria-hidden="true" /> График не указан
+                </span>
+              )}
+            </div>
+            <p className="break-words text-sm font-semibold text-blue-600 dark:text-blue-400">{isDoctorCard ? doc.doctorProfile || doc.specialty : doc.facilityType || doc.specialty}</p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => toggleFavorite(doc.id)}
+            className={`rounded-full border p-2 transition-all ${doc.isFavorite ? 'border-amber-200 bg-amber-50 text-amber-600 dark:border-amber-800 dark:bg-amber-900 dark:text-amber-300' : 'border-slate-200 bg-white text-slate-400 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-400'}`}
+            title={doc.isFavorite ? 'Убрать из избранного' : 'Добавить в избранное'}
+          >
+            {doc.isFavorite ? <Heart size={18} fill="currentColor" /> : <HeartOff size={18} />}
+          </button>
+        </div>
+
+        {/* Trust badges */}
+        {doc.trustBadges && doc.trustBadges.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {doc.trustBadges.slice(0, 3).map((badge) => (
+              <span key={badge} className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700 dark:bg-amber-900 dark:text-amber-200">
+                ⭐ {badge}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* Пометка о происхождении данных: запись взята с официального сайта
+            учреждения, и на неё можно перейти и проверить самому. */}
+        {toSafeUrl(doc.sourceUrl) ? (
+          <a
+            href={toSafeUrl(doc.sourceUrl)}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={() => trackContact(doc, 'source')}
+            className={`mt-3 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold transition-colors ${
+              verifiedDays != null && verifiedDays > STALE_AFTER_DAYS
+                ? 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/40 dark:text-amber-200'
+                : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200'
+            }`}
+            title="Данные с официального сайта учреждения — откройте, чтобы сверить"
+          >
+            <ShieldCheck size={13} aria-hidden="true" />
+            {verifiedLabel ? `Официальный сайт · проверено ${verifiedLabel}` : 'Проверено по официальному сайту'}
+            <ExternalLink size={11} className="opacity-60" aria-hidden="true" />
+          </a>
+        ) : doc.demo ? (
+          <p className="mt-3 text-[11px] leading-4 text-amber-700 dark:text-amber-300">
+            Демо-данные: вымышленная клиника для проверки сценариев. Сайт и телефон не настоящие.
+          </p>
+        ) : isOsm ? (
+          <p className="mt-3 text-[11px] leading-4 text-slate-400 dark:text-slate-500" title="Открытые данные OpenStreetMap: адрес и часы работы могут быть неточны">
+            Данные: OpenStreetMap · часы и телефон уточняйте
+          </p>
+        ) : null}
+        {doc.missingSince && (
+          <p className="mt-1.5 text-[11px] leading-4 text-amber-700 dark:text-amber-300">
+            При проверке {formatVerifiedAt(doc.missingSince)} врача не нашли на странице учреждения — уточните по телефону, принимает ли он.
+          </p>
+        )}
+        {verifiedDays != null && verifiedDays > STALE_AFTER_DAYS && (
+          <p className="mt-1.5 text-[11px] leading-4 text-amber-700 dark:text-amber-300">
+            Сведения проверялись {verifiedDays} дн. назад — перед визитом уточните расписание.
+          </p>
+        )}
+
+        <div className="mt-4 grid grid-cols-1 gap-3 text-sm text-slate-600 sm:grid-cols-2 dark:text-slate-300">
+          <div className="flex items-center gap-2">
+            {isDoctorCard ? <UserRound size={16} className="shrink-0 text-slate-400 dark:text-slate-500" /> : <Hospital size={16} className="shrink-0 text-slate-400 dark:text-slate-500" />}
+            <span className="break-words">{doc.clinic}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <MapPin size={16} className="shrink-0 text-slate-400 dark:text-slate-500" />
+            <span className="break-words">{doc.address}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Clock size={16} className="shrink-0 text-slate-400 dark:text-slate-500" aria-hidden="true" />
+            {doc.weekSchedule ? (
+              <button
+                type="button"
+                onClick={() => {
+                  if (!isScheduleOpen) track('result_open', { surface: 'list', rank: Math.min(index + 1, 500), ...placeFields(doc) });
+                  toggleSchedule(doc.id);
+                }}
+                aria-expanded={isScheduleOpen}
+                className="inline-flex items-center gap-1 text-left underline decoration-dotted underline-offset-4 transition-colors hover:text-blue-600 dark:hover:text-blue-400"
+              >
+                Сегодня: {doc.todayHours}
+                {isScheduleOpen ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
+              </button>
+            ) : (
+              <span className="text-slate-400 dark:text-slate-500">График не указан</span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {isDoctorCard ? <TrendingUp size={16} className="shrink-0 text-slate-400 dark:text-slate-500" aria-hidden="true" /> : <Building2 size={16} className="shrink-0 text-slate-400 dark:text-slate-500" aria-hidden="true" />}
+            <span>{isDoctorCard ? `Стаж: ${doc.experience > 0 ? `${doc.experience} лет` : 'не указан'}` : `Тип: ${doc.facilityType || doc.specialty}`}</span>
+          </div>
+        </div>
+
+        {/* Расписание на неделю — данные лежали в doc.schedule, но наружу
+            выходил только сегодняшний день. */}
+        {isScheduleOpen && doc.weekSchedule && (
+          <div className="mt-3 overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-700">
+            <table className="w-full text-sm">
+              <caption className="sr-only">Расписание работы на неделю</caption>
+              <tbody>
+                {doc.weekSchedule.map((day) => (
+                  <tr
+                    key={day.key}
+                    className={`border-b border-slate-100 last:border-0 dark:border-slate-700/70 ${
+                      day.isToday ? 'bg-blue-50 font-semibold dark:bg-blue-900/30' : ''
+                    }`}
+                  >
+                    <th scope="row" className="px-3 py-1.5 text-left font-medium text-slate-600 dark:text-slate-300">
+                      {day.label}
+                      {day.isToday && <span className="ml-2 text-[10px] uppercase tracking-wider text-blue-600 dark:text-blue-400">сегодня</span>}
+                    </th>
+                    <td className={`px-3 py-1.5 text-right ${day.isDayOff ? 'text-slate-400 dark:text-slate-500' : 'text-slate-700 dark:text-slate-200'}`}>
+                      {day.value}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Цены: диапазоны лежали в servicePrices и никогда не показывались. */}
+        {doc.servicePrices.length > 0 && (
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/60">
+            <div className="mb-2 inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+              <Wallet size={14} aria-hidden="true" /> Стоимость услуг
+            </div>
+            <ul className="space-y-1">
+              {doc.servicePrices.map((price) => (
+                <li key={price.service} className="flex items-baseline justify-between gap-3 text-sm">
+                  <span className="text-slate-600 dark:text-slate-300">{price.service}</span>
+                  <span className="shrink-0 font-semibold text-slate-800 tabular-nums dark:text-white">{price.label}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 text-[11px] leading-4 text-slate-400 dark:text-slate-500">
+              {doc.demo ? 'Демо-цены, вымышленные.' : 'Ориентировочные цены. Уточняйте в учреждении.'}
+            </p>
+          </div>
+        )}
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          {isDoctorCard ? (
+            // Пустой бейдж «Рейтинг: н/д» стоял почти на половине карточек и
+            // ничего не сообщал — теперь его просто нет.
+            doc.rating > 0 && (
+              <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700 dark:bg-amber-900 dark:text-amber-200">
+                <Star size={13} className="inline-block -translate-y-[1px]" fill="currentColor" /> {doc.rating}
+              </span>
+            )
+          ) : (
+            <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900 dark:text-emerald-200">{doc.facilityType || doc.specialty}</span>
+          )}
+          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">{doc.ownership}</span>
+          {doc.district && <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">{doc.district}</span>}
+          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">{distanceLabel}</span>
+          {doc.travelSeconds != null && (
+            <span
+              className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700 dark:bg-blue-900 dark:text-blue-200"
+              title={doc.travelApproximate ? 'Оценка по расстоянию: точное время ещё считается' : 'Время по дорогам, без учёта пробок'}
+            >
+              <Timer size={12} aria-hidden="true" />
+              {doc.travelApproximate ? '≈ ' : ''}{Math.max(1, Math.round(doc.travelSeconds / 60))} мин {TRAVEL_MODE_LABEL[travelMode] || ''}
+            </span>
+          )}
+          {doc.features.onlineBooking && <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900 dark:text-emerald-200">Онлайн-запись</span>}
+          {doc.features.wheelchair && <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700 dark:bg-blue-900 dark:text-blue-200">Доступная среда</span>}
+          {doc.features.children && <span className="rounded-full bg-pink-50 px-3 py-1 text-xs font-semibold text-pink-700 dark:bg-pink-900 dark:text-pink-200">Детский приём</span>}
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          {/* Тип учреждения уже показан отдельной меткой выше — не повторяем. */}
+          {(doc.services || []).filter((service) => isDoctorCard || service !== (doc.facilityType || doc.specialty)).map((service) => (
+            <span key={service} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
+              {service}
+            </span>
+          ))}
+        </div>
+
+        {hasVisibleDescription && <p className="mt-4 text-sm leading-6 text-slate-600 dark:text-slate-400">{doc.description}</p>}
+
+        {/*
+          ДМС: покрытие выбранной программой. Считается в браузере, программа
+          никуда не отправляется. Через пульт — кнопка звонка на пульт.
+        */}
+        {dmsBadge && dmsBadge.tone === 'covered' && (
+          <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-3 text-xs leading-5 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-100">
+            <p className="inline-flex items-center gap-1.5 font-bold"><ShieldCheck size={14} aria-hidden="true" /> {dmsBadge.text}</p>
+            {dmsBadge.detail && <p className="mt-0.5">Как попасть: {dmsBadge.detail}.</p>}
+            {doc.dmsCoverage.notes && <p className="mt-0.5">{doc.dmsCoverage.notes}</p>}
+            {doc.dmsCoverage.access === 'direct' && <p className="mt-0.5">Назовите в регистратуре номер полиса и программу.</p>}
+            {pultHref && ['via_pult', 'approval_required'].includes(doc.dmsCoverage.access) && (
+              <a
+                href={pultHref}
+                onClick={() => trackContact(doc, 'pult')}
+                className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-emerald-700"
+              >
+                <Phone size={13} aria-hidden="true" /> Позвонить на пульт {dmsProvider.name}
+              </a>
+            )}
+          </div>
+        )}
+        {dmsBadge && dmsBadge.tone === 'not_covered' && (
+          <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+            {dmsBadge.text}{dmsBadge.detail ? `: ${dmsBadge.detail}` : ''}.
+          </p>
+        )}
+
+        {/*
+          Переход к записи. Своей записи у МедКарты нет: ведём туда, где
+          записываются, и честно говорим, как это устроено по ОМС.
+        */}
+        {oms && (
+          <div className="mt-4 rounded-2xl border border-blue-100 bg-blue-50/60 p-3 text-xs leading-5 text-slate-600 dark:border-blue-900 dark:bg-blue-950/30 dark:text-slate-300">
+            <p>{oms.text}</p>
+            <a
+              href={GOSUSLUGI_APPOINTMENT_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() => trackContact(doc, 'gosuslugi')}
+              className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-blue-700"
+            >
+              <CalendarCheck size={14} aria-hidden="true" /> Записаться через Госуслуги
+              <ExternalLink size={11} className="opacity-70" aria-hidden="true" />
+            </a>
+          </div>
+        )}
+
+        {(doc.telHref || referralUrl) && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {!isState && referralUrl && (
+              <a
+                href={referralUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => trackContact(doc, 'website')}
+                className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-700"
+              >
+                <CalendarCheck size={16} aria-hidden="true" /> Записаться на сайте
+                <ExternalLink size={13} className="opacity-70" aria-hidden="true" />
+              </a>
+            )}
+            {doc.telHref && (
+              <a
+                href={doc.telHref}
+                onClick={() => trackContact(doc, 'phone')}
+                className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition-colors hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200"
+              >
+                <Phone size={16} aria-hidden="true" /> {doc.phone}
+              </a>
+            )}
+            {isState && referralUrl && (
+              <a
+                href={referralUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => trackContact(doc, 'website')}
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600"
+              >
+                <Globe size={16} aria-hidden="true" /> Сайт
+                <ExternalLink size={13} className="opacity-60" aria-hidden="true" />
+              </a>
+            )}
+          </div>
+        )}
+
+        {renderExternalRouteLinks([doc], { doc, className: 'mt-3' })}
+
+        <div className={`mt-4 grid gap-2 ${isMobile ? 'grid-cols-1' : 'grid-cols-2'}`}>
+          {renderRouteButton(doc, false)}
+          <button
+            type="button"
+            onClick={() => toggleFavorite(doc.id)}
+            className={`inline-flex w-full items-center justify-center gap-2 rounded-xl border px-4 py-2.5 font-semibold transition-all ${doc.isFavorite ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-900 dark:text-amber-200' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-400 dark:hover:bg-slate-600'}`}
+          >
+            {doc.isFavorite ? <Heart size={16} fill="currentColor" /> : <HeartOff size={16} />}
+            {doc.isFavorite ? 'В избранном' : 'В избранное'}
+          </button>
+        </div>
+
+        {PLACE_ID_PATTERN.test(String(doc.id)) && (
+          <DataReportButton
+            onReport={(reason) => track('data_report', { reason, kind: isDoctorCard ? 'doctor' : 'facility', placeId: String(doc.id) })}
+          />
+        )}
+      </div>
+    );
+  };
+
+  if (!isLocationReady) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-[#f4f7fb] dark:bg-slate-900">
+        <div className="flex flex-col items-center gap-3 text-blue-600 dark:text-blue-400">
+          <Loader2 className="animate-spin" size={48} />
+          <h2 className="text-xl font-semibold">Определяем местоположение...</h2>
+        </div>
+      </div>
+    );
+  }
+
+  const filters = {
+    searchQuery, cardDisplayMode, doctorProfile: selectedDoctorProfile,
+    facilityType: selectedFacilityType, ownership: selectedOwnership,
+    clinic: selectedClinic, district: selectedDistrict, services: selectedServices,
+    childrenOnly, openOnly, favoritesOnly, weekendOnly, eveningOnly,
+    onlineOnly, wheelchairOnly, minRating, minExperience, maxDistance,
+    maxTravelMinutes, dmsOnly,
+  };
+  const filterSetters = {
+    searchQuery: setSearchQuery, doctorProfile: setSelectedDoctorProfile,
+    facilityType: setSelectedFacilityType, ownership: setSelectedOwnership,
+    clinic: setSelectedClinic, district: setSelectedDistrict, services: setSelectedServices,
+    childrenOnly: setChildrenOnly, openOnly: setOpenOnly, favoritesOnly: setFavoritesOnly,
+    weekendOnly: setWeekendOnly, eveningOnly: setEveningOnly,
+    onlineOnly: setOnlineOnly, wheelchairOnly: setWheelchairOnly,
+    minRating: setMinRating, minExperience: setMinExperience, maxDistance: setMaxDistance,
+    maxTravelMinutes: setMaxTravelMinutes,
+    dmsOnly: setDmsOnly,
+  };
+  const handleFilterChange = (field, value) => {
+    // «По моему ДМС» без выбранной программы — сначала выбрать программу.
+    if (field === 'dmsOnly' && value && !dmsPlan) {
+      setIsDmsPanelOpen(true);
+      setDmsOnly(true);
+      return;
+    }
+    if (field === 'cardDisplayMode') {
+      setCardDisplayMode(value);
+      // При смене раздела убираем условия, относящиеся только к другому типу.
+      if (value === 'facility') setSelectedDoctorProfile('all');
+      if (value !== 'facility') setSelectedFacilityType('all');
+      if (value === 'doctor') {
+        setOpenOnly(false);
+      }
+      return;
+    }
+    filterSetters[field]?.(value);
+  };
+
+  return (
+    <div className="flex h-screen w-full overflow-hidden bg-slate-100 font-sans dark:bg-slate-900">
+      {/* Sidebar: desktop + mobile overlay panel */}
+      {(!isMobile || isMobileFiltersOpen) && (
+        <>
+          {isMobile && (
+            <div
+              className="mobile-sheet-backdrop fixed inset-0 z-[998] bg-slate-900/40 backdrop-blur-[1px]"
+              onClick={() => setIsMobileFiltersOpen(false)}
+            />
+          )}
+          {!isMobile && (
+            <button
+              type="button"
+              onClick={() => setIsSidebarCollapsed((current) => !current)}
+              aria-label={isSidebarCollapsed ? 'Показать панель поиска' : 'Скрыть панель поиска'}
+              aria-expanded={!isSidebarCollapsed}
+              className="absolute top-1/2 z-[1010] flex h-12 w-5 -translate-y-1/2 items-center justify-center rounded-r-lg border border-l-0 border-slate-200 bg-white text-slate-500 shadow-sm dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300"
+              style={{ left: isSidebarCollapsed ? 0 : (isTablet ? 340 : sidebarWidth) }}
+            >
+              {isSidebarCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+            </button>
+          )}
+          {/*
+            На телефоне панель — «шторка» с position: fixed. Раньше у неё были
+            и relative, и fixed; Tailwind выводит .relative позже, он побеждал,
+            и шторка вставала в поток вверху экрана, а карта сжималась до нуля.
+          */}
+          <aside
+            ref={sidebarRef}
+            aria-label="Поиск врачей и учреждений"
+            inert={isSidebarCollapsed && !isMobile}
+            className={`search-sidebar ${isMobile ? 'mobile-bottom-sheet' : 'relative'} z-[1000] flex shrink-0 flex-col bg-white shadow-2xl overflow-hidden dark:bg-slate-800 transition-all duration-300 ease-in-out ${isSidebarCollapsed && !isMobile ? 'border-r-0' : ''} ${isMobile ? 'fixed inset-x-0 bottom-0 max-h-[85vh] w-full rounded-t-3xl' : ''}`}
+            style={
+              isMobile
+                ? { transform: `translateY(${mobileSheetDragOffset}px)` }
+                : { width: `${isTablet ? 340 : sidebarWidth}px`, marginLeft: isSidebarCollapsed ? `-${isTablet ? 340 : sidebarWidth}px` : '0px' }
+            }
+          >
+            {isMobile && (
+              <div
+                className="flex cursor-grab justify-center py-3 active:cursor-grabbing select-none"
+                onTouchStart={handleMobileSheetTouchStart}
+                onTouchMove={handleMobileSheetTouchMove}
+                onTouchEnd={handleMobileSheetTouchEnd}
+                onMouseDown={handleMobileSheetMouseDown}
+              >
+                <div className="h-1.5 w-14 rounded-full bg-slate-300 dark:bg-slate-600" />
+              </div>
+            )}
+            <header className="shrink-0 px-4 pb-3 pt-4">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <MapPin size={24} className="shrink-0 text-blue-600 dark:text-blue-400" aria-hidden="true" />
+                  <div>
+                    <h1 className="text-[23px] font-extrabold leading-none tracking-tight text-blue-600 dark:text-blue-400">МедКарта</h1>
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Казань</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  {insurance && (
+                    <button
+                      type="button"
+                      className="sidebar-icon-button relative"
+                      onClick={() => setIsDmsPanelOpen((current) => !current)}
+                      aria-label={dmsPlan ? `Мой ДМС: ${dmsPlan.name}` : 'Мой ДМС: выбрать программу'}
+                      aria-expanded={isDmsPanelOpen}
+                      title={dmsPlan ? `ДМС: ${dmsProvider?.name || ''} «${dmsPlan.name}»` : 'Мой ДМС'}
+                    >
+                      <ShieldPlus size={19} aria-hidden="true" />
+                      {dmsPlan && <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-emerald-500" aria-hidden="true" />}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="sidebar-icon-button relative"
+                    onClick={() => setFavoritesOnly((current) => !current)}
+                    aria-label={favoritesOnly ? 'Показать все вместо избранного' : 'Показать избранное'}
+                    aria-pressed={favoritesOnly}
+                    title={`Избранное: ${favoritesCount}`}
+                  >
+                    <Heart size={19} fill={favoritesOnly ? 'currentColor' : 'none'} aria-hidden="true" />
+                    {favoritesCount > 0 && <span className="absolute -right-0.5 -top-0.5 rounded-full bg-blue-600 px-1 text-[10px] leading-4 text-white">{favoritesCount}</span>}
+                  </button>
+                  <button
+                    type="button"
+                    className="sidebar-icon-button"
+                    onClick={() => setIsDarkMode((current) => !current)}
+                    aria-label={isDarkMode ? 'Включить светлую тему' : 'Включить тёмную тему'}
+                    aria-pressed={isDarkMode}
+                    title={isDarkMode ? 'Светлая тема' : 'Тёмная тема'}
+                  >
+                    {isDarkMode ? <Sun size={19} /> : <Moon size={19} />}
+                  </button>
+                  {isMobile && (
+                    <button type="button" className="sidebar-icon-button" aria-label="Закрыть поиск" onClick={() => setIsMobileFiltersOpen(false)}>
+                      <X size={20} aria-hidden="true" />
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="relative mt-3">
+                <label className="sr-only" htmlFor="facility-search">Поиск по врачу, клинике, адресу или услуге</label>
+                <Search className="pointer-events-none absolute left-3 top-3.5 text-slate-500 dark:text-slate-400" size={17} aria-hidden="true" />
+                <input
+                  id="facility-search"
+                  type="search"
+                  autoComplete="off"
+                  maxLength={100}
+                  placeholder="Врач, клиника или адрес"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  onFocus={() => setIsSearchFocused(true)}
+                  onBlur={() => setIsSearchFocused(false)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') setIsSearchFocused(false);
+                  }}
+                  role="combobox"
+                  aria-autocomplete="list"
+                  aria-expanded={isSearchFocused && searchSuggestions.length > 0}
+                  aria-controls="search-suggestions"
+                  className="sidebar-search-input"
+                />
+                {searchQuery && (
+                  <button type="button" className="sidebar-icon-button absolute right-1 top-1 !h-9 !w-8" aria-label="Очистить поиск" onClick={() => setSearchQuery('')}>
+                    <X size={16} aria-hidden="true" />
+                  </button>
+                )}
+                {isSearchFocused && searchSuggestions.length > 0 && (
+                  <div id="search-suggestions" role="listbox" aria-label="Варианты поиска" className="absolute inset-x-0 top-full z-20 mt-1 max-h-64 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1 shadow-lg dark:border-slate-600 dark:bg-slate-800">
+                    {searchSuggestions.map((item) => (
+                      <button
+                        key={`${item.type}-${item.key}`}
+                        role="option"
+                        aria-selected="false"
+                        type="button"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => handleSearchSuggestionSelect(item.value)}
+                        className="flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700"
+                      >
+                        <span className="truncate">{item.value}</span>
+                        <span className="ml-3 shrink-0 text-[11px] text-slate-500 dark:text-slate-400">{item.type}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {locationError && <p className="mt-2 text-[11px] leading-4 text-slate-500 dark:text-slate-400">Геолокация недоступна · поиск от центра Казани</p>}
+            </header>
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+              {demoState.enabled && (
+                <div className="mb-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-100" role="note">
+                  <FlaskConical size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
+                  <p>
+                    <b>Демо-режим.</b> Частные клиники с пометкой «Демо», их цены и программы ДМС вымышлены — для проверки сценариев.{' '}
+                    <button type="button" onClick={disableDemo} className="font-semibold underline underline-offset-2">Выключить</button>
+                  </p>
+                </div>
+              )}
+              {insurance && isDmsPanelOpen && (
+                <DmsPanel
+                  insurance={insurance}
+                  planId={dmsPlan?.id || null}
+                  today={todayKey}
+                  isDemo={demoState.enabled}
+                  onCallPult={() => track('contact_click', { channel: 'pult', kind: 'facility' })}
+                  onClose={() => setIsDmsPanelOpen(false)}
+                  onSave={(planId) => {
+                    setDmsPlanId(planId);
+                    setIsDmsPanelOpen(false);
+                    if (!planId) setDmsOnly(false);
+                    else showToast('Программа сохранена в этом браузере. Карточки отмечены по ней.', 'success');
+                  }}
+                />
+              )}
+              <SearchFilters
+                filters={filters}
+                options={{ doctorProfiles, facilityTypes, clinics, services: allServices, travelLimits: TRAVEL_LIMIT_OPTIONS }}
+                travel={{
+                  modeLabel: TRAVEL_MODE_LABEL[travelMode] || '',
+                  originKnown: travelOriginKnown,
+                  state: travelEstimateState,
+                }}
+                dms={{ available: Boolean(insurance), planName: dmsPlan?.name || null }}
+                onChange={handleFilterChange}
+                onReset={clearFilters}
+                onNearest={handleGoToNearest}
+              />
+              <div className="sidebar-results mt-1">
+                <h2 role="status" aria-live="polite">Найдено {sortedDoctors.length.toLocaleString('ru-RU')}</h2>
+                <div className="sidebar-results-actions">
+                  <label className="filter-select-wrap">
+                    <span className="sr-only">Сортировка результатов</span>
+                    <select value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
+                      <option value="recommendation">По рекомендации</option>
+                      <option value="distance">По расстоянию</option>
+                      <option value="schedule">Сначала открытые</option>
+                      <option value="name">По имени</option>
+                      <option value="clinic">По клинике</option>
+                      {(hasPrices || sortBy === 'price') && <option value="price">Сначала дешевле</option>}
+                      {sortBy === 'rating' && <option value="rating">По рейтингу</option>}
+                      {sortBy === 'experience' && <option value="experience">По стажу</option>}
+                    </select>
+                    <ChevronDown size={13} aria-hidden="true" />
+                  </label>
+                  <button type="button" className="sidebar-icon-button" onClick={handleShare} aria-label="Поделиться подборкой" title="Поделиться подборкой">
+                    <Share2 size={16} aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
+              {openOnly && unknownScheduleCount > 0 && (
+                <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200">
+                  Объекты без расписания скрыты. <button type="button" className="font-semibold underline underline-offset-2" onClick={() => setOpenOnly(false)}>Показать все</button>
+                </p>
+              )}
+              <div className="space-y-3">
+                {showFeedbackPrompt && (
+                  <SearchFeedbackPrompt key={feedbackFor} onAnswer={handleFeedbackAnswer} onDismiss={handleFeedbackDismiss} />
+                )}
+                {sortedDoctors.length === 0 ? (
+                  <div className="rounded-3xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-400">
+                    {/* Пустое состояние теперь называет конкретную причину:
+                        общее «ослабьте фильтры» не подсказывает, какой снять. */}
+                    {favoritesOnly && favoritesCount === 0 ? (
+                      <>
+                        <p className="font-semibold text-slate-700 dark:text-slate-300">В избранном пока пусто</p>
+                        <p className="mt-1">
+                          Нажмите на сердечко в любой карточке — она появится здесь и сохранится после перезагрузки.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setFavoritesOnly(false)}
+                          className="mt-4 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 font-semibold text-white transition-colors hover:bg-blue-700"
+                        >
+                          <HeartOff size={16} aria-hidden="true" /> Показать все карточки
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <p className="font-semibold text-slate-700 dark:text-slate-300">Ничего не найдено</p>
+                        <p className="mt-1">
+                          {openOnly && unknownScheduleCount > 0
+                            ? `Возможно, дело в фильтре «Открытые сейчас»: у ${unknownScheduleCount} объектов график не указан, и они не проходят проверку.`
+                            : travelFilterActive
+                              ? `В пределах ${maxTravelMinutes} мин ${TRAVEL_MODE_LABEL[travelMode] || ''} ничего не нашлось. Увеличьте время в пути или смените способ передвижения.`
+                              : searchQuery
+                              ? `По запросу «${searchQuery}» совпадений нет. Проверьте раскладку или попробуйте более общее слово.`
+                              : 'Ослабьте фильтры или очистите поиск, чтобы вернуть карточки.'}
+                        </p>
+                        <div className="mt-4 flex flex-wrap justify-center gap-2">
+                          {travelFilterActive && (
+                            <button
+                              type="button"
+                              onClick={() => setMaxTravelMinutes(0)}
+                              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 font-semibold text-slate-600 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300"
+                            >
+                              Снять ограничение по времени
+                            </button>
+                          )}
+                          {openOnly && (
+                            <button
+                              type="button"
+                              onClick={() => setOpenOnly(false)}
+                              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 font-semibold text-slate-600 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300"
+                            >
+                              Снять «Открытые сейчас»
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={clearFilters}
+                            className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 font-semibold text-white transition-colors hover:bg-blue-700"
+                          >
+                            <RefreshCcw size={16} aria-hidden="true" /> Сбросить фильтры
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ) : cardDisplayMode === 'all' && doctorCards.length > 0 && facilityCards.length > 0 ? (
+                  <>
+                    <div className="rounded-2xl border border-blue-100 bg-blue-50/60 px-4 py-2 text-xs font-bold uppercase tracking-[0.16em] text-blue-700 dark:border-blue-800 dark:bg-blue-900/60 dark:text-blue-300">
+                      Врачи ({doctorCards.length})
+                    </div>
+                    {doctorCards.slice(0, visibleCount).map(renderListingCard)}
+                    {doctorCards.length > visibleCount && (
+                      <button
+                        type="button"
+                        onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}
+                        className="w-full rounded-2xl border border-blue-200 bg-blue-50 py-3 text-sm font-semibold text-blue-700 transition-all hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-900 dark:text-blue-300 dark:hover:bg-blue-800"
+                      >
+                        Показать ещё ({doctorCards.length - visibleCount} врачей)
+                      </button>
+                    )}
+                    <div className="rounded-2xl border border-emerald-100 bg-emerald-50/60 px-4 py-2 text-xs font-bold uppercase tracking-[0.16em] text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300">
+                      Учреждения ({facilityCards.length})
+                    </div>
+                    {facilityCards.slice(0, visibleCount).map(renderListingCard)}
+                    {facilityCards.length > visibleCount && (
+                      <button
+                        type="button"
+                        onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}
+                        className="w-full rounded-2xl border border-emerald-200 bg-emerald-50 py-3 text-sm font-semibold text-emerald-700 transition-all hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-900 dark:text-emerald-300 dark:hover:bg-emerald-800"
+                      >
+                        Показать ещё ({facilityCards.length - visibleCount} учреждений)
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    {sortedDoctors.slice(0, visibleCount).map(renderListingCard)}
+                    {sortedDoctors.length > visibleCount && (
+                      <button
+                        type="button"
+                        onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}
+                        className="w-full rounded-2xl border border-slate-200 bg-white py-3 text-sm font-semibold text-slate-700 transition-all hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600"
+                      >
+                        Показать ещё ({sortedDoctors.length - visibleCount} карточек)
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+              <footer className="py-5 text-center text-[11px] text-slate-400 dark:text-slate-500">© 2026 МедКарта Казань</footer>
+            </div>
+          </aside>
+        </>
+      )}
+
+      {/* Mobile bottom bar: route panel stacked above nav buttons */}
+      {isMobile && !isMobileFiltersOpen && (
+        <div className="fixed bottom-0 left-0 right-0 z-[999] flex flex-col">
+          {/* Collapsed route pill */}
+          {routeTargets.length > 0 && isRoutePanelCollapsed && (
+            <div
+              className="mx-3 mb-2 cursor-pointer"
+              role="button"
+              tabIndex={0}
+              aria-label="Развернуть маршрут"
+              onClick={() => setIsRoutePanelCollapsed(false)}
+              onKeyDown={activateOnKey(() => setIsRoutePanelCollapsed(false))}
+            >
+              <div className="flex items-center gap-3 rounded-2xl bg-gradient-to-r from-blue-600 to-blue-500 px-4 py-3 shadow-[0_4px_20px_rgba(59,130,246,0.35)] transition-transform active:scale-[0.98] dark:from-blue-700 dark:to-blue-600">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/20">
+                  <Navigation size={18} className="text-white" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-blue-100">Smart-маршрут · {routeTargets.length} {routeTargets.length === 1 ? 'точка' : routeTargets.length < 5 ? 'точки' : 'точек'}</div>
+                  {routeData && !routeData.error ? (
+                    <div className="mt-0.5 text-[15px] font-extrabold text-white">{formatTime(routeData.time)} <span className="font-medium text-blue-200">· {formatDistance(routeData.distance)}</span></div>
+                  ) : routeData?.error ? (
+                    <div className="mt-0.5 truncate text-sm font-semibold text-red-100">Маршрут не построен — нажмите, чтобы узнать почему</div>
+                  ) : (
+                    <div className="mt-0.5 text-sm font-medium text-blue-200">Построение маршрута...</div>
+                  )}
+                </div>
+                <ChevronUp size={20} className="shrink-0 text-white/70" />
+              </div>
+            </div>
+          )}
+
+          {/* Expanded route panel */}
+          {routeTargets.length > 0 && !isRoutePanelCollapsed && (
+            <div className="mx-2 mb-2 max-h-[50vh] overflow-hidden overflow-y-auto rounded-2xl border border-slate-100 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-800">
+              <div className="sticky top-0 z-10 border-b border-slate-100 bg-gradient-to-r from-blue-50 to-white px-4 py-3 dark:border-slate-700 dark:from-slate-700 dark:to-slate-800">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="text-[11px] font-bold uppercase tracking-[0.22em] text-blue-600 dark:text-blue-400">Smart-Маршрут</div>
+                    <div className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-blue-100 px-1.5 text-[10px] font-bold text-blue-700 dark:bg-blue-900 dark:text-blue-300">{routeTargets.length}</div>
+                  </div>
+                  <button type="button" onClick={() => setIsRoutePanelCollapsed(true)} aria-label="Свернуть маршрут" className="rounded-lg p-1.5 text-slate-400 transition-colors active:bg-slate-200 dark:active:bg-slate-700">
+                    <ChevronDown size={16} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="px-3 py-2">
+                <div className="flex flex-col gap-2">
+                  {routeTargets.map((target, idx) => (
+                    <div key={target.id} className="flex items-center justify-between gap-2 rounded-xl border border-white/50 bg-white/60 p-2.5 shadow-sm dark:border-slate-700/50 dark:bg-slate-800/60">
+                      {routeTargets.length > 1 && (
+                        <div className="flex flex-col gap-0.5">
+                          <button type="button" onClick={() => moveRouteTarget(idx, idx - 1)} disabled={idx === 0} aria-label="Переместить точку выше"  className="rounded p-0.5 text-slate-400 disabled:opacity-20 active:bg-slate-100 dark:active:bg-slate-700">
+                            <ChevronUp size={14} />
+                          </button>
+                          <button type="button" onClick={() => moveRouteTarget(idx, idx + 1)} disabled={idx === routeTargets.length - 1} aria-label="Переместить точку ниже"  className="rounded p-0.5 text-slate-400 disabled:opacity-20 active:bg-slate-100 dark:active:bg-slate-700">
+                            <ChevronDown size={14} />
+                          </button>
+                        </div>
+                      )}
+                      <div className="cursor-pointer flex-1 min-w-0" role="button" tabIndex={0} aria-label={`Показать на карте: ${target.clinic || target.name}`} onClick={() => setFlyToTarget([target.lat, target.lng])} onKeyDown={activateOnKey(() => setFlyToTarget([target.lat, target.lng]))}>
+                        <div className="text-[13px] font-bold leading-tight text-slate-800 dark:text-white">{idx + 1}. {target.clinic || target.name}</div>
+                        <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400 truncate">{target.address}</div>
+                      </div>
+                      <button type="button" aria-label="Убрать точку из маршрута" onClick={() => removeFromRoute(target.id)} className="shrink-0 rounded-lg p-1 text-slate-400 transition-colors active:bg-red-50 dark:active:bg-red-900/30">
+                        <XCircle size={16} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex gap-2 border-y border-slate-100 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-700">
+                {TRAVEL_MODE_OPTIONS.map((mode) => (
+                  <button
+                    key={mode.id}
+                    type="button"
+                    aria-label={mode.label}
+                    aria-pressed={travelMode === mode.id}
+                    title={mode.label}
+                    onClick={() => { setTravelMode(mode.id); setRouteData(null); }}
+                    className={`flex flex-1 items-center justify-center rounded-xl py-2 transition-all ${travelMode === mode.id ? 'bg-white text-blue-600 shadow-sm dark:bg-slate-800 dark:text-blue-400' : 'text-slate-400 dark:text-slate-500'}`}
+                  >
+                    <mode.icon size={20} aria-hidden="true" />
+                  </button>
+                ))}
+              </div>
+
+              <div className="p-4 text-center">
+                {routeData ? (
+                  routeData.error ? (
+                    <RouteErrorNotice routeData={routeData} routeTargets={routeTargets} fallback="Маршрут не найден" onRetry={() => setRouteData(null)} />
+                  ) : (
+                    <>
+                      <div className="text-3xl font-extrabold tracking-tight text-slate-800 dark:text-white">{formatTime(routeData.time)}</div>
+                      <div className="mt-1 font-medium text-slate-500 dark:text-slate-400">{formatDistance(routeData.distance)} · без учёта пробок</div>
+                    </>
+                  )
+                ) : (
+                  <div className="flex items-center justify-center gap-2 py-2 opacity-60">
+                    <Loader2 className="animate-spin text-slate-400" size={20} />
+                    <span className="text-sm dark:text-slate-400">Строим маршрут...</span>
+                  </div>
+                )}
+              </div>
+
+              {renderExternalRouteLinks(routeTargets, { label: 'Открыть в:', className: 'justify-center border-t border-slate-100 px-3 py-2.5 dark:border-slate-700' })}
+
+              <div className="flex flex-col gap-2 border-t border-slate-100 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-700/50">
+                {!routeStarted ? (
+                  <button type="button" onClick={() => setIsRouteStarted(true)} disabled={!routeData || routeData.error} className="w-full rounded-xl bg-blue-600 py-3 font-semibold text-white transition-colors active:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-600 dark:active:bg-blue-500">
+                    Начать маршрут
+                  </button>
+                ) : (
+                  <button type="button" onClick={() => setIsRouteStarted(false)} className="w-full rounded-xl bg-slate-200 py-3 font-semibold text-slate-700 transition-colors active:bg-slate-300 dark:bg-slate-600 dark:text-white dark:active:bg-slate-500">
+                    Редактировать маршрут
+                  </button>
+                )}
+
+                <button type="button" onClick={clearRoute} className="w-full rounded-xl border border-slate-200 bg-white py-3 font-semibold text-red-500 transition-colors active:bg-red-50 dark:border-slate-600 dark:bg-slate-800 dark:active:bg-red-900/30">
+                  Очистить маршрут
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Navigation buttons */}
+          <div className="mobile-bottom-bar flex items-center justify-around px-2 py-2">
+            <button type="button" onClick={() => setIsMobileFiltersOpen(true)} aria-label="Открыть поиск и фильтры" className="flex flex-col items-center gap-1 rounded-2xl px-5 py-2 text-blue-600 transition-all active:bg-blue-50 dark:text-blue-400 dark:active:bg-slate-700">
+              <Search size={22} />
+              <span className="text-[11px] font-semibold">Поиск</span>
+            </button>
+            <button type="button" onClick={toggleAIAssistant} aria-label="Открыть AI-ассистента" className="flex flex-col items-center gap-1 rounded-2xl px-5 py-2 text-violet-600 transition-all active:bg-violet-50 dark:text-violet-400 dark:active:bg-slate-700">
+              <Bot size={22} />
+              <span className="text-[11px] font-semibold">Помощник</span>
+            </button>
+            <button type="button" onClick={resetToGPS} aria-label="Вернуться к моему местоположению" className={`flex flex-col items-center gap-1 rounded-2xl px-5 py-2 transition-all active:bg-blue-50 dark:active:bg-slate-700 ${(isFollowingUser && !isManualOrigin) ? 'text-blue-600 dark:text-blue-400' : 'text-slate-500 dark:text-slate-400'}`}>
+              <MapPin size={22} />
+              <span className="text-[10px] font-semibold">Местоположение</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!isMobile && !isTablet && !isSidebarCollapsed && (
+        <div className="z-[1010] flex w-2 cursor-col-resize items-center justify-center bg-slate-200 transition-colors hover:bg-blue-400 dark:bg-slate-600" onMouseDown={() => setIsDraggingPanel(true)}>
+          <div className="h-8 w-1 rounded-full bg-slate-400 transition-colors group-hover:bg-white dark:bg-slate-500 dark:group-hover:bg-slate-300" />
+        </div>
+      )}
+
+      <main className="relative flex-1 bg-slate-100 dark:bg-slate-900">
+        {!isMobile && routeTargets.length > 0 && isRoutePanelCollapsed && (
+          <div
+            className={`route-panel-slide-in absolute z-[1000] cursor-pointer ${isMobile ? 'left-3 right-3' : 'right-6 top-6'}`}
+            style={isMobile ? { bottom: 'calc(80px + env(safe-area-inset-bottom, 0px))' } : undefined}
+            role="button"
+            tabIndex={0}
+            aria-label="Развернуть маршрут"
+            onClick={() => setIsRoutePanelCollapsed(false)}
+            onKeyDown={activateOnKey(() => setIsRoutePanelCollapsed(false))}
+          >
+            <div className="flex items-center gap-3 rounded-2xl bg-gradient-to-r from-blue-600 to-blue-500 px-4 py-3 shadow-[0_4px_20px_rgba(59,130,246,0.35)] transition-transform active:scale-[0.98] dark:from-blue-700 dark:to-blue-600">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/20">
+                <Navigation size={18} className="text-white" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-blue-100">Smart-маршрут · {routeTargets.length} {routeTargets.length === 1 ? 'точка' : routeTargets.length < 5 ? 'точки' : 'точек'}</div>
+                {routeData && !routeData.error ? (
+                  <div className="mt-0.5 text-[15px] font-extrabold text-white">{formatTime(routeData.time)} <span className="font-medium text-blue-200">· {formatDistance(routeData.distance)}</span></div>
+                ) : routeData?.error ? (
+                  <div className="mt-0.5 truncate text-sm font-semibold text-red-100">Маршрут не построен — нажмите, чтобы узнать почему</div>
+                ) : (
+                  <div className="mt-0.5 text-sm font-medium text-blue-200">Построение маршрута...</div>
+                )}
+              </div>
+              <ChevronUp size={20} className="shrink-0 text-white/70" />
+            </div>
+          </div>
+        )}
+
+        {!isMobile && routeTargets.length > 0 && !isRoutePanelCollapsed && (
+          <div
+            className={`route-panel-slide-in absolute z-[1000] flex flex-col overflow-hidden border border-slate-100 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-800 ${isMobile ? 'left-2 right-2 rounded-2xl' : 'right-6 top-6 w-80 rounded-3xl'}`}
+            /*
+             * Высота ограничена: с пятью точками панель уходила за нижний край
+             * окна, и «Начать маршрут», время и «Очистить» становились
+             * недоступны. Снизу оставлено место под кнопки ИИ и геолокации.
+             */
+            style={isMobile ? { bottom: 'calc(80px + env(safe-area-inset-bottom, 0px))', maxHeight: '55vh' } : { maxHeight: 'calc(100% - 184px)' }}
+          >
+            <div className={`border-b border-slate-100 bg-gradient-to-r from-blue-50 to-white dark:border-slate-700 dark:from-slate-700 dark:to-slate-800 ${isMobile ? 'px-4 py-3' : 'px-5 py-4'}`}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="text-[11px] font-bold uppercase tracking-[0.22em] text-blue-600 dark:text-blue-400">Smart-Маршрут</div>
+                  <div className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-blue-100 px-1.5 text-[10px] font-bold text-blue-700 dark:bg-blue-900 dark:text-blue-300">{routeTargets.length}</div>
+                </div>
+                <button type="button" onClick={() => setIsRoutePanelCollapsed(true)} aria-label="Свернуть маршрут" className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 active:bg-slate-200 dark:hover:bg-slate-700">
+                  <ChevronDown size={16} />
+                </button>
+              </div>
+            </div>
+
+            {/* Route targets list */}
+            <div className={`${isMobile ? 'px-3 py-2 max-h-[30vh] overflow-y-auto' : 'min-h-0 flex-1 overflow-y-auto px-5 py-3'}`}>
+              <div className="flex flex-col gap-2">
+                {routeTargets.map((target, idx) => (
+                  <div
+                    key={target.id}
+                    {...(!isMobile ? {
+                      draggable: true,
+                      onDragStart: (e) => handleDragStart(e, idx),
+                      onDragOver: (e) => handleDragOver(e, idx),
+                      onDrop: (e) => handleDrop(e, idx),
+                      onDragEnd: handleDragEnd,
+                      onDragLeave: () => setDragOverIndex(null),
+                    } : {})}
+                    className={`flex items-center justify-between gap-2 rounded-xl p-2.5 shadow-sm border transition-all duration-200 ${
+                      !isMobile && dragOverIndex === idx && draggedTargetIndex !== idx
+                        ? 'border-blue-400 bg-blue-50/80 scale-[1.03] dark:bg-blue-900/30 dark:border-blue-500'
+                        : !isMobile && draggedTargetIndex === idx
+                          ? 'border-violet-400 bg-violet-50/60 opacity-50 scale-95 dark:bg-violet-900/30 dark:border-violet-500'
+                          : 'border-white/50 bg-white/60 dark:bg-slate-800/60 dark:border-slate-700/50'
+                    }`}
+                  >
+                    {routeTargets.length > 1 && (
+                      <div className="flex flex-col gap-0.5">
+                        <button type="button" onClick={() => moveRouteTarget(idx, idx - 1)} disabled={idx === 0} aria-label="Переместить точку выше"  className="rounded p-0.5 text-slate-400 disabled:opacity-20 active:bg-slate-100 dark:active:bg-slate-700">
+                          <ChevronUp size={14} />
+                        </button>
+                        <button type="button" onClick={() => moveRouteTarget(idx, idx + 1)} disabled={idx === routeTargets.length - 1} aria-label="Переместить точку ниже"  className="rounded p-0.5 text-slate-400 disabled:opacity-20 active:bg-slate-100 dark:active:bg-slate-700">
+                          <ChevronDown size={14} />
+                        </button>
+                      </div>
+                    )}
+                    {!isMobile && (
+                      <div className="mt-0.5 cursor-grab text-slate-400 active:cursor-grabbing">
+                        <GripVertical size={16} />
+                      </div>
+                    )}
+                    <div className="cursor-pointer flex-1 min-w-0" role="button" tabIndex={0} aria-label={`Показать на карте: ${target.clinic || target.name}`} onClick={() => setFlyToTarget([target.lat, target.lng])} onKeyDown={activateOnKey(() => setFlyToTarget([target.lat, target.lng]))}>
+                      <div className="text-[13px] font-bold leading-tight text-slate-800 dark:text-white">{idx + 1}. {target.clinic || target.name}</div>
+                      <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400 truncate">{target.address}</div>
+                    </div>
+                    <button type="button" aria-label="Убрать точку из маршрута" onClick={() => removeFromRoute(target.id)} className="shrink-0 rounded-lg p-1 text-slate-400 transition-colors hover:text-red-500 active:bg-red-50 dark:active:bg-red-900/30">
+                      <XCircle size={16} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {isManualOrigin && (
+              <div className="flex flex-col items-center border-b border-amber-100 bg-amber-50 px-4 py-2 text-center text-[13px] text-amber-700 dark:border-amber-800 dark:bg-amber-900 dark:text-amber-300">
+                <span>Маршрут от выбранной точки</span>
+                <button type="button" onClick={resetToGPS} className="mt-1 font-bold underline hover:text-amber-900">
+                  Вернуться к моей геопозиции
+                </button>
+              </div>
+            )}
+
+            <div className="flex gap-2 border-b border-slate-100 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-700">
+              {TRAVEL_MODE_OPTIONS.map((mode) => (
+                <button
+                  key={mode.id}
+                  type="button"
+                  aria-label={mode.label}
+                  aria-pressed={travelMode === mode.id}
+                  title={mode.label}
+                  onClick={() => {
+                    setTravelMode(mode.id);
+                    setRouteData(null);
+                  }}
+                  className={`flex flex-1 items-center justify-center rounded-xl py-2 transition-all ${travelMode === mode.id ? 'bg-white text-blue-600 shadow-sm dark:bg-slate-800 dark:text-blue-400' : 'text-slate-400 hover:bg-slate-100 dark:text-slate-500 dark:hover:bg-slate-600'}`}
+                >
+                  <mode.icon size={20} aria-hidden="true" />
+                </button>
+              ))}
+            </div>
+
+            <div className={`${isMobile ? 'p-4' : 'p-6'} text-center`}>
+              {routeData ? (
+                routeData.error ? (
+                  <RouteErrorNotice routeData={routeData} routeTargets={routeTargets} fallback="Маршрут для этого транспорта не найден" onRetry={() => setRouteData(null)} />
+                ) : (
+                  <>
+                    <div className={`${isMobile ? 'text-3xl' : 'text-4xl'} font-extrabold tracking-tight text-slate-800 dark:text-white`}>{formatTime(routeData.time)}</div>
+                    <div className="mt-1 font-medium text-slate-500 dark:text-slate-400">{formatDistance(routeData.distance)} · без учёта пробок</div>
+                  </>
+                )
+              ) : (
+                <div className="flex flex-col items-center justify-center py-2 opacity-60">
+                  <Loader2 className="mb-2 animate-spin text-slate-400 dark:text-slate-500" size={24} />
+                  <span className="text-sm dark:text-slate-400">Строим маршрут...</span>
+                </div>
+              )}
+            </div>
+
+            {renderExternalRouteLinks(routeTargets, { label: 'Открыть в:', className: 'justify-center border-t border-slate-100 px-4 py-3 dark:border-slate-700' })}
+
+            <div className="flex flex-col gap-2 border-t border-slate-100 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-700/50">
+              {!routeStarted ? (
+                <button type="button" onClick={() => setIsRouteStarted(true)} disabled={!routeData || routeData.error} className="w-full rounded-xl bg-blue-600 py-3 font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-600 dark:hover:bg-blue-500">
+                  Начать маршрут
+                </button>
+              ) : (
+                <button type="button" onClick={() => setIsRouteStarted(false)} className="w-full rounded-xl bg-slate-200 py-3 font-semibold text-slate-700 transition-colors hover:bg-slate-300 dark:bg-slate-600 dark:text-white dark:hover:bg-slate-500">
+                  Редактировать маршрут
+                </button>
+              )}
+
+              <button type="button" onClick={clearRoute} className="w-full rounded-xl border border-slate-200 bg-white py-3 font-semibold text-red-500 transition-colors hover:bg-red-50 dark:border-slate-600 dark:bg-slate-800 dark:hover:bg-red-900/30">
+                Очистить весь маршрут
+              </button>
+            </div>
+          </div>
+        )}
+
+        <MapContainer center={activeOrigin} zoom={13} className="h-full w-full" zoomControl attributionControl={false}>
+          {/*
+            Подпись «© OpenStreetMap» обязательна по лицензии ODbL и правилам
+            использования тайлов. Раньше она была отключена целиком; теперь
+            стоит там, где её не закрывают панели и нижнее меню.
+          */}
+          <AttributionControl position={isMobile ? 'topright' : 'bottomleft'} prefix={false} />
+          <PopupPanGuard rightPadding={!isMobile && routeTargets.length > 0 && !isRoutePanelCollapsed ? 360 : 24} />
+          <TileLayer
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          />
+
+          <Marker
+            position={activeOrigin}
+            icon={userDotIcon}
+            draggable
+            eventHandlers={{
+              dragend: (event) => {
+                const marker = event.target;
+                const position = marker.getLatLng();
+                setCustomOrigin([position.lat, position.lng]);
+                setIsManualOrigin(true);
+                setIsFollowingUser(false);
+                setRouteData(null);
+              },
+            }}
+          >
+            <Popup>
+              <div className="dark:text-white">
+                <b className="text-base text-red-600">{isManualOrigin ? 'Произвольная точка отправления' : 'Вы здесь'}</b>
+                <br />
+                <span className="mt-1 block text-xs leading-tight text-slate-500">Перетащите эту точку, чтобы изменить старт маршрута</span>
+              </div>
+            </Popup>
+          </Marker>
+
+          <MarkerClusterGroup disableClusteringAtZoom={16}>
+            {markerNodes}
+          </MarkerClusterGroup>
+
+          <RoutingMachine originLocation={activeOrigin} routeTargets={routeTargets} travelMode={travelMode} routeData={routeData} setRouteData={stableSetRouteData} />
+          <InvalidateMapSize />
+
+          <InitialCenterMap location={userLocation} />
+          {flyToTarget && (
+            <FlyToPoint
+              target={flyToTarget}
+              onDone={() => setFlyToTarget(null)}
+              // На телефоне развёрнутая панель маршрута закрывает нижнюю
+              // половину карты: точку ставим выше центра, в видимую часть.
+              offsetRatio={isMobile && routeTargets.length > 0 && !isRoutePanelCollapsed ? 0.3 : 0}
+            />
+          )}
+        </MapContainer>
+
+        {/* Кнопки на карте — скрываем на мобильных (есть bottom bar) */}
+        {!isMobile && (
+          <>
+            <button
+              type="button"
+              onClick={resetToGPS}
+              aria-label="Вернуться к моему местоположению"
+              className={`absolute bottom-6 right-6 z-[1000] rounded-full border-2 p-3 shadow-lg transition-all ${(isFollowingUser && !isManualOrigin) ? 'border-blue-700 bg-blue-600 text-white hover:bg-blue-700' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-400 dark:hover:bg-slate-600'}`}
+              title="Вернуться к моему местоположению"
+            >
+              <MapPin size={24} />
+            </button>
+
+            <button
+              type="button"
+              onClick={toggleAIAssistant}
+              aria-label="Открыть AI-ассистента"
+              aria-expanded={isAIAssistantOpen}
+              className="absolute bottom-[88px] right-6 z-[1000] rounded-full bg-violet-600 p-3 text-white shadow-[0_4px_20px_rgba(124,58,237,0.4)] transition-all hover:scale-105 hover:bg-violet-700"
+              title="AI-Ассистент"
+            >
+              <Bot size={24} />
+            </button>
+          </>
+        )}
+
+        {isAIAssistantMounted && (
+          <Suspense fallback={null}>
+            <AIAssistant
+              isOpen={isAIAssistantOpen}
+              onClose={() => setIsAIAssistantOpen(false)}
+              onApplyTriage={handleApplyTriage}
+              isMobile={isMobile}
+              avoidRoutePanel={!isMobile && routeTargets.length > 0 && !isRoutePanelCollapsed}
+            />
+          </Suspense>
+        )}
+      </main>
+
+      <Toast toast={toast} onDismiss={dismissToast} />
+    </div>
+  );
+}

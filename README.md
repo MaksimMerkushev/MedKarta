@@ -51,7 +51,7 @@ npm run preview
 
 | Переменная | Обязательна | Назначение |
 |---|---|---|
-| `OPENROUTER_API_KEY` | да | ключ провайдера LLM, читает только `api/chat.js` |
+| `OPENROUTER_API_KEY` | да | ключ провайдера LLM, читает только `backend/api/chat.js` |
 | `AI_UPSTREAM_URL` | нет | переопределение адреса провайдера |
 | `AI_MODEL` | нет | переопределение модели |
 | `ALLOWED_ORIGINS` | нет | доверенные Origin, если фронт на другом домене |

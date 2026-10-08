@@ -37,6 +37,21 @@ scratch/
 .eslintcache
 coverage/
 *.tsbuildinfo
+# Собранный дорожный граф: производное от OSM, собирается скриптом
+data/graph/
+data/*.graph
+
 # Private proprietary databases
 *.full.js
-src/*.full.js
+data/*.full.js
+
+# Журнал аналитики и прочие данные сервера во время работы
+var/
+
+# Снимки демо-источников сборщика (npm run data:collect) — не коммитим
+data/collected/demo-*.json
+# Очередь проверки сборщика: в ней сырой текст со страниц клиник,
+# в том числе то, что разбор не смог понять. Репозиторий публичный.
+data/review/
+# Рабочие файлы ассистента
+Claude outputs/

@@ -1,0 +1,44 @@
+<!doctype html>
+<!-- ДЕМО-СТРАНИЦА. Вымышленная клиника для проверки сборщика данных. -->
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Демо-Здоровье на Баумана — демонстрационная страница</title>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "MedicalClinic",
+        "name": "Демо-Здоровье",
+        "url": "https://demo-zdorovie.example",
+        "telephone": "+7 (843) 000-01-01",
+        "openingHours": ["Mo-Fr 08:00-21:00", "Sa 09:00-17:00", "Su 10:00-15:00"],
+        "address": { "@type": "PostalAddress", "addressLocality": "Казань", "streetAddress": "ул. Баумана, 101 (демо-адрес)" },
+        "geo": { "@type": "GeoCoordinates", "latitude": 55.7887, "longitude": 49.1221 }
+      },
+      { "@type": "Physician", "name": "Вересова Алина Тимуровна", "medicalSpecialty": "Терапевт", "openingHours": "Mo-Fr 14:00-21:00" },
+      { "@type": "Physician", "name": "Гарифуллин Рустем Ильдарович", "medicalSpecialty": "ЛОР", "openingHours": "Mo,We,Fr 16:00-21:00; Sa 10:00-14:00" },
+      { "@type": "Physician", "name": "Нуриева Камила Ринатовна", "medicalSpecialty": "Невролог", "openingHours": "Tu,Th 09:00-18:00" },
+      { "@type": "Physician", "name": "Соколов Глеб Аркадьевич", "medicalSpecialty": "Кардиолог", "openingHours": "Mo-Fr 09:00-15:00" }
+    ]
+  }
+  </script>
+</head>
+<body>
+  <h1>Демо-Здоровье на Баумана</h1>
+  <h2>Цены</h2>
+  <table class="price">
+    <tr><th>Услуга</th><th>Цена</th></tr>
+    <tr><td colspan="2">Терапия</td></tr>
+    <tr><td>Приём (осмотр, консультация) врача-терапевта первичный</td><td>1&nbsp;900 ₽</td></tr>
+    <tr><td>Приём терапевта повторный</td><td>1 600 ₽</td></tr>
+    <tr><td>Консультация оториноларинголога</td><td>2 200 руб.</td></tr>
+    <tr><td>Консультация оториноларинголога (повторная)</td><td>1 900 руб.</td></tr>
+    <tr><td>Приём невролога первичный</td><td>2400</td></tr>
+    <tr><td>Приём кардиолога первичный</td><td>2 500 ₽</td></tr>
+    <tr><td>ЭКГ с расшифровкой</td><td>900 ₽</td></tr>
+    <tr><td>ОАК</td><td>550 ₽</td></tr>
+  </table>
+</body>
+</html>
