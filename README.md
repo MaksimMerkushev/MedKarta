@@ -1,6 +1,6 @@
 # MedКарта — Интеллектуальная Навигация по Медицине Казани
 
-![MedKarta](https://img.shields.io/badge/MedKarta-3.0-blue?style=for-the-badge)
+![MedKarta](https://img.shields.io/badge/MedKarta-1.0-blue?style=for-the-badge)
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=for-the-badge)
 
 **MedКарта** — веб-приложение для поиска врачей и медицинских учреждений
