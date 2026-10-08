@@ -109,6 +109,39 @@ const body = buildPlannerBody({
   reasoningEffort: REASONING_EFFORTS.includes(effort) ? effort : null,
 });
 
+/*
+ * Для OpenRouter — какой ключ на самом деле используется и сколько по нему
+ * потрачено (GET /api/v1/key). По метке ключа его можно найти на
+ * openrouter.ai/keys и убедиться, что запросы идут именно туда.
+ */
+const isOpenRouter = target.host === 'openrouter.ai';
+const keyInfo = async () => {
+  try {
+    const response = await fetchImpl(new URL('/api/v1/key', target).href, {
+      method: 'GET',
+      redirect: 'error',
+      signal: AbortSignal.timeout(20_000),
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    if (!response.ok) return { error: `HTTP ${response.status}` };
+    return (await response.json())?.data || null;
+  } catch (error) {
+    return { error: error?.code || error?.name || 'ошибка' };
+  }
+};
+const money = (value) => (Number.isFinite(value) ? `$${value.toFixed(4)}` : '—');
+let keyBefore = null;
+if (isOpenRouter) {
+  keyBefore = await keyInfo();
+  if (keyBefore && !keyBefore.error) {
+    ok(`Ключ OpenRouter: ${scrub(keyBefore.label || 'без метки')} · потрачено ${money(keyBefore.usage)}${Number.isFinite(keyBefore.limit) ? ` из лимита $${keyBefore.limit}` : ''} · сегодня ${money(keyBefore.usage_daily)}`);
+  } else {
+    warn(`Сведения о ключе не получены (${keyBefore?.error || 'пустой ответ'})`);
+  }
+  // Стоимость этого запроса — в ответе (usage accounting OpenRouter).
+  body.usage = { include: true };
+}
+
 console.log('\nЗапрос к модели…');
 const started = Date.now();
 let response;
@@ -168,6 +201,7 @@ const content = typeof choice?.message?.content === 'string' ? choice.message.co
 const usage = payload?.usage || {};
 const reasoning = usage?.completion_tokens_details?.reasoning_tokens;
 ok(`Ответ за ${(elapsed / 1000).toFixed(1)} с, модель: ${payload?.model || model}${payload?.provider ? `, провайдер: ${payload.provider}` : ''}`);
+if (payload?.id) ok(`ID запроса в OpenRouter: ${scrub(payload.id)}${Number.isFinite(usage.cost) ? ` · стоимость ${money(usage.cost)}` : ''}`);
 if (Number.isFinite(usage.prompt_tokens)) {
   ok(`Токены: запрос ${usage.prompt_tokens}, ответ ${usage.completion_tokens}${Number.isFinite(reasoning) ? ` (из них рассуждения ${reasoning})` : ''}`);
 }
@@ -188,6 +222,13 @@ if (!verdict?.ok) {
   ok(`План принят валидатором: ${plan.action}, терапевт — ассистент будет работать через эту модель`);
 } else {
   warn(`План принят валидатором, но неожиданный: ${scrub(content)}`);
+}
+
+if (isOpenRouter && keyBefore && !keyBefore.error) {
+  const keyAfter = await keyInfo();
+  if (keyAfter && !keyAfter.error) {
+    ok(`Потрачено по ключу после запроса: ${money(keyAfter.usage)} (статистика на сайте OpenRouter обновляется с задержкой)`);
+  }
 }
 
 console.log(process.exitCode ? '\nЕсть проблемы — см. выше.\n' : '\nВсё в порядке.\n');

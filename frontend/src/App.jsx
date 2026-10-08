@@ -2704,12 +2704,16 @@ export default function App() {
   /*
    * Ссылки «Как добраться» в Яндекс Карты и 2ГИС. МедКарта подбирает, куда
    * обратиться; вести до двери — с пробками, автобусами и голосом — лучше
-   * умеют навигаторы. Без настоящей точки отправления ссылка строится «от
-   * моего местоположения», а не от центра Казани.
+   * умеют навигаторы.
+   *
+   * Точка отправления передаётся всегда — та же, от которой построен наш
+   * маршрут: геолокация или красный маркер, перетащенный вручную. Раньше без
+   * геолокации она не передавалась, и Яндекс спрашивал «Откуда?», а маршрут
+   * в навигаторе расходился с маршрутом на нашей карте.
    */
   const renderExternalRouteLinks = (targets, { doc = null, label = 'Как добраться:', className = '' } = {}) => {
     if (!targets || targets.length === 0) return null;
-    const origin = travelOriginKnown ? activeOrigin : null;
+    const origin = activeOrigin;
     const mode = EXTERNAL_MODE_BY_TRAVEL_MODE[travelMode] || 'auto';
     const links = [
       { provider: 'yandex', mode, text: 'Яндекс Карты' },
