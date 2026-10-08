@@ -15,6 +15,22 @@ body,
   -webkit-text-size-adjust: 100%;
 }
 
+/*
+ * Цвет текста по умолчанию и вид системных элементов (поля, полосы прокрутки)
+ * задаёт тема приложения, а не тема системы. С <meta name="color-scheme"
+ * content="light dark"> и тёмной macOS браузер красил текст по умолчанию в
+ * белый и в светлой теме: в поле ассистента набранный текст был белым на белом.
+ */
+html {
+  color-scheme: light;
+  color: #0f172a;
+}
+
+html.dark {
+  color-scheme: dark;
+  color: #f1f5f9;
+}
+
 /* iOS safe area support */
 body {
   padding-top: env(safe-area-inset-top);

@@ -257,7 +257,7 @@ export default function AIAssistant({
               }}
               placeholder="Опишите симптомы..."
               disabled={isLoading}
-              className="w-full rounded-2xl border border-slate-200 bg-slate-50 pl-4 pr-14 py-3.5 text-[15px] outline-none transition-all focus:border-violet-400 focus:ring-2 focus:ring-violet-300 dark:border-slate-600 dark:bg-slate-900 dark:text-white"
+              className="w-full rounded-2xl border border-slate-200 bg-slate-50 pl-4 pr-14 py-3.5 text-[15px] text-slate-800 caret-violet-600 outline-none transition-all placeholder:text-slate-400 focus:border-violet-400 focus:ring-2 focus:ring-violet-300 dark:border-slate-600 dark:bg-slate-900 dark:text-white dark:caret-violet-300 dark:placeholder:text-slate-500"
             />
             <button
               type="button"
@@ -335,7 +335,7 @@ export default function AIAssistant({
             }}
             placeholder="Опишите симптомы..."
             disabled={isLoading}
-            className="w-full rounded-xl border border-slate-200 bg-slate-50 pl-4 pr-10 py-2.5 text-[13px] outline-none transition-all focus:border-violet-400 focus:ring-2 focus:ring-violet-300 dark:border-slate-600 dark:bg-slate-900 dark:text-white"
+            className="w-full rounded-xl border border-slate-200 bg-slate-50 pl-4 pr-10 py-2.5 text-[13px] text-slate-800 caret-violet-600 outline-none transition-all placeholder:text-slate-400 focus:border-violet-400 focus:ring-2 focus:ring-violet-300 dark:border-slate-600 dark:bg-slate-900 dark:text-white dark:caret-violet-300 dark:placeholder:text-slate-500"
           />
           <button
             type="button"
