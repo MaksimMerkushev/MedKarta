@@ -95,6 +95,7 @@ npm run lint
 | Переменная | Назначение |
 |---|---|
 | `OPENROUTER_API_KEY`, `AI_UPSTREAM_URL`, `AI_MODEL` | внешняя модель-планировщик (необязательно) |
+| `AI_PROXY_URL` | прокси для запросов к модели с российского сервера; проверка — `npm run ai:check` |
 | `PRIVACY_OUTBOUND_MODE` | `structured` (по умолчанию) или `hybrid` |
 | `DEMO_DATA=on` | демо-клиники, цены, программы ДМС и демо-аккаунты |
 | `ACCOUNTS_REGISTRATION=on` | открыть регистрацию (сначала — юридическая подготовка, см. docs/accounts.md) |

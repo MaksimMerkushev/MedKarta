@@ -19,6 +19,7 @@ import { createEntityResolver } from './privacy/entityResolver.js';
 import { createPrivacyGateway } from './privacy/gateway.js';
 import { createStoreFromEnv, createTokenVault } from './storage/tokenVault.js';
 import { createExternalPlanner, PLANNER_ERROR } from './planner/client.js';
+import { createProxyFetch, parseProxyUrl } from './planner/proxyFetch.js';
 import { validatePlan } from './planner/validator.js';
 import { planLocally } from './planner/localPlanner.js';
 import { createCatalogRepository } from './executor/catalogRepository.js';
@@ -322,6 +323,25 @@ export const getDefaultPipeline = () => {
   return cached;
 };
 
+/*
+ * Ключ модели и способ до неё достучаться. С AI_PROXY_URL запрос к модели
+ * идёт через прокси (OpenRouter не принимает российские адреса). Если адрес
+ * прокси задан с ошибкой, внешняя модель выключается: отправлять запрос
+ * напрямую, в обход прокси, нельзя — ответит локальный планировщик.
+ */
+export const plannerTransportFromEnv = (env = process.env, logger = defaultLogger) => {
+  const apiKey = env.OPENROUTER_API_KEY || env.AI_API_KEY;
+  if (!env.AI_PROXY_URL) return { apiKey, fetchImpl: fetch };
+  try {
+    const proxy = parseProxyUrl(env.AI_PROXY_URL);
+    logger.event('planner.proxy', { status: 'enabled', provider: proxy.protocol });
+    return { apiKey, fetchImpl: createProxyFetch({ proxy }) };
+  } catch {
+    logger.warn('planner.proxy_invalid', { status: 'AI_PROXY_URL is invalid, external planner disabled' });
+    return { apiKey: undefined, fetchImpl: fetch };
+  }
+};
+
 const buildDefaultPipeline = async () => {
   const catalog = await loadCatalog();
   const vault = createTokenVault({ store: createStoreFromEnv() });
@@ -334,9 +354,10 @@ const buildDefaultPipeline = async () => {
     defaultLogger.warn('planner.default_upstream', { status: 'AI_UPSTREAM_URL not set' });
   }
   const planner = createExternalPlanner({
-    apiKey: process.env.OPENROUTER_API_KEY || process.env.AI_API_KEY,
+    ...plannerTransportFromEnv(),
     url: process.env.AI_UPSTREAM_URL || 'https://modelhub.my/v1/chat/completions',
     model: process.env.AI_MODEL || 'gpt-5.4-mini',
+    reasoningEffort: process.env.AI_REASONING_EFFORT || null,
     logger: defaultLogger,
   });
 

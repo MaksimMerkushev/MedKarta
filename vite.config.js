@@ -38,7 +38,7 @@ const devApiPlugin = (env) => ({
   name: 'medkarta-dev-api',
   apply: 'serve',
   configureServer(server) {
-    for (const key of ['OPENROUTER_API_KEY', 'AI_API_KEY', 'AI_UPSTREAM_URL', 'AI_MODEL', 'ALLOWED_ORIGINS', 'PRIVACY_TOKEN_SECRET', 'ANALYTICS', 'ANALYTICS_DIR', 'DEMO_DATA', 'ACCOUNTS', 'ACCOUNTS_DB_PATH', 'ACCOUNTS_REGISTRATION', 'COOKIE_SECURE']) {
+    for (const key of ['OPENROUTER_API_KEY', 'AI_API_KEY', 'AI_UPSTREAM_URL', 'AI_MODEL', 'AI_PROXY_URL', 'AI_REASONING_EFFORT', 'ALLOWED_ORIGINS', 'PRIVACY_TOKEN_SECRET', 'ANALYTICS', 'ANALYTICS_DIR', 'DEMO_DATA', 'ACCOUNTS', 'ACCOUNTS_DB_PATH', 'ACCOUNTS_REGISTRATION', 'COOKIE_SECURE']) {
       if (env[key] && !process.env[key]) {
         process.env[key] = env[key]
       }
