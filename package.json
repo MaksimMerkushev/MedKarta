@@ -24,6 +24,7 @@
     "test:security": "node --test tests/*.test.js && PRIVACY_OUTBOUND_MODE=hybrid node --test tests/*.test.js",
     "eval:privacy": "node scripts/privacy-eval.mjs",
     "ai:check": "node scripts/ai-check.mjs",
+    "ai:bench": "node scripts/ai-bench.mjs",
     "preview": "vite preview",
     "audit:security": "npm audit --omit=dev",
     "prices:doctors": "node scripts/generate-doctor-service-prices.mjs",
