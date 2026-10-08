@@ -82,7 +82,7 @@ Node обслуживает только `/api/`. Так статика не к�
 
 ```bash
 sudo adduser --system --group --home /srv/medkarta medkarta
-sudo -u medkarta git clone https://github.com/MaksimMerkushev/med-navigator.git /srv/medkarta/app
+sudo -u medkarta git clone https://github.com/MaksimMerkushev/MedKarta.git /srv/medkarta/app
 cd /srv/medkarta/app
 sudo -u medkarta npm ci && sudo -u medkarta npm run build
 sudo -u medkarta cp .env.example .env && sudo chmod 600 .env   # заполнить .env

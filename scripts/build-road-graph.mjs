@@ -56,7 +56,7 @@ const ENDPOINTS = [
 /** На сколько уровней максимум дробится слишком тяжёлая рамка. */
 const MAX_SPLIT_DEPTH = 3;
 
-const USER_AGENT = 'MedKarta-graph-builder/1.0 (https://github.com/MaksimMerkushev/med-navigator)';
+const USER_AGENT = 'MedKarta-graph-builder/1.0 (https://github.com/MaksimMerkushev/MedKarta)';
 
 const parseArgs = (argv) => {
   const args = {
