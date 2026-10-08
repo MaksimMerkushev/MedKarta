@@ -98,7 +98,9 @@ const recordingFetch = async (target, init) => {
     call.status = response.status;
     try {
       const payload = await response.clone().json();
-      call.content = payload?.choices?.[0]?.message?.content ?? payload?.error?.message ?? null;
+      const raw = payload?.error?.metadata?.raw;
+      call.content = payload?.choices?.[0]?.message?.content
+        ?? ([payload?.error?.message, typeof raw === 'string' ? raw : raw ? JSON.stringify(raw) : null].filter(Boolean).join(' — ') || null);
       call.usage = payload?.usage || null;
     } catch {
       call.content = null;

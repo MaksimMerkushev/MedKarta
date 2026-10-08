@@ -145,6 +145,22 @@ export const isAllowedUpstreamUrl = (value) => {
  */
 export const REASONING_EFFORTS = Object.freeze(['none', 'minimal', 'low', 'medium', 'high']);
 
+/**
+ * Тело запроса к модели. Одно на ассистента и на проверки (npm run ai:check),
+ * чтобы проверка проверяла ровно то, что отправляет ассистент.
+ */
+export const buildPlannerBody = ({ model, messages, reasoningEffort = null }) => {
+  const body = {
+    model,
+    messages,
+    response_format: { type: 'json_schema', json_schema: PLAN_JSON_SCHEMA },
+    temperature: 0,
+    max_tokens: 700,
+  };
+  if (REASONING_EFFORTS.includes(reasoningEffort)) body.reasoning = { effort: reasoningEffort };
+  return body;
+};
+
 export const createExternalPlanner = ({
   apiKey,
   url,
@@ -178,14 +194,7 @@ export const createExternalPlanner = ({
       messages.push({ role: 'system', content: hintBlock });
     }
 
-    const body = {
-      model,
-      messages,
-      response_format: { type: 'json_schema', json_schema: PLAN_JSON_SCHEMA },
-      temperature: 0,
-      max_tokens: 700,
-    };
-    if (REASONING_EFFORTS.includes(reasoningEffort)) body.reasoning = { effort: reasoningEffort };
+    const body = buildPlannerBody({ model, messages, reasoningEffort });
 
     const serialized = JSON.stringify(body);
 

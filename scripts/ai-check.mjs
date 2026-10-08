@@ -4,17 +4,21 @@
  *
  * Проверка связи с моделью: npm run ai:check
  *
- * Делает один запрос той же формы, что и ассистент (JSON по схеме), с теми
- * же настройками из .env: адрес модели, ключ, модель и прокси. Пишет, что
- * пошло не так и что поправить. В запросе нет пользовательских данных —
- * только служебная фраза «проверка связи». Ключ и пароль прокси не печатаются.
+ * Делает один запрос ровно той же формы, что и ассистент: тот же системный
+ * промпт, та же JSON-схема плана, те же параметры — и проверяет ответ тем же
+ * валидатором. Настройки из .env: адрес модели, ключ, модель и прокси. Пишет,
+ * что пошло не так и что поправить. В запросе нет пользовательских данных —
+ * только служебное описание «нужен терапевт рядом». Ключ и пароль прокси не
+ * печатаются.
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { REASONING_EFFORTS } from '../backend/planner/client.js';
+import { buildPlannerBody, REASONING_EFFORTS } from '../backend/planner/client.js';
+import { PLANNER_SYSTEM_PROMPT } from '../backend/planner/prompts.js';
+import { validatePlan } from '../backend/planner/validator.js';
 import { createProxyFetch, describeProxy, parseProxyUrl } from '../backend/planner/proxyFetch.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -95,25 +99,15 @@ const PROXY_HINTS = {
   upstream_connect: 'Соединение с моделью оборвалось на полпути.',
 };
 
-const body = {
+// Тот же запрос, что собирает ассистент (backend/planner/client.js): промпт, схема, параметры.
+const body = buildPlannerBody({
   model,
   messages: [
-    { role: 'system', content: 'Ответь строго JSON по схеме.' },
-    { role: 'user', content: 'Проверка связи: верни ok = true.' },
+    { role: 'system', content: PLANNER_SYSTEM_PROMPT },
+    { role: 'user', content: 'Пользователь ищет врача по профилю: therapist. Ограничения: selection=nearest.' },
   ],
-  response_format: {
-    type: 'json_schema',
-    json_schema: {
-      name: 'connectivity_check',
-      strict: true,
-      schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false },
-    },
-  },
-  // Те же параметры, что у ассистента (backend/planner/client.js).
-  temperature: 0,
-  max_tokens: 700,
-};
-if (REASONING_EFFORTS.includes(effort)) body.reasoning = { effort };
+  reasoningEffort: REASONING_EFFORTS.includes(effort) ? effort : null,
+});
 
 console.log('\nЗапрос к модели…');
 const started = Date.now();
@@ -147,7 +141,10 @@ try {
 }
 
 if (!response.ok) {
-  const message = scrub(payload?.error?.message || payload?.message || '');
+  // OpenRouter кладёт настоящую причину от провайдера в error.metadata.raw.
+  const raw = payload?.error?.metadata?.raw;
+  const rawText = typeof raw === 'string' ? raw : raw ? JSON.stringify(raw) : '';
+  const message = scrub([payload?.error?.message || payload?.message || '', rawText].filter(Boolean).join(' — '));
   const status = response.status;
   let hint = null;
   if (status === 401) hint = 'Ключ неверный или отозван — выпустите новый на openrouter.ai/keys.';
@@ -182,12 +179,15 @@ if (!content.trim()) {
   );
   process.exit(1);
 }
-try {
-  const parsed = JSON.parse(content);
-  if (parsed?.ok === true) ok('JSON по схеме получен — ассистент будет работать через эту модель');
-  else fail(`JSON получен, но не тот: ${scrub(content)}`, 'Модель плохо следует схеме — попробуйте другую.');
-} catch {
-  fail(`Ответ не JSON: ${scrub(content)}`, 'Модель не поддерживает ответ по JSON-схеме — выберите другую.');
+const verdict = validatePlan(content, { allowedTokens: new Set(), allowedDistricts: [] });
+const plan = verdict?.value || null;
+const steps = Array.isArray(plan?.steps) ? plan.steps : [];
+if (!verdict?.ok) {
+  fail(`План модели не прошёл проверку: ${scrub(content)}`, 'Модель плохо следует схеме плана — пришлите этот вывод.');
+} else if (plan?.action === 'FIND_DOCTOR' && steps.some((step) => step.specialty === 'therapist')) {
+  ok(`План принят валидатором: ${plan.action}, терапевт — ассистент будет работать через эту модель`);
+} else {
+  warn(`План принят валидатором, но неожиданный: ${scrub(content)}`);
 }
 
 console.log(process.exitCode ? '\nЕсть проблемы — см. выше.\n' : '\nВсё в порядке.\n');
