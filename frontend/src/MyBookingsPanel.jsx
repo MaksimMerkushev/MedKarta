@@ -12,7 +12,11 @@ export default function MyBookingsPanel({ bookings, onChange, onRoute, onClose }
   const [statuses, setStatuses] = useState({});
   const [busyNumber, setBusyNumber] = useState(null);
   const [error, setError] = useState(null);
-  const signature = bookings.map((item) => item.number).join(',');
+  /*
+   * Статус в подписи: запись, отменённую в окне записи, панель должна
+   * перепроверить, а не показывать прежний ответ сервера «подтверждена».
+   */
+  const signature = bookings.map((item) => `${item.number}:${item.status}`).join(',');
 
   useEffect(() => {
     if (!signature) return undefined;
@@ -60,7 +64,8 @@ export default function MyBookingsPanel({ bookings, onChange, onRoute, onClose }
       {error && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">{error}</p>}
       <ul className="mt-2 space-y-2">
         {bookings.map((item) => {
-          const status = statuses[item.number] || item.status;
+          // Отмену, о которой браузер уже знает, не перекрывает устаревший ответ сервера.
+          const status = item.status === 'CANCELLED' ? 'CANCELLED' : statuses[item.number] || item.status;
           return (
             <li key={item.number} className="rounded-xl bg-white p-2.5 text-xs leading-5 shadow-sm dark:bg-slate-800">
               <div className="flex items-center justify-between gap-2">

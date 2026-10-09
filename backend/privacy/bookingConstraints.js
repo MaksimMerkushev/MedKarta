@@ -49,6 +49,8 @@ const MONTHS = ['январ', 'феврал', 'март', 'апрел', 'ма[я
 
 const DATE_PATTERNS = [
   { pattern: new RegExp(`(?<!${WORD})сегодня(?!${WORD})`, 'u'), value: { kind: 'today' } },
+  { pattern: new RegExp(`(?<!${WORD})(?:на\\s+)?(?:этой|текущей)\\s+неделе(?!${WORD})`, 'u'), value: { kind: 'this_week' } },
+  { pattern: new RegExp(`(?<!${WORD})(?:на\\s+)?(?:следующей|будущей)\\s+неделе(?!${WORD})`, 'u'), value: { kind: 'next_week' } },
   { pattern: new RegExp(`(?<!${WORD})(?:завтра|завтрашн\\p{L}*)(?!${WORD})`, 'u'), value: { kind: 'tomorrow' } },
   { pattern: new RegExp(`(?<!${WORD})послезавтра(?!${WORD})`, 'u'), value: { kind: 'after_tomorrow' } },
   ...WEEKDAY_FORMS.map(([form, weekday]) => ({
@@ -156,6 +158,40 @@ const DMS_OFF = new RegExp(
 );
 const DMS_ON = new RegExp(`(?<!${WORD})(?:дмс|по\\s+(?:моей\\s+)?страховк\\p{L}*|по\\s+(?:моему\\s+)?полису(?!\\s+омс))(?!${WORD})`, 'u');
 
+/* ------------------------- Время суток ---------------------------------- */
+
+/*
+ * «Утром», «после обеда», «днём» — условие на время приёма, как «после
+ * 18:00». Раньше они молча терялись, и подбор показывал весь день.
+ */
+const TIME_OF_DAY_PATTERNS = [
+  { pattern: new RegExp(`(?<!${WORD})(?:утром|с\\s+утра|до\\s+обеда|в\\s+первой\\s+половине\\s+дня)(?!${WORD})`, 'u'), value: 'morning' },
+  { pattern: new RegExp(`(?<!${WORD})(?:после\\s+обеда|во\\s+второй\\s+половине\\s+дня)(?!${WORD})`, 'u'), value: 'afternoon' },
+  { pattern: new RegExp(`(?<!${WORD})дн[её]м(?!${WORD})`, 'u'), value: 'daytime' },
+];
+
+export const TIME_OF_DAY = Object.freeze({
+  morning: { from: null, to: '12:00' },
+  afternoon: { from: '13:00', to: null },
+  daytime: { from: '12:00', to: '17:00' },
+});
+
+/* --------------------- Процедуры и обследования ------------------------- */
+
+/*
+ * Запись на процедуру — это не «первичный приём»: другая услуга, другая
+ * длительность и цена. Профиль врача ставится, только если процедура
+ * однозначно его называет; «УЗИ» без уточнения — нет.
+ */
+const PROCEDURE_PATTERNS = [
+  { pattern: new RegExp(`(?<!${WORD})(?:подбор\\p{L}*\\s+очк\\p{L}*|подобрать\\s+очки|очки\\s+подобрать)`, 'u'), value: { serviceId: 'proc.ophthalmologist.glasses', specialty: 'ophthalmologist' } },
+  { pattern: new RegExp(`(?<!${WORD})(?:экг|электрокардиограм\\p{L}*|кардиограмм\\p{L}*)(?!${WORD})`, 'u'), value: { serviceId: 'diag.ecg', specialty: 'cardiologist' } },
+  { pattern: new RegExp(`(?<!${WORD})(?:чистк\\p{L}*\\s+зуб\\p{L}*|(?:проф\\p{L}*\\s+)?гигиен\\p{L}*\\s+(?:полости\\s+рта|зуб\\p{L}*)|профгигиен\\p{L}*)`, 'u'), value: { serviceId: 'proc.dentist.hygiene', specialty: 'dentist' } },
+  { pattern: new RegExp(`(?<!${WORD})(?:дерматоскоп\\p{L}*|(?:проверить|посмотреть|осмотр\\p{L}*)\\s+родинк\\p{L}*)`, 'u'), value: { serviceId: 'proc.dermatologist.dermatoscopy', specialty: 'dermatologist' } },
+  { pattern: new RegExp(`(?<!${WORD})промыв\\p{L}*\\s+миндалин`, 'u'), value: { serviceId: 'proc.lor.tonsils', specialty: 'lor' } },
+  { pattern: new RegExp(`(?<!${WORD})узи(?!${WORD})(?=.*(?:малого\\s+таза|гинеколог|матк|яичник))|(?:гинеколог\\p{L}*.*(?<!${WORD})узи(?!${WORD}))`, 'u'), value: { serviceId: 'proc.gynecologist.ultrasound', specialty: 'gynecologist' } },
+];
+
 /* ----------------------------- Главное --------------------------------- */
 
 /**
@@ -185,6 +221,15 @@ export const extractBookingConstraints = (text) => {
   if (dmsOff) result.dms = false;
   else if (dmsOn) result.dms = true;
 
+  const timeOfDay = lastAffirmed(lower, TIME_OF_DAY_PATTERNS);
+  if (timeOfDay) result.timeOfDay = timeOfDay;
+
+  const procedure = lastAffirmed(lower, PROCEDURE_PATTERNS);
+  if (procedure) {
+    result.serviceId = procedure.serviceId;
+    result.procedureSpecialty = procedure.specialty;
+  }
+
   if (findTrigger(lower, 'повторн') === 'affirmed') result.visit = 'repeat';
   else if (findTrigger(lower, 'первичн', 'перв\\p{L}*\\s+при[её]м') === 'affirmed') result.visit = 'first';
 
@@ -212,6 +257,8 @@ export const mergeBookingTurns = (turns) => {
     city: null,
     dms: false,
     visit: null,
+    serviceId: null,
+    procedureSpecialty: null,
     timeFrom: null,
     timeTo: null,
     evening: false,
@@ -230,10 +277,20 @@ export const mergeBookingTurns = (turns) => {
     if ('maxPrice' in booking) merged.maxPrice = booking.maxPrice;
     if ('city' in booking) merged.city = booking.city;
     if ('visit' in booking) merged.visit = booking.visit;
+    if (booking.serviceId) {
+      merged.serviceId = booking.serviceId;
+      merged.procedureSpecialty = booking.procedureSpecialty;
+    }
 
     if (booking.timeAny) {
       merged.timeFrom = null;
       merged.timeTo = null;
+      merged.evening = false;
+    }
+    if (booking.timeOfDay) {
+      // «Утром» после «вечером» — смена условия, а не их сумма.
+      merged.timeFrom = TIME_OF_DAY[booking.timeOfDay].from;
+      merged.timeTo = TIME_OF_DAY[booking.timeOfDay].to;
       merged.evening = false;
     }
     if (constraints.availableAfter) {
@@ -244,7 +301,10 @@ export const mergeBookingTurns = (turns) => {
       merged.timeTo = constraints.availableBefore;
       if (!constraints.availableAfter && merged.timeFrom && merged.timeFrom >= constraints.availableBefore) merged.timeFrom = null;
     }
-    if (constraints.evening) merged.evening = true;
+    if (constraints.evening) {
+      merged.evening = true;
+      if (!booking.timeOfDay && merged.timeTo && merged.timeTo <= '17:00') merged.timeTo = null;
+    }
     if (constraints.weekend) merged.weekend = true;
 
     if (booking.dms === false) merged.dms = false;

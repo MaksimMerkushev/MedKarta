@@ -236,6 +236,32 @@ describe('Демо-сценарии: строгий подбор', needsSqlite, 
     }
   });
 
+  it('Время суток и неделя: «утром», «после обеда», «на этой неделе» не теряются', async () => {
+    const morning = await run(await chat('терапевт во вторник утром'));
+    assert.equal(morning.request.timeTo, '12:00');
+    assert.ok(allSlots(morning).length > 0 && allSlots(morning).every((slot) => slot.day === TOMORROW && slot.start < '12:00'));
+    const afternoon = await run(await chat('невролог после обеда'));
+    assert.ok(allSlots(afternoon).every((slot) => slot.start >= '13:00'));
+    const week = await run(await chat('лор на этой неделе вечером'));
+    assert.ok(allSlots(week).length > 0 && allSlots(week).every((slot) => slot.day >= TODAY && slot.day <= '2026-10-18' && slot.start >= '17:00'));
+  });
+
+  it('Процедура — запись именно на неё, а не на первичный приём', async () => {
+    const action = await chat('нужен подбор очков');
+    assert.equal(action.booking.request.specialty, 'ophthalmologist');
+    assert.equal(action.booking.request.serviceId, 'proc.ophthalmologist.glasses');
+    const result = await run(action);
+    assert.equal(result.status, 'ok');
+    for (const slot of allSlots(result)) {
+      assert.equal(slot.serviceId, 'proc.ophthalmologist.glasses');
+      assert.equal(slot.option.service.durationMinutes, 30);
+    }
+    // У терапевта ЭКГ нет — честное «эти врачи не оказывают», а не другой врач.
+    const ecg = await run(await chat('ЭКГ у терапевта'));
+    assert.equal(ecg.status, 'empty');
+    assert.equal(ecg.blocking.key, 'service');
+  });
+
   it('Город вне покрытия (Иннополис) — честно, без молчаливой подмены Казанью', async () => {
     const action = await chat('нужен терапевт в Иннополисе');
     assert.match(action.replyText, /Иннополис — вне покрытия/);

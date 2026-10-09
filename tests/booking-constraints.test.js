@@ -48,6 +48,18 @@ describe('Условия записи из текста', () => {
     ['добрый вечер, нужен педиатр', {}],
     ['до 18', {}],
     ['до 20 минут', {}],
+    ['педиатр в понедельник утром', { date: { kind: 'weekday', weekday: 1 }, timeOfDay: 'morning' }],
+    ['терапевт до обеда', { timeOfDay: 'morning' }],
+    ['невролог после обеда', { timeOfDay: 'afternoon' }],
+    ['днём в среду', { date: { kind: 'weekday', weekday: 3 }, timeOfDay: 'daytime' }],
+    ['доброе утро, нужен терапевт', {}],
+    ['на этой неделе', { date: { kind: 'this_week' } }],
+    ['на следующей неделе', { date: { kind: 'next_week' } }],
+    ['подбор очков', { serviceId: 'proc.ophthalmologist.glasses', procedureSpecialty: 'ophthalmologist' }],
+    ['сделать ЭКГ', { serviceId: 'diag.ecg', procedureSpecialty: 'cardiologist' }],
+    ['профессиональная чистка зубов', { serviceId: 'proc.dentist.hygiene', procedureSpecialty: 'dentist' }],
+    ['к гинекологу на УЗИ', { serviceId: 'proc.gynecologist.ultrasound', procedureSpecialty: 'gynecologist' }],
+    ['УЗИ брюшной полости', {}],
   ];
   for (const [text, expected] of cases) {
     it(`«${text}»`, () => {
@@ -62,6 +74,15 @@ describe('Условия записи из текста', () => {
       assert.equal(constraints.availableAfter, undefined, text);
     }
     assert.equal(extractConstraints('до 18:30').availableBefore, '18:30');
+  });
+
+  it('время суток заменяет прежнее условие на время, а не складывается с ним', () => {
+    const turns = ['ЛОР вечером', 'нет, лучше утром']
+      .map((text) => ({ booking: extractBookingConstraints(text), constraints: extractConstraints(text) }));
+    const merged = mergeBookingTurns(turns);
+    assert.equal(merged.evening, false);
+    assert.equal(merged.timeFrom, null);
+    assert.equal(merged.timeTo, '12:00');
   });
 
   it('слияние реплик: поздняя важнее, снятие обнуляет', () => {

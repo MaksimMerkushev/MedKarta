@@ -531,9 +531,14 @@ export const createPrivacyGateway = ({
      * это смена врача, а не два врача сразу.
      */
     const lastSpecialties = [...perTurnSpecialties].reverse().find((keys) => keys.length > 0) || [];
+    const mergedBooking = mergeBookingTurns(userTexts.map((text, index) => ({ booking: extractBookingConstraints(text), constraints: turnConstraints[index] })));
+    // «Подбор очков» без слова «офтальмолог»: профиль однозначно задан процедурой.
+    const bookingSpecialties = lastSpecialties.length > 0
+      ? lastSpecialties
+      : mergedBooking.procedureSpecialty ? [mergedBooking.procedureSpecialty] : [];
     const booking = {
-      ...mergeBookingTurns(userTexts.map((text, index) => ({ booking: extractBookingConstraints(text), constraints: turnConstraints[index] }))),
-      specialties: lastSpecialties.filter((key) => key in SPECIALTY_CANON),
+      ...mergedBooking,
+      specialties: bookingSpecialties.filter((key) => key in SPECIALTY_CANON),
       child: Boolean(classification.isChild),
       medicalText: Boolean(classification.hasMedicalText),
     };

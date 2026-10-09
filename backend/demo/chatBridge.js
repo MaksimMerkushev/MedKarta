@@ -35,7 +35,7 @@ const resolveCalendarDate = ({ month, dayOfMonth }, today) => {
 };
 
 const hasBookingCue = (booking) =>
-  Boolean(booking.date || booking.timeFrom || booking.timeTo || booking.evening || booking.maxPrice || booking.dms || booking.city);
+  Boolean(booking.date || booking.timeFrom || booking.timeTo || booking.evening || booking.maxPrice || booking.dms || booking.city || booking.serviceId);
 
 /**
  * {request, doctorLabel} — запрос строгого подбора — или null, если ответ ассистента — не о записи
@@ -50,7 +50,9 @@ export const buildBookingRequest = ({ booking, execution, now }) => {
   if (!booking) return null;
   const action = execution?.action;
   const clarifying = action === 'CLARIFY' && hasBookingCue(booking);
-  if (!BOOKING_ACTIONS.has(action) && !clarifying) return null;
+  // «Подбор очков», «ЭКГ»: модель видит в этом услугу, а запись — на процедуру к врачу.
+  const procedure = action === 'SEARCH_SERVICE' && Boolean(booking.serviceId);
+  if (!BOOKING_ACTIONS.has(action) && !clarifying && !procedure) return null;
 
   // Несколько профилей в одной реплике — это маршрут по нескольким врачам, не одна запись.
   if (booking.specialties.length > 1) return null;
@@ -76,6 +78,7 @@ export const buildBookingRequest = ({ booking, execution, now }) => {
   const { request: normalized } = normalizeSearchRequest({
     specialty,
     doctorId,
+    serviceId: booking.serviceId || null,
     visit: booking.visit || 'first',
     patient: booking.child ? 'child' : 'adult',
     date,

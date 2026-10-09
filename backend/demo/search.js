@@ -70,6 +70,8 @@ export const resolveDays = (request, today, windowSize = SLOT_WINDOW_DAYS) => {
   else if (date.kind === 'after_tomorrow') days = [addDays(today, 2)];
   else if (date.kind === 'weekday') days = [window.find((day) => weekdayOf(day) === date.weekday)].filter(Boolean);
   else if (date.kind === 'date') days = window.includes(date.day) ? [date.day] : [];
+  else if (date.kind === 'this_week') days = window.slice(0, 8 - weekdayOf(today));
+  else if (date.kind === 'next_week') days = window.slice(8 - weekdayOf(today), 15 - weekdayOf(today));
   else days = window;
   if (request.weekend || date.kind === 'weekend') days = days.filter((day) => weekdayOf(day) >= 6);
   return days;
@@ -83,7 +85,8 @@ const timeWindow = (request) => {
   return [from, to];
 };
 
-const serviceFor = (doctor, visit) => {
+const serviceFor = (doctor, visit, serviceId = null) => {
+  if (serviceId) return doctor.serviceIds.includes(serviceId) ? [serviceId] : [];
   const first = `consult.${doctor.specialtyKey}.first`;
   const repeat = `consult.${doctor.specialtyKey}.repeat`;
   if (visit === 'first') return doctor.serviceIds.includes(first) ? [first] : [];
@@ -156,7 +159,7 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
     let candidates = stage('specialty', doctorPairs(request));
     candidates = stage('age', candidates.filter(({ doctor }) => doctor.ageGroups.includes(request.patient)));
     candidates = stage('service', candidates
-      .map((item) => ({ ...item, serviceIds: serviceFor(item.doctor, request.visit) }))
+      .map((item) => ({ ...item, serviceIds: serviceFor(item.doctor, request.visit, request.serviceId) }))
       .filter((item) => item.serviceIds.length > 0));
 
     // Цена — по каждой услуге отдельно: процедура дороже приёма.

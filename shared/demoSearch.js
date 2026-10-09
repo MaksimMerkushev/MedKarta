@@ -10,9 +10,10 @@
  */
 
 import { SPECIALTY_KEYS } from './specialties.js';
+import { SERVICE_BY_ID } from './services.js';
 
 export const VISIT_KINDS = Object.freeze(['first', 'repeat', 'procedure', 'any']);
-export const DATE_KINDS = Object.freeze(['any', 'today', 'tomorrow', 'after_tomorrow', 'weekday', 'weekend', 'date']);
+export const DATE_KINDS = Object.freeze(['any', 'today', 'tomorrow', 'after_tomorrow', 'weekday', 'weekend', 'this_week', 'next_week', 'date']);
 export const TRAVEL_MODES = Object.freeze(['driving', 'foot', 'bike']);
 
 /*
@@ -57,7 +58,15 @@ export const normalizeSearchRequest = (raw = {}) => {
   if (input.specialty != null && !specialty) errors.push('specialty');
 
   const doctorId = typeof input.doctorId === 'string' && DOCTOR.test(input.doctorId) ? input.doctorId : null;
-  const visit = VISIT_KINDS.includes(input.visit) ? input.visit : 'first';
+  /*
+   * Конкретная процедура или обследование («подбор очков», «ЭКГ»): запись
+   * только на эту услугу. Неизвестная услуга — ошибка, а не «первичный приём».
+   */
+  const serviceId = typeof input.serviceId === 'string' && /^(?:proc|diag)\./.test(input.serviceId) && Object.hasOwn(SERVICE_BY_ID, input.serviceId)
+    ? input.serviceId
+    : null;
+  if (input.serviceId != null && !serviceId) errors.push('serviceId');
+  const visit = serviceId ? 'procedure' : VISIT_KINDS.includes(input.visit) ? input.visit : 'first';
   const patient = input.patient === 'child' ? 'child' : 'adult';
 
   const dateInput = input.date && typeof input.date === 'object' ? input.date : { kind: 'any' };
@@ -101,7 +110,7 @@ export const normalizeSearchRequest = (raw = {}) => {
   const limit = Number.isInteger(input.limit) ? Math.min(Math.max(input.limit, 1), MAX_RESULTS) : MAX_RESULTS;
 
   return {
-    request: { specialty, doctorId, visit, patient, date, timeFrom, timeTo, evening, weekend, maxPrice, dms, travel, origin, city, limit },
+    request: { specialty, doctorId, serviceId, visit, patient, date, timeFrom, timeTo, evening, weekend, maxPrice, dms, travel, origin, city, limit },
     errors,
   };
 };
@@ -116,17 +125,24 @@ export const describeRequest = (request, { specialtyLabel = (key) => key, planNa
   const parts = [];
   if (request.specialty) parts.push(specialtyLabel(request.specialty));
   if (request.patient === 'child') parts.push('детский приём');
+  if (request.serviceId) parts.push(SERVICE_BY_ID[request.serviceId]?.name || 'процедура');
+  else if (request.visit === 'procedure') parts.push('процедура или обследование');
   if (request.visit === 'repeat') parts.push('повторный приём');
   const date = request.date || { kind: 'any' };
   if (date.kind === 'today') parts.push('сегодня');
   if (date.kind === 'tomorrow') parts.push('завтра');
   if (date.kind === 'after_tomorrow') parts.push('послезавтра');
   if (date.kind === 'weekday') parts.push(`в ${WEEKDAYS_ACC[date.weekday]}`);
+  if (date.kind === 'this_week') parts.push('на этой неделе');
+  if (date.kind === 'next_week') parts.push('на следующей неделе');
   if (date.kind === 'date') parts.push(date.day.split('-').reverse().join('.'));
-  if (request.weekend || date.kind === 'weekend') parts.push('в выходные');
-  if (request.timeFrom) parts.push(`после ${request.timeFrom}`);
+  // «В субботу» уже говорит о выходных — второй раз не повторяем.
+  const weekendDay = date.kind === 'weekday' && date.weekday >= 6;
+  if ((request.weekend || date.kind === 'weekend') && !weekendDay) parts.push('в выходные');
+  if (request.timeFrom && request.timeTo) parts.push(`с ${request.timeFrom} до ${request.timeTo}`);
+  else if (request.timeFrom) parts.push(`после ${request.timeFrom}`);
   else if (request.evening) parts.push(`вечером (с ${EVENING_FROM})`);
-  if (request.timeTo) parts.push(`до ${request.timeTo}`);
+  if (request.timeTo && !request.timeFrom) parts.push(`до ${request.timeTo}`);
   if (request.maxPrice) parts.push(`до ${request.maxPrice.toLocaleString('ru-RU')} ₽`);
   if (request.dms?.required) parts.push(planName ? `по ДМС «${planName}»` : 'по ДМС');
   if (request.travel?.maxMinutes) {
