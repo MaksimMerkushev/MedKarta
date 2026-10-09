@@ -76,7 +76,7 @@ const upstreamHandler = (req, res) => {
 };
 
 /* HTTP-прокси с CONNECT и Basic-авторизацией. Запоминает, что видел. */
-const createConnectProxy = ({ refuse = false } = {}) => {
+const createConnectProxy = ({ refuse = false, stallFirst = false } = {}) => {
   const seen = [];
   const server = http.createServer((req, res) => {
     res.writeHead(405);
@@ -84,6 +84,11 @@ const createConnectProxy = ({ refuse = false } = {}) => {
   });
   server.on('connect', (req, client, head) => {
     seen.push({ authority: req.url, auth: req.headers['proxy-authorization'] || null, headers: Object.keys(req.headers) });
+    // Первое подключение «зависает»: прокси принял CONNECT и молчит.
+    if (stallFirst && seen.length === 1) {
+      client.on('error', () => {});
+      return;
+    }
     const expected = `Basic ${Buffer.from(`${USER}:${PASS}`).toString('base64')}`;
     if (req.headers['proxy-authorization'] !== expected) {
       client.end('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic\r\n\r\n');
@@ -259,7 +264,35 @@ describe('Прокси для модели: туннель', () => {
     const refusing = createConnectProxy({ refuse: true });
     const port = await listen(refusing.server);
     await assert.rejects(createProxyFetch({ proxy: `${USER}:${PASS}@127.0.0.1:${port}` })(`http://127.0.0.1:${upstreamPort}/`), (error) => error.code === 'proxy_refused');
+    // Отказ — это ответ прокси, а не сбой связи: не повторяется.
+    assert.equal(refusing.seen.length, 1);
     await close(refusing.server);
+  });
+
+  it('зависшее подключение к прокси повторяется один раз', async () => {
+    const flaky = createConnectProxy({ stallFirst: true });
+    const port = await listen(flaky.server);
+    const response = await createProxyFetch({ proxy: `${USER}:${PASS}@127.0.0.1:${port}`, connectTimeoutMs: 300 })(`http://127.0.0.1:${upstreamPort}/ok`);
+    assert.equal(response.status, 201);
+    // Первый CONNECT остался без ответа — до «модели» дошёл только второй.
+    assert.equal(flaky.seen.length, 2);
+    await close(flaky.server);
+  });
+
+  it('повторов не больше заданного: молчащий прокси — два подключения, затем proxy_timeout', async () => {
+    let connections = 0;
+    const silent = net.createServer((socket) => {
+      connections += 1;
+      socket.on('error', () => {});
+      socket.resume();
+    });
+    const port = await listen(silent);
+    await assert.rejects(createProxyFetch({ proxy: `127.0.0.1:${port}`, connectTimeoutMs: 200 })(`http://127.0.0.1:${upstreamPort}/`), (error) => error.code === 'proxy_timeout');
+    assert.equal(connections, 2);
+    connections = 0;
+    await assert.rejects(createProxyFetch({ proxy: `127.0.0.1:${port}`, connectTimeoutMs: 200, connectRetries: 0 })(`http://127.0.0.1:${upstreamPort}/`), (error) => error.code === 'proxy_timeout');
+    assert.equal(connections, 1);
+    await close(silent);
   });
 
   it('прокси недоступен — proxy_connect; молчит — proxy_timeout', async () => {

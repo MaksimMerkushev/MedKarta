@@ -14,7 +14,7 @@
  * ослабить «завтра», «после 18:00», «по ДМС» или «до 3000 ₽».
  */
 
-import { describeRequest, normalizeSearchRequest } from '../../shared/demoSearch.js';
+import { describeRequest, LOCALITIES, normalizeSearchRequest } from '../../shared/demoSearch.js';
 import { SPECIALTY_CANON } from '../../shared/specialties.js';
 import { addDays, moscowDay } from './time.js';
 
@@ -109,7 +109,12 @@ export const summarizeBooking = ({ request, doctorLabel = null }) => [
 export const bookingReplyText = ({ request, doctorLabel = null, booking }) => {
   const parts = [];
   const summary = summarizeBooking({ request, doctorLabel });
-  if (!request.specialty && !request.doctorId) {
+  const locality = request.city ? LOCALITIES[request.city] : null;
+  if (locality && !locality.covered) {
+    // Город вне покрытия: не обещаем «подбор ниже» — сразу говорим как есть.
+    parts.push(`Понял запрос: ${summary.join(', ')}.`);
+    parts.push(`${locality.name} — вне покрытия: демо-клиники и карта дорог МедКарты есть только по Казани. Искать в Казани вместо этого — только если скажете.`);
+  } else if (!request.specialty && !request.doctorId) {
     parts.push('Подберу врача и свободное время. Подскажите, какой специалист нужен?');
     if (summary.length > 0) parts.push(`Условия, которые я учту: ${summary.join(', ')}.`);
   } else {

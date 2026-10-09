@@ -302,13 +302,21 @@ const decode = (buffer, encoding, limit) => {
  * @param {object} options
  * @param {string|object} options.proxy адрес прокси (см. parseProxyUrl) или результат разбора
  * @param {number} [options.connectTimeoutMs] подключение к прокси, туннель и TLS
+ * @param {number} [options.connectRetries] повторов при зависшем или оборванном
+ *   подключении к прокси. Повтор безопасен: до модели запрос ещё не дошёл.
  * @param {number} [options.idleTimeoutMs] тишина в соединении после отправки запроса
  * @param {number} [options.maxResponseBytes] потолок ответа (после распаковки)
  * @param {object} [options.tlsOptions] дополнительные параметры TLS (в тестах — свой ca)
  */
 export const createProxyFetch = ({
   proxy,
-  connectTimeoutMs = 10_000,
+  /*
+   * Рукопожатие с исправным прокси занимает доли секунды. Раньше ждали 10 с
+   * и сразу сдавались — пользователь 10–15 с смотрел на «Думаю…», хотя
+   * повторное подключение обычно проходит сразу. Теперь 5 с и один повтор.
+   */
+  connectTimeoutMs = 5_000,
+  connectRetries = 1,
   idleTimeoutMs = 30_000,
   maxResponseBytes = 2 * 1024 * 1024,
   tlsOptions = {},
@@ -316,7 +324,24 @@ export const createProxyFetch = ({
   const config = typeof proxy === 'string' ? parseProxyUrl(proxy) : proxy;
   if (!config?.host || !config?.port || !['http', 'socks5'].includes(config.protocol)) throw configError('Не задан адрес прокси.');
 
+  const attempt = createProxyAttempt({ config, connectTimeoutMs, idleTimeoutMs, maxResponseBytes, tlsOptions });
   return async function proxyFetch(input, init = {}) {
+    for (let retry = 0; ; retry += 1) {
+      try {
+        return await attempt(input, init);
+      } catch (error) {
+        const handshake = error instanceof ProxyFetchError && RETRYABLE_HANDSHAKE.has(error.code);
+        if (!handshake || retry >= connectRetries || init.signal?.aborted) throw error;
+      }
+    }
+  };
+};
+
+/* Ошибки до отправки запроса модели: прокси не ответил или оборвал подключение. */
+const RETRYABLE_HANDSHAKE = new Set(['proxy_timeout', 'proxy_connect']);
+
+const createProxyAttempt = ({ config, connectTimeoutMs, idleTimeoutMs, maxResponseBytes, tlsOptions }) =>
+  async function proxyAttempt(input, init = {}) {
     const target = new URL(typeof input === 'string' ? input : input?.url ?? String(input));
     if (target.protocol !== 'https:' && target.protocol !== 'http:') throw new TypeError('proxyFetch: только http и https.');
     const secure = target.protocol === 'https:';
@@ -447,4 +472,3 @@ export const createProxyFetch = ({
       if (onAbort) signal?.removeEventListener('abort', onAbort);
     }
   };
-};

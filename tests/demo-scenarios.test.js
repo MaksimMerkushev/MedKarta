@@ -237,7 +237,10 @@ describe('Демо-сценарии: строгий подбор', needsSqlite, 
   });
 
   it('Город вне покрытия (Иннополис) — честно, без молчаливой подмены Казанью', async () => {
-    const result = await run(await chat('нужен терапевт в Иннополисе'));
+    const action = await chat('нужен терапевт в Иннополисе');
+    assert.match(action.replyText, /Иннополис — вне покрытия/);
+    assert.doesNotMatch(action.replyText, /подбор ниже/);
+    const result = await run(action);
     assert.equal(result.status, 'out_of_coverage');
     assert.match(result.message, /Иннополис/);
     assert.equal(result.options, undefined);
