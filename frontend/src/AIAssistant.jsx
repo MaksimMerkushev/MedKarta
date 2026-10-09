@@ -7,6 +7,7 @@ import { Bot, X, Send, Loader2 } from 'lucide-react';
 import { analyzeSymptoms } from './services/ai';
 import { LIMITS } from '@shared/contract.js';
 import TopPicks from './TopPicks';
+import DemoOffers from './DemoOffers';
 
 const bumpId = (ref) => {
   ref.current += 1;
@@ -47,6 +48,13 @@ export default function AIAssistant({
   onFocusPick,
   onRoutePick,
   onShowAllPicks,
+  bookings = null,
+  bookingOrigin = null,
+  bookingPlanId = null,
+  bookingsRefresh = 0,
+  onBookOption,
+  onSelectPlan,
+  onRequestOrigin,
 }) {
   const [messages, setMessages] = useState([GREETING]);
   // У каждой реплики свой id: к ответу ассистента привязывается подборка «топ-3».
@@ -171,7 +179,21 @@ export default function AIAssistant({
               {msg.content}
             </div>
           </div>
-          {msg.role === 'assistant' && picks?.[msg.id] && (
+          {msg.role === 'assistant' && bookings?.[msg.id] && (
+            <DemoOffers
+              booking={bookings[msg.id]}
+              origin={bookingOrigin}
+              planId={bookingPlanId}
+              refreshKey={bookingsRefresh}
+              compact={!isMobile}
+              autoScroll={msg.id === messages[messages.length - 1]?.id}
+              onSelectPlan={onSelectPlan}
+              onBook={onBookOption}
+              onFocus={(option) => onFocusPick?.({ lat: option.clinic.lat, lng: option.clinic.lng })}
+              onRequestOrigin={onRequestOrigin}
+            />
+          )}
+          {msg.role === 'assistant' && !bookings?.[msg.id] && picks?.[msg.id] && (
             <TopPicks
               state={picks[msg.id]}
               compact={!isMobile}
@@ -282,7 +304,7 @@ export default function AIAssistant({
   // Десктоп/планшет: popup
   return (
     <div
-      className="absolute bottom-20 right-6 z-[1050] w-[350px] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl transition-all dark:border-slate-700 dark:bg-slate-800"
+      className={`absolute bottom-20 right-6 z-[1050] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl transition-all dark:border-slate-700 dark:bg-slate-800 ${bookings ? 'w-[380px]' : 'w-[350px]'}`}
       // Открытая панель маршрута занимает правый верхний угол (320 px + отступы):
       // окно встаёт левее, а не поверх точек маршрута.
       style={avoidRoutePanel ? { right: 360 } : undefined}
@@ -311,7 +333,8 @@ export default function AIAssistant({
         </button>
       </div>
 
-      <div className="h-[400px] max-h-[55vh] overflow-y-auto p-4 scrollbar-thin" aria-live="polite">
+      {/* В режиме записи под ответом — карточки со временем приёма: окно выше. */}
+      <div className={`${bookings ? 'h-[480px] max-h-[62vh]' : 'h-[400px] max-h-[55vh]'} overflow-y-auto p-4 scrollbar-thin`} aria-live="polite">
         {renderMessages('py-2.5 text-[13px]')}
       </div>
 

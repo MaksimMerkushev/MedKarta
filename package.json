@@ -26,6 +26,8 @@
     "ai:check": "node scripts/ai-check.mjs",
     "ai:bench": "node scripts/ai-bench.mjs",
     "ai:trace": "node scripts/ai-trace.mjs",
+    "demo:generate": "node scripts/demo-generate.mjs",
+    "demo:reset": "node scripts/demo-reset.mjs",
     "preview": "vite preview",
     "audit:security": "npm audit --omit=dev",
     "prices:doctors": "node scripts/generate-doctor-service-prices.mjs",

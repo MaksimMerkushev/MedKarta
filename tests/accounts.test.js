@@ -16,7 +16,7 @@ import { createAccountHandler, createFailureCounter, parseCookies, SESSION_COOKI
 import { createRateLimiter } from '../backend/http/rateLimit.js';
 
 const DatabaseSync = await loadSqlite();
-const PLANS = new Set(['demo-strakh-optimum', 'demo-primer-family', 'demo-strakh-kids', 'demo-strakh-basic']);
+const PLANS = new Set(['demo-basic', 'demo-standard', 'demo-premium']);
 
 const makeService = ({ now = () => Date.now() } = {}) => {
   const store = createSqliteAccountStore({ DatabaseSync, file: ':memory:' });
@@ -143,7 +143,7 @@ describe('Кабинет: программа ДМС и избранное', () =
     const { service } = makeService();
     const { session } = await service.register({ email: 'g@h.ru', password: 'пароль-пароль', displayName: 'Г', consent: true });
     const user = service.sessionUser(session.token);
-    assert.equal(service.updateProfile(user, { dmsPlanId: 'demo-strakh-optimum' }).user.dmsPlanId, 'demo-strakh-optimum');
+    assert.equal(service.updateProfile(user, { dmsPlanId: 'demo-standard' }).user.dmsPlanId, 'demo-standard');
     assert.equal(service.updateProfile(user, { dmsPlanId: null }).user.dmsPlanId, null);
     assert.throws(() => service.updateProfile(user, { dmsPlanId: 'no-such-plan' }), (error) => error.code === 'unknown_plan');
     assert.throws(() => service.updateProfile(user, { dmsPlanId: "x'; DROP TABLE users;--" }), (error) => error.code === 'unknown_plan');
@@ -197,7 +197,7 @@ describe('Кабинет: демо-аккаунты', () => {
     assert.equal(service.seedDemoAccounts(), DEMO_ACCOUNTS.length);
     assert.equal(service.seedDemoAccounts(), 0, 'повторный запуск не плодит аккаунты');
     const anna = service.demoLogin('anna');
-    assert.equal(anna.user.dmsPlanId, 'demo-strakh-optimum');
+    assert.equal(anna.user.dmsPlanId, 'demo-standard');
     assert.equal(anna.user.isDemo, true);
     assert.ok(anna.favorites.length > 0);
     assert.ok(DEMO_ACCOUNTS.every((account) => account.email.endsWith('@medkarta.example')));
@@ -209,10 +209,10 @@ describe('Кабинет: демо-аккаунты', () => {
 
     // Изменения одного зрителя не видны следующему: вход возвращает демо к исходному.
     const annaUser = store.getUserByDemoKey('anna');
-    service.updateProfile(annaUser, { dmsPlanId: 'demo-strakh-basic' });
+    service.updateProfile(annaUser, { dmsPlanId: 'demo-basic' });
     service.updateFavorites(annaUser, { action: 'remove', ids: anna.favorites });
     const again = service.demoLogin('anna');
-    assert.equal(again.user.dmsPlanId, 'demo-strakh-optimum');
+    assert.equal(again.user.dmsPlanId, 'demo-standard');
     assert.deepEqual([...again.favorites].sort(), [...anna.favorites].sort());
     assert.throws(() => service.deleteAccount(store.getUserByDemoKey('anna')), (error) => error.code === 'demo_account');
   });
@@ -299,15 +299,15 @@ describe('Кабинет: HTTP', () => {
     assert.ok(value && value.length >= 40);
     const me = await (await call('/api/account', { cookie: `${SESSION_COOKIE}=${value}` })).json();
     assert.equal(me.user.displayName, 'Семья Демо');
-    assert.equal(me.user.dmsPlanId, 'demo-primer-family');
+    assert.equal(me.user.dmsPlanId, 'demo-premium');
     assert.equal(JSON.stringify(me).includes('passwordHash'), false);
   });
 
   it('смена программы ДМС и избранное', async () => {
     const { value } = cookieFrom(await call('/api/auth/demo', { method: 'POST', body: { account: 'basic' } }));
     const cookie = `${SESSION_COOKIE}=${value}`;
-    const patched = await (await call('/api/account', { method: 'PATCH', body: { dmsPlanId: 'demo-strakh-optimum' }, cookie })).json();
-    assert.equal(patched.user.dmsPlanId, 'demo-strakh-optimum');
+    const patched = await (await call('/api/account', { method: 'PATCH', body: { dmsPlanId: 'demo-standard' }, cookie })).json();
+    assert.equal(patched.user.dmsPlanId, 'demo-standard');
     const favorites = await (await call('/api/account/favorites', { method: 'POST', body: { action: 'add', ids: ['demo-doc-x'] }, cookie })).json();
     assert.deepEqual(favorites.favorites, ['demo-doc-x']);
     const bad = await call('/api/account', { method: 'PATCH', body: { dmsPlanId: 'evil' }, cookie });

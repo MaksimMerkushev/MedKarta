@@ -34,16 +34,26 @@ export const setDemoPreference = (enabled) => {
   }
 };
 
-export const fetchServerDemoFlag = async () => {
+/**
+ * Флаги сервера: демо-набор, симуляция записи и скрыты ли государственные
+ * клиники (в демо по умолчанию скрыты, PUBLIC_CLINICS=on — показать).
+ */
+export const fetchServerConfig = async () => {
+  const fallback = { demo: false, booking: false, publicClinics: true };
   try {
     const response = await fetch('/api/config', { credentials: 'same-origin' });
-    if (!response.ok) return false;
+    if (!response.ok) return fallback;
     const payload = await response.json();
-    return payload?.demo === true;
+    return {
+      demo: payload?.demo === true,
+      booking: payload?.booking === true,
+      publicClinics: payload?.publicClinics !== false,
+    };
   } catch {
-    return false;
+    return fallback;
   }
 };
+
 
 /** Загружает и разворачивает демо-набор отдельным чанком. */
 export const loadDemoData = async () => {

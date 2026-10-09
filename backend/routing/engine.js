@@ -342,6 +342,15 @@ export const createRoutingEngine = ({ graph, maxExpansions = DEFAULT_MAX_EXPANSI
       });
     },
 
+    /**
+     * Лежит ли точка у дороги (не дальше MAX_SNAP_DISTANCE_M). Нужна, чтобы
+     * отличить «точка вне карты» от «все цели дальше потолка времени».
+     */
+    snapsToNetwork(point, mode = 'driving') {
+      const profile = PROFILE_NAMES.includes(mode) ? mode : 'driving';
+      return Boolean(point && Number.isFinite(point.lat) && Number.isFinite(point.lng) && snapPoint(point, profile));
+    },
+
     stats() {
       return {
         nodes: graph.nodeCount,

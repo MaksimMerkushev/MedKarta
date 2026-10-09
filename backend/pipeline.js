@@ -27,6 +27,9 @@ import { createPolicyEngine } from './executor/policyEngine.js';
 import { createExecutor } from './executor/actions.js';
 import { createRoutingProviderFromEnv } from './executor/routing.js';
 import { buildEmergencyAction, buildUiAction } from './executor/resultBuilder.js';
+import { bookingModeFromEnv, bookingReplyText, buildBookingRequest, summarizeBooking } from './demo/chatBridge.js';
+import { demoNow } from './demo/time.js';
+import { publicClinicsHidden } from './demo/flags.js';
 import { logger as defaultLogger } from './observability/safeLogger.js';
 import { metrics as defaultMetrics } from './observability/metrics.js';
 
@@ -43,6 +46,12 @@ export const createPipeline = ({
   logger = defaultLogger,
   metrics = defaultMetrics,
   outboundMode = undefined,
+  /*
+   * Демо-запись: ответ на «нужен ЛОР завтра после 18:00» несёт запрос
+   * строгого подбора (action.booking), который интерфейс исполняет через
+   * /api/demo/search. now — «текущее» время демо (DEMO_NOW в тестах).
+   */
+  booking = { enabled: false, now: () => Date.now() },
 }) => {
   const resolver = createEntityResolver(catalog);
   const allowedServices = new Map(
@@ -236,6 +245,18 @@ export const createPipeline = ({
         notice: noticeFor(gate.reason),
       });
 
+      if (booking.enabled) {
+        const built = buildBookingRequest({ booking: gate.context.booking, execution, now: booking.now() });
+        if (built) {
+          action.booking = { request: built.request, summary: summarizeBooking(built) };
+          action.replyText = [noticeFor(gate.reason), bookingReplyText({ ...built, booking: gate.context.booking })].filter(Boolean).join(' ');
+          metrics.increment('pipeline.booking_request');
+        } else if (execution.action === 'CLARIFY' && booking.publicHidden) {
+          // Не нашли — возможно, искали государственную клинику, которую демо скрывает.
+          action.replyText = `${action.replyText} В демо-режиме показываются только вымышленные частные клиники — государственные временно скрыты.`;
+        }
+      }
+
       metrics.observe('pipeline.latency_ms', Date.now() - started, { plan_source: planSource });
       logger.event('pipeline.done', {
         request_id: gate.requestId,
@@ -366,6 +387,7 @@ const buildDefaultPipeline = async () => {
     vault,
     planner,
     routing: await createRoutingProviderFromEnv(),
+    booking: { enabled: bookingModeFromEnv(), publicHidden: publicClinicsHidden(), now: () => demoNow() },
   });
 };
 

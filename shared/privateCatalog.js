@@ -95,6 +95,13 @@ export const validatePrivateCatalog = (catalog) => {
       if (!branchIds.has(branchId)) errors.push(`врач ${doctor.id}: нет филиала ${branchId}`);
     }
     if (doctor.hours && !parseOpeningHours(doctor.hours)) errors.push(`врач ${doctor.id}: часы не разбираются «${doctor.hours}»`);
+    for (const [branchId, hours] of Object.entries(doctor.hoursByBranch || {})) {
+      if (!(doctor.branchIds || []).includes(branchId)) errors.push(`врач ${doctor.id}: часы в чужом филиале ${branchId}`);
+      if (!parseOpeningHours(hours)) errors.push(`врач ${doctor.id}: часы не разбираются «${hours}»`);
+    }
+    if (doctor.ageGroups !== undefined && !(Array.isArray(doctor.ageGroups) && doctor.ageGroups.length > 0 && doctor.ageGroups.every((group) => group === 'adult' || group === 'child'))) {
+      errors.push(`врач ${doctor.id}: неверные возрастные группы`);
+    }
   }
 
   for (const [index, price] of (catalog.prices || []).entries()) {
@@ -199,10 +206,13 @@ export const flattenPrivateCatalog = (catalog) => {
       const { clinic, branch } = branches.get(branchId);
       const own = (pricesByBranch.get(branchId) || []).filter((price) => {
         const service = SERVICE_BY_ID[price.serviceId];
-        return service?.specialty === key || (doctor.serviceIds || []).includes(price.serviceId);
+        // Явный список услуг врача — точный: процедура в прайсе филиала не значит, что её делает каждый врач профиля.
+        if (Array.isArray(doctor.serviceIds) && doctor.serviceIds.length > 0) return doctor.serviceIds.includes(price.serviceId);
+        return service?.specialty === key;
       });
       const firstVisit = own.filter((price) => SERVICE_BY_ID[price.serviceId]?.visit === 'first');
-      const hours = doctor.hours || branch.hours || '';
+      // Свой график в каждом филиале: врач сети бывает в двух местах в разные дни.
+      const hours = doctor.hoursByBranch?.[branchId] || doctor.hours || branch.hours || '';
       items.push({
         ...common(clinic, branch),
         id: `${doctor.id}--${branch.id}`,
@@ -219,6 +229,8 @@ export const flattenPrivateCatalog = (catalog) => {
         },
         experience: Number(doctor.experienceYears) || 0,
         rating: 0,
+        ...(Array.isArray(doctor.ageGroups) ? { ageGroups: [...doctor.ageGroups] } : {}),
+        ...(doctor.specialtyKey ? { specialtyKey: doctor.specialtyKey } : {}),
         description: doctor.description || '',
         consultPrice: firstVisit.length > 0 ? Math.min(...firstVisit.map((price) => price.minRub)) : null,
       });

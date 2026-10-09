@@ -41,6 +41,7 @@ import {
 import { decideGatewayPolicy, POLICY, POLICY_VERSION } from './policies.js';
 import { FAIL_CLOSED_REASON, GATEWAY_DECISION, mintSanitizedPlannerRequest } from './models.js';
 import { SPECIALTY_CANON } from './catalog.js';
+import { extractBookingConstraints, mergeBookingTurns } from './bookingConstraints.js';
 import {
   checkClosedVocabulary,
   findKnownPlaces,
@@ -77,8 +78,12 @@ export const extractConstraints = (text) => {
    * «До 20 минут от дома» — это время в пути, а не «приём до 20:00»:
    * без проверки хвоста число перед «мин» уходило в availableBefore.
    */
-  const TIME_AFTER = /(?<![\p{L}\p{N}])(?:после|позже|начиная\s+с|с)\s+(\d{1,2})(?::(\d{2}))?(?![\d.:-])(?!\s*(?:мин|час))/u;
-  const TIME_BEFORE = /(?<![\p{L}\p{N}])(?:до|раньше|ранее)\s+(\d{1,2})(?::(\d{2}))?(?![\d.:-])(?!\s*(?:мин|час))/u;
+  /*
+   * «До 3 000 ₽», «до 3 тысяч», «до 2к» — это цена, а не «приём до 03:00»:
+   * число, за которым идут ещё три цифры, тысячи или рубли, временем не считается.
+   */
+  const TIME_AFTER = /(?<![\p{L}\p{N}])(?:после|позже|начиная\s+с|с)\s+(\d{1,2})(?::(\d{2}))?(?![\d.:-])(?!\s*(?:мин|час|тыс|руб|₽|р\.|т\.?\s?р|к(?!\p{L})|\d{3}(?!\d)))/u;
+  const TIME_BEFORE = /(?<![\p{L}\p{N}])(?:до|раньше|ранее)\s+(\d{1,2})(?::(\d{2}))?(?![\d.:-])(?!\s*(?:мин|час|тыс|руб|₽|р\.|т\.?\s?р|к(?!\p{L})|\d{3}(?!\d)))/u;
 
   const after = lower.match(TIME_AFTER);
   if (after) {
@@ -435,6 +440,7 @@ export const createPrivacyGateway = ({
 
     let analyses;
     let classification;
+    let perTurnSpecialties = [];
     try {
       /*
        * Между репликами — уступка циклу событий. Разбор синхронный, и
@@ -469,6 +475,13 @@ export const createPrivacyGateway = ({
         return text;
       };
       const perTurn = analyses.map((analysis) => classifier(masked(analysis)));
+      /*
+       * Профиль для записи по каждой реплике: названный прямо («ЛОР»), а если
+       * не назван — первый по классификатору жалобы. Запасной «терапевт»
+       * классификатора здесь не нужен: запись идёт к одному врачу.
+       */
+      perTurnSpecialties = perTurn.map((item, index) =>
+        analyses[index].specialties.length > 0 ? [...new Set(analyses[index].specialties)] : (item.specialties || []).slice(0, 1));
       const lastTurn = perTurn[perTurn.length - 1] || classifier('');
       /*
        * Красные флаги проверяются и по тексту БЕЗ маскировки. Маскировка
@@ -507,7 +520,23 @@ export const createPrivacyGateway = ({
      * детский приём: в описание для модели уходил один профиль врача.
      */
     const userTexts = messages.map((message) => message.content);
-    const constraints = Object.assign({}, ...userTexts.map((text) => extractConstraints(text)));
+    const turnConstraints = userTexts.map((text) => extractConstraints(text));
+    const constraints = Object.assign({}, ...turnConstraints);
+
+    /*
+     * Условия записи (день, цена, город, «без ДМС»…) — отдельно от
+     * ограничений для модели: наружу они не уходят ни в каком виде, их
+     * исполняет строгий подбор на сервере. Профиль врача для записи — из
+     * последней реплики, где он назван: «ЛОР» → «а лучше дерматолог» —
+     * это смена врача, а не два врача сразу.
+     */
+    const lastSpecialties = [...perTurnSpecialties].reverse().find((keys) => keys.length > 0) || [];
+    const booking = {
+      ...mergeBookingTurns(userTexts.map((text, index) => ({ booking: extractBookingConstraints(text), constraints: turnConstraints[index] }))),
+      specialties: lastSpecialties.filter((key) => key in SPECIALTY_CANON),
+      child: Boolean(classification.isChild),
+      medicalText: Boolean(classification.hasMedicalText),
+    };
     const signals = {};
     for (const turnSignals of userTexts.map((text) => extractIntentSignals(text))) {
       for (const [name, active] of Object.entries(turnSignals)) signals[name] = Boolean(signals[name] || active);
@@ -697,6 +726,7 @@ export const createPrivacyGateway = ({
       placeholders,
       locationTokens,
       constraints,
+      booking,
       signals,
       classification,
       outline,
@@ -852,6 +882,7 @@ const emptyContext = (sessionId, requestId) => ({
   placeholders: [],
   locationTokens: [],
   constraints: {},
+  booking: null,
   signals: {},
   classification: { specialties: [], confidence: 0, hasMedicalText: false, emergency: null, isChild: false },
   outline: [],

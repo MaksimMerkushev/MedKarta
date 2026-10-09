@@ -243,10 +243,17 @@ export const loadCatalog = async () => {
     demoFacilities = items.filter((item) => !item.doctorId);
   }
 
+  /*
+   * В демо-режиме государственные клиники скрыты из выдачи ассистента так
+   * же, как с карты (PUBLIC_CLINICS=on — вернуть). Данные не удаляются.
+   */
+  const { isPublicClinicRecord, publicClinicsHidden } = await import('../demo/flags.js');
+  const visible = publicClinicsHidden() ? (list) => list.filter((item) => !isPublicClinicRecord(item)) : (list) => list;
+
   cached = buildCatalog({
-    doctors: [...doctors, ...collectedDoctors, ...demoDoctors],
-    clinics: clinicsModule.ClinicsData?.clinics || [],
-    facilities: [...(facilitiesModule.kazanFacilities || []), ...collectedFacilities, ...demoFacilities],
+    doctors: visible([...doctors, ...collectedDoctors, ...demoDoctors]),
+    clinics: visible(clinicsModule.ClinicsData?.clinics || []),
+    facilities: visible([...(facilitiesModule.kazanFacilities || []), ...collectedFacilities, ...demoFacilities]),
   });
 
   return cached;

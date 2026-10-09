@@ -63,7 +63,9 @@ import SearchFilters from './SearchFilters';
 import PlaceDoctorList from './PlaceDoctorList';
 import { DataReportButton, SearchFeedbackPrompt } from './FeedbackWidgets';
 import DmsPanel from './DmsPanel';
-import { fetchServerDemoFlag, loadDemoData, readDemoPreference, setDemoPreference } from './demoMode';
+import { fetchServerConfig, loadDemoData, readDemoPreference, setDemoPreference } from './demoMode';
+import MyBookingsPanel from './MyBookingsPanel';
+import { readMyBookings, toStoredBooking, writeMyBookings } from './services/demoBooking';
 import { coverageBadge, coverageFor, findPlan, findProvider } from '@shared/dms.js';
 import { track } from './services/analytics';
 import { buildExternalRouteUrl, EXTERNAL_MODE_BY_TRAVEL_MODE } from './externalMaps';
@@ -82,6 +84,7 @@ import { useAccount } from './hooks/useAccount';
 // открывается ради карты, а не чата, — нет смысла тянуть его в первый байт.
 const AIAssistant = lazy(() => import('./AIAssistant'));
 const AccountPanel = lazy(() => import('./AccountPanel'));
+const BookingDialog = lazy(() => import('./BookingDialog'));
 
 delete L.Icon.Default.prototype._getIconUrl;
 
@@ -933,7 +936,12 @@ const unionIds = (...lists) => [...new Set(lists.flat())].slice(0, 500);
 const COLLECTED_FACILITIES = flattenPrivateCatalog(collectedCatalog);
 const VERIFICATION = verificationData?.results && typeof verificationData.results === 'object' ? verificationData.results : {};
 const EMPTY_LIST = Object.freeze([]);
-const EMPTY_DEMO = Object.freeze({ enabled: false, items: EMPTY_LIST, insurance: null });
+/*
+ * booking — симуляция записи включена на сервере; publicClinics — показывать
+ * государственные учреждения (в демо по умолчанию скрыты, данные не удаляются).
+ */
+const EMPTY_DEMO = Object.freeze({ enabled: false, items: EMPTY_LIST, insurance: null, booking: false, publicClinics: true });
+const PUBLIC_OWNERSHIP = 'Государственная';
 
 /** Варианты фильтра «не дольше N минут в пути». */
 const TRAVEL_LIMIT_OPTIONS = [10, 15, 20, 30, 45, 60];
@@ -1235,6 +1243,16 @@ export default function App() {
    * на момент ответа: если потом поменять фильтры, старый ответ не меняется.
    */
   const [assistantPicks, setAssistantPicks] = useState({});
+  /*
+   * Демо-запись под ответами ассистента: id реплики → запрос строгого
+   * подбора. Подбор исполняет сервер (DemoOffers → /api/demo/search).
+   */
+  const [assistantBookings, setAssistantBookings] = useState({});
+  const bookingEnabledRef = useRef(false);
+  const [bookingTarget, setBookingTarget] = useState(null);
+  const [myBookings, setMyBookings] = useState(() => readMyBookings());
+  const [bookingsRefresh, setBookingsRefresh] = useState(0);
+  const [isMyBookingsOpen, setIsMyBookingsOpen] = useState(false);
   const pendingPicksRef = useRef(null);
   const [picksTick, setPicksTick] = useState(0);
   const [buildRouteTrigger, setBuildRouteTrigger] = useState(false);
@@ -1250,7 +1268,14 @@ export default function App() {
 
   const handleApplyTriage = useCallback((result, meta = {}) => {
     searchSourceRef.current = { source: 'assistant', at: Date.now() };
-    if (Number.isInteger(meta.messageId) && wantsTopPicks(result)) {
+    // Режим записи: вместо «топ-3» по справочнику — строгий подбор свободного времени.
+    const bookingMode = Boolean(result.booking) && bookingEnabledRef.current && Number.isInteger(meta.messageId);
+    if (bookingMode) {
+      setAssistantBookings((current) => {
+        const kept = Object.entries(current).slice(-19);
+        return { ...Object.fromEntries(kept), [meta.messageId]: result.booking };
+      });
+    } else if (Number.isInteger(meta.messageId) && wantsTopPicks(result)) {
       pendingPicksRef.current = { messageId: meta.messageId, at: Date.now() };
       setAssistantPicks((current) => {
         // Хранятся подборки последних 20 ответов — переписка длинной не бывает.
@@ -1339,9 +1364,10 @@ export default function App() {
     }
     if (result.dmsOnly) {
       // Есть ли справочник и выбрана ли программа, проверит эффект ниже:
-      // здесь их значения могли устареть.
+      // здесь их значения могли устареть. В режиме записи программу
+      // спрашивает подборка в чате — второй вопрос не нужен.
       setDmsOnly(true);
-      setDmsPromptPending(true);
+      if (!bookingMode) setDmsPromptPending(true);
     }
     if (Number.isInteger(result.maxTravelMinutes)) {
       // Ближайший вариант из списка не меньше запрошенного: «25 минут» → 30.
@@ -1446,7 +1472,9 @@ export default function App() {
   const sourceFacilities = useMemo(() => {
     // Источники: проверенные врачи с официальных сайтов больниц,
     // учреждения из OpenStreetMap и данные по клиникам.
-    const base = [...verifiedDoctors, ...doctorsData, ...kazanFacilities.map(withOsmSchedule), ...clinicsFacilities, ...COLLECTED_FACILITIES, ...demoState.items];
+    const all = [...verifiedDoctors, ...doctorsData, ...kazanFacilities.map(withOsmSchedule), ...clinicsFacilities, ...COLLECTED_FACILITIES, ...demoState.items];
+    // Демо-режим: государственные учреждения скрыты из выдачи (флаг сервера PUBLIC_CLINICS).
+    const base = demoState.enabled && !demoState.publicClinics ? all.filter((item) => item.ownership !== PUBLIC_OWNERSHIP) : all;
     const clinicAddressMap = new Map();
     const clinicCoordsMap = new Map();
 
@@ -1500,7 +1528,7 @@ export default function App() {
         const hasCoords = typeof item.lat === 'number' && typeof item.lng === 'number';
         return Boolean(address) && !/уточняется/i.test(address) && hasCoords;
       });
-  }, [clinicsFacilities, demoState.items]);
+  }, [clinicsFacilities, demoState.items, demoState.enabled, demoState.publicClinics]);
 
   const activeOrigin = isManualOrigin && customOrigin ? customOrigin : userLocation;
   // Поле ввода обновляется мгновенно, тяжёлая фильтрация — с задержкой.
@@ -1765,11 +1793,13 @@ export default function App() {
     let cancelled = false;
     (async () => {
       const preference = readDemoPreference();
-      const enabled = preference ?? (await fetchServerDemoFlag());
+      const config = await fetchServerConfig();
+      const enabled = preference ?? config.demo;
       if (!enabled || cancelled) return;
       try {
         const data = await loadDemoData();
-        if (!cancelled) setDemoState({ enabled: true, ...data });
+        // Запись и скрытие госучреждений — только если демо включено и на сервере.
+        if (!cancelled) setDemoState({ enabled: true, ...data, booking: config.demo && config.booking, publicClinics: !config.demo || config.publicClinics });
       } catch {
         // Демо-набор необязателен: без него работает обычный справочник.
       }
@@ -1825,7 +1855,12 @@ export default function App() {
     setDemoState(EMPTY_DEMO);
     setDmsOnly(false);
     setIsDmsPanelOpen(false);
+    setIsMyBookingsOpen(false);
   }, []);
+
+  useEffect(() => {
+    bookingEnabledRef.current = demoState.booking;
+  }, [demoState.booking]);
 
   useEffect(() => {
     enrichedDoctorsRef.current = enrichedDoctors;
@@ -2655,6 +2690,92 @@ export default function App() {
     setTimeout(() => document.getElementById('results-heading')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
   }, [isMobile]);
 
+  // --- Демо-запись ---------------------------------------------------------
+
+  /*
+   * Точка отправления для подбора — только настоящая: геолокация или точка,
+   * поставленная вручную. Центр Казани по умолчанию — не местоположение
+   * пользователя, и время в пути от него не считается.
+   */
+  const bookingOrigin = isManualOrigin && customOrigin ? customOrigin : isLocationReady && !locationError ? userLocation : null;
+
+  const updateMyBookings = useCallback((next) => {
+    setMyBookings(next);
+    writeMyBookings(next);
+  }, []);
+
+  const openBooking = useCallback((option, slot, patient = null) => {
+    setBookingTarget({
+      doctorId: option.doctor.id,
+      branchId: option.clinic.branchId,
+      serviceId: slot?.serviceId || option.service?.id || null,
+      slotId: slot?.id || null,
+      patient,
+      doctorName: option.doctor.name,
+      specialty: option.doctor.specialty,
+      clinicName: option.clinic.name,
+      branchName: option.clinic.branchName,
+      address: option.clinic.address,
+    });
+  }, []);
+
+  const openBookingForDoc = useCallback((doc) => {
+    if (!doc?.doctorId || !doc.branchId) return;
+    setBookingTarget({
+      doctorId: doc.doctorId,
+      branchId: doc.branchId,
+      serviceId: null,
+      slotId: null,
+      patient: childrenOnly && doc.ageGroups?.includes('child') ? 'child' : null,
+      doctorName: doc.name,
+      specialty: doc.specialty,
+      clinicName: doc.clinic,
+      branchName: null,
+      address: doc.address,
+    });
+  }, [childrenOnly]);
+
+  const handleBooked = useCallback((booking) => {
+    const stored = toStoredBooking(booking);
+    if (stored) updateMyBookings([stored, ...myBookings.filter((item) => item.number !== stored.number)]);
+    setBookingsRefresh((value) => value + 1);
+  }, [myBookings, updateMyBookings]);
+
+  const handleBookingCancelled = useCallback((booking) => {
+    updateMyBookings(myBookings.map((item) => (item.number === booking.number ? { ...item, status: 'CANCELLED' } : item)));
+    setBookingsRefresh((value) => value + 1);
+  }, [myBookings, updateMyBookings]);
+
+  /** Маршрут к клинике записи — тем же движком, что и обычный маршрут. */
+  const routeToBooking = useCallback((booking) => {
+    const itemId = booking.itemId || (booking.doctor && booking.clinic ? `${booking.doctor.id}--${booking.clinic.branchId}` : null);
+    const doc = itemId ? enrichedDoctorsRef.current.find((item) => item.id === itemId) : null;
+    if (!doc) {
+      showToast('Клиника этой записи не найдена на карте.', 'warning');
+      return;
+    }
+    setBookingTarget(null);
+    handleRouteClick(doc);
+    setIsRouteStarted(false);
+    if (isMobile) setIsAIAssistantOpen(false);
+  }, [handleRouteClick, isMobile, showToast]);
+
+  const requestBookingOrigin = useCallback(() => {
+    setIsFollowingUser(false);
+    setFlyToTarget(activeOrigin);
+    if (isMobile) setIsAIAssistantOpen(false);
+    showToast('Перетащите красную точку на карте туда, откуда поедете, — подбор пересчитается.', 'info', 6000);
+  }, [activeOrigin, isMobile, showToast]);
+
+  const choosePlanFromChat = useCallback((planId) => {
+    setDmsPlanId(planId);
+    if (account.user) {
+      account.setPlan(planId).catch((error) => {
+        if (error?.status !== 401) showToast('Не удалось сохранить программу в кабинете — она сохранена в этом браузере.', 'warning');
+      });
+    }
+  }, [account, setDmsPlanId, showToast]);
+
   // Избранное для кабинета: id из аккаунта → записи справочника на карте.
   const favoriteDetails = useMemo(() => {
     if (!isAccountOpen) return [];
@@ -3403,9 +3524,19 @@ export default function App() {
           </div>
         )}
 
-        {(doc.telHref || referralUrl) && (
+        {(doc.telHref || referralUrl || (doc.demo && demoState.booking)) && (
           <div className="mt-3 flex flex-wrap gap-2">
-            {!isState && referralUrl && (
+            {doc.demo && isDoctorCard && demoState.booking && doc.doctorId && (
+              <button
+                type="button"
+                onClick={() => openBookingForDoc(doc)}
+                className="inline-flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-violet-700"
+                data-testid="card-book-button"
+              >
+                <CalendarCheck size={16} aria-hidden="true" /> Записаться (демо)
+              </button>
+            )}
+            {!isState && referralUrl && !(doc.demo && demoState.booking) && (
               <a
                 href={referralUrl}
                 target="_blank"
@@ -3605,6 +3736,22 @@ export default function App() {
                       {dmsPlan && <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-emerald-500" aria-hidden="true" />}
                     </button>
                   )}
+                  {demoState.booking && (
+                    <button
+                      type="button"
+                      className="sidebar-icon-button relative"
+                      onClick={() => setIsMyBookingsOpen((current) => !current)}
+                      aria-label={`Мои демо-записи: ${myBookings.filter((item) => item.status === 'CONFIRMED').length}`}
+                      aria-expanded={isMyBookingsOpen}
+                      title="Мои демо-записи"
+                      data-testid="my-bookings-button"
+                    >
+                      <CalendarCheck size={19} aria-hidden="true" />
+                      {myBookings.some((item) => item.status === 'CONFIRMED') && (
+                        <span className="absolute -right-0.5 -top-0.5 rounded-full bg-violet-600 px-1 text-[10px] leading-4 text-white">{myBookings.filter((item) => item.status === 'CONFIRMED').length}</span>
+                      )}
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="sidebar-icon-button relative"
@@ -3687,10 +3834,23 @@ export default function App() {
                 <div className="mb-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-100" role="note">
                   <FlaskConical size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
                   <p>
-                    <b>Демо-режим.</b> Частные клиники с пометкой «Демо», их цены и программы ДМС вымышлены — для проверки сценариев.{' '}
+                    <b>Демо-режим.</b> Частные клиники с пометкой «Демо», врачи, расписание, цены и программы ДМС вымышлены — для проверки сценариев.
+                    {demoState.booking && ' Запись — демонстрационная: в клиники ничего не отправляется.'}
+                    {!demoState.publicClinics && ' Государственные клиники в демо временно скрыты.'}{' '}
                     <button type="button" onClick={disableDemo} className="font-semibold underline underline-offset-2">Выключить</button>
                   </p>
                 </div>
+              )}
+              {demoState.booking && isMyBookingsOpen && (
+                <MyBookingsPanel
+                  bookings={myBookings}
+                  onChange={(next, info) => {
+                    updateMyBookings(next);
+                    if (info?.cancelled) setBookingsRefresh((value) => value + 1);
+                  }}
+                  onRoute={routeToBooking}
+                  onClose={() => setIsMyBookingsOpen(false)}
+                />
               )}
               {insurance && isDmsPanelOpen && (
                 <DmsPanel
@@ -4296,12 +4456,33 @@ export default function App() {
               onFocusPick={focusPick}
               onRoutePick={routePick}
               onShowAllPicks={showAllPicks}
+              bookings={demoState.booking ? assistantBookings : null}
+              bookingOrigin={bookingOrigin}
+              bookingPlanId={dmsPlan?.id || null}
+              bookingsRefresh={bookingsRefresh}
+              onBookOption={openBooking}
+              onSelectPlan={choosePlanFromChat}
+              onRequestOrigin={requestBookingOrigin}
               isMobile={isMobile}
               avoidRoutePanel={!isMobile && routeTargets.length > 0 && !isRoutePanelCollapsed}
             />
           </Suspense>
         )}
       </main>
+
+      {bookingTarget && (
+        <Suspense fallback={null}>
+          <BookingDialog
+            key={`${bookingTarget.doctorId}|${bookingTarget.branchId}|${bookingTarget.slotId || ''}`}
+            target={bookingTarget}
+            planId={dmsPlan?.id || null}
+            onClose={() => setBookingTarget(null)}
+            onBooked={handleBooked}
+            onCancelled={handleBookingCancelled}
+            onRoute={routeToBooking}
+          />
+        </Suspense>
+      )}
 
       <Toast toast={toast} onDismiss={dismissToast} />
     </div>
