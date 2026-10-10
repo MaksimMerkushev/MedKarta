@@ -27,6 +27,14 @@ const applyPatch = (request, patch) => {
   return next;
 };
 
+const yearsWord = (count) => {
+  const tail = count % 100;
+  if (tail >= 11 && tail <= 14) return 'лет';
+  if (count % 10 === 1) return 'год';
+  if (count % 10 >= 2 && count % 10 <= 4) return 'года';
+  return 'лет';
+};
+
 const originKey = (origin) => (Array.isArray(origin) ? `${origin[0].toFixed(3)},${origin[1].toFixed(3)}` : 'none');
 
 const CoverageBadge = ({ coverage }) => {
@@ -60,8 +68,13 @@ const OptionCard = ({ option, index, today, onBook, onFocus, compact }) => {
             <span className="shrink-0 rounded border border-amber-300 px-1 text-[9px] font-semibold uppercase text-amber-700 dark:border-amber-600 dark:text-amber-300">Демо</span>
           </div>
           <p className="text-[11.5px] leading-4 text-slate-500 dark:text-slate-400">
-            {option.doctor.specialty} · {option.clinic.name}, {option.clinic.branchName}
+            {option.doctor.specialty}{option.doctor.experienceYears ? ` · стаж ${option.doctor.experienceYears} ${yearsWord(option.doctor.experienceYears)}` : ''} · {option.clinic.name}, {option.clinic.branchName}
           </p>
+          {option.clinic.real && (
+            <p className="mt-0.5 text-[10.5px] leading-4 text-sky-700 dark:text-sky-300" data-testid="demo-offer-real">
+              Клиника реальная (OSM), врач и расписание — демонстрационные
+            </p>
+          )}
           <ul className="mt-1.5 flex flex-wrap gap-1">
             <li className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">
               <Wallet size={11} aria-hidden="true" /> {formatPrice(option.price)}
@@ -116,11 +129,11 @@ const OptionCard = ({ option, index, today, onBook, onFocus, compact }) => {
   );
 };
 
-const RelaxButtons = ({ relax, onRelax }) => {
+const RelaxButtons = ({ relax, onRelax, title = 'Могу снять одно условие — только если вы согласны:' }) => {
   if (!relax?.length) return null;
   return (
     <div className="mt-2">
-      <p className="text-[11px] text-slate-500 dark:text-slate-400">Могу снять одно условие — только если вы согласны:</p>
+      <p className="text-[11px] text-slate-500 dark:text-slate-400">{title}</p>
       <div className="mt-1 flex flex-col gap-1">
         {relax.map((item) => (
           <button
@@ -158,6 +171,8 @@ export default function DemoOffers({
 }) {
   const sectionRef = useRef(null);
   const [patch, setPatch] = useState({});
+  // «От дома»: ждём, пока пользователь сам поставит точку, — тогда она и есть «дом».
+  const [awaitingPoint, setAwaitingPoint] = useState(null);
   const [state, setState] = useState({ status: 'loading', result: null, error: null });
   const [retry, setRetry] = useState(0);
 
@@ -185,6 +200,14 @@ export default function DemoOffers({
   useEffect(() => {
     if (autoScroll && state.status === 'ready') sectionRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
   }, [autoScroll, state.status]);
+
+  useEffect(() => {
+    // Точку переставили после вопроса «откуда поедете» — это подтверждённое место отправления.
+    if (awaitingPoint !== null && originSignature !== awaitingPoint && effectiveOrigin) {
+      setAwaitingPoint(null);
+      setPatch((current) => ({ ...current, originConfirmed: true }));
+    }
+  }, [awaitingPoint, originSignature, effectiveOrigin]);
 
   const result = state.result;
   const accept = (item) => setPatch((current) => ({ ...current, ...item.patch, ...(item.patch?.travel ? { travel: { ...(current.travel || {}), ...item.patch.travel } } : {}) }));
@@ -273,6 +296,29 @@ export default function DemoOffers({
                   <LocateFixed size={12} aria-hidden="true" /> Указать точку на карте
                 </button>
                 <RelaxButtons relax={[{ key: 'travel', label: 'Искать без учёта времени в пути', patch: { travel: { maxMinutes: null, nearest: false } } }]} onRelax={accept} />
+              </div>
+            )}
+
+            {result.status === 'needs' && result.needs?.includes('origin_place') && (
+              <div className="mt-1 px-1" data-testid="demo-origin-place">
+                <div className="flex flex-wrap gap-1">
+                  {effectiveOrigin && (
+                    <button type="button" onClick={() => setPatch((current) => ({ ...current, originConfirmed: true }))} className="inline-flex items-center gap-1 rounded-lg border border-violet-200 px-2.5 py-1 text-[11.5px] font-semibold text-violet-700 hover:bg-violet-50 dark:border-violet-700 dark:text-violet-200 dark:hover:bg-slate-700" data-testid="demo-origin-here">
+                      <MapPin size={12} aria-hidden="true" /> Я сейчас там — считать от моей точки
+                    </button>
+                  )}
+                  <button type="button" onClick={() => { setAwaitingPoint(originSignature); onRequestOrigin?.(); }} className="inline-flex items-center gap-1 rounded-lg bg-violet-600 px-2.5 py-1 text-[11.5px] font-semibold text-white hover:bg-violet-700">
+                    <LocateFixed size={12} aria-hidden="true" /> Поставить точку на карте
+                  </button>
+                </div>
+                {awaitingPoint !== null && <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">Перетащите красную точку туда, откуда поедете, — подбор пересчитается.</p>}
+                <RelaxButtons relax={result.relax} onRelax={accept} />
+              </div>
+            )}
+
+            {result.status === 'needs' && ['date_conflict', 'date_invalid', 'time_conflict'].some((key) => result.needs?.includes(key)) && (
+              <div className="px-1" data-testid="demo-conflict">
+                <RelaxButtons relax={result.relax} onRelax={accept} title={result.needs.includes('date_conflict') ? 'Какой день имели в виду?' : result.needs.includes('date_invalid') ? 'Можно искать в любой день — если согласны:' : 'Можно искать без ограничения по часам — если согласны:'} />
               </div>
             )}
 

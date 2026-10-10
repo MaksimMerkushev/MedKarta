@@ -250,10 +250,17 @@ export const loadCatalog = async () => {
   const { isPublicClinicRecord, publicClinicsHidden } = await import('../demo/flags.js');
   const visible = publicClinicsHidden() ? (list) => list.filter((item) => !isPublicClinicRecord(item)) : (list) => list;
 
+  /*
+   * Реальная клиника, ставшая частью демо (врачи и запись вымышлены), не
+   * дублируется своей карточкой из OSM: «Разумед на Пушкина» — одна запись.
+   */
+  const replacedByDemo = new Set(demoFacilities.map((item) => item.osmId).filter(Boolean));
+  const osmFacilities = (facilitiesModule.kazanFacilities || []).filter((item) => !replacedByDemo.has(item.id));
+
   cached = buildCatalog({
     doctors: visible([...doctors, ...collectedDoctors, ...demoDoctors]),
     clinics: visible(clinicsModule.ClinicsData?.clinics || []),
-    facilities: visible([...(facilitiesModule.kazanFacilities || []), ...collectedFacilities, ...demoFacilities]),
+    facilities: visible([...osmFacilities, ...collectedFacilities, ...demoFacilities]),
   });
 
   return cached;

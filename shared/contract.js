@@ -144,7 +144,7 @@ const sanitizeBooking = (value) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const { request } = normalizeSearchRequest(value.request);
   const summary = Array.isArray(value.summary)
-    ? value.summary.map((item) => cleanText(item, LIMITS.MAX_FIELD_CHARS)).filter(Boolean).slice(0, 12)
+    ? value.summary.map((item) => cleanText(item, LIMITS.MAX_FIELD_CHARS)).filter(Boolean).slice(0, 20)
     : [];
   return { request, summary };
 };

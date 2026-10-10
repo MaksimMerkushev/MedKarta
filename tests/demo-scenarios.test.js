@@ -58,7 +58,8 @@ const chat = async (texts, { respond = PLANNER_DOWN } = {}) => {
 /** Как интерфейс: запрос из ответа + точка отправления и программа ДМС. */
 const run = async (action, { origin = null, planId = null, patch = {}, getEngine = async () => engine } = {}) => {
   assert.ok(action.booking, `ответ без запроса подбора: ${action.replyText}`);
-  const request = { ...action.booking.request, ...patch, origin, dms: { ...action.booking.request.dms, planId } };
+  // Программа, названная в тексте («по программе Demo Premium»), важнее выбранной в интерфейсе — как в DemoOffers.
+  const request = { ...action.booking.request, ...patch, origin, dms: { ...action.booking.request.dms, planId: action.booking.request.dms.planId || planId } };
   return searchWith(getEngine).search(request);
 };
 
@@ -131,7 +132,7 @@ describe('Демо-сценарии: строгий подбор', needsSqlite, 
     assert.equal(action.booking.request.dms.required, true);
     const result = await run(action, { planId: 'demo-basic' });
     assert.equal(result.status, 'ok');
-    const basicClinics = new Set(['demo-beresta', 'demo-semya', 'demo-travma']);
+    const basicClinics = new Set(['demo-beresta', 'demo-semya', 'demo-travma', 'demo-real-aibolit']);
     for (const option of result.options) {
       assert.equal(option.coverage.status, 'covered');
       assert.equal(option.coverage.planId, 'demo-basic');
@@ -230,9 +231,15 @@ describe('Демо-сценарии: строгий подбор', needsSqlite, 
     assert.equal(result.demo, true);
     for (const option of result.options) {
       assert.equal(option.demo, true);
-      assert.match(option.clinic.name, /демо/i);
-      assert.match(option.clinic.address, /демо-адрес/);
       assert.match(option.doctor.id, /^demo-doc-/);
+      if (option.clinic.real) {
+        // Реальная клиника: адрес настоящий, телефона нет — запись туда не уходит.
+        assert.equal(option.clinic.phone, null);
+        assert.ok(index.branches.get(option.clinic.branchId).clinic.real);
+      } else {
+        assert.match(option.clinic.name, /демо/i);
+        assert.match(option.clinic.address, /демо-адрес/);
+      }
     }
   });
 
@@ -308,6 +315,27 @@ describe('Демо-сценарии: приватность', () => {
     assert.equal(action.booking.request.maxPrice, 2500);
     assert.equal(action.booking.request.city, 'innopolis');
   });
+
+  it('новые условия (пол, стаж, программа, исключения, «на дом») тоже не уходят наружу', async () => {
+    const plan = { action: 'FIND_DOCTOR', steps: [{ type: 'specialty', specialty: 'gynecologist', selection: 'any', constraints: {} }], constraints: {}, reply_hint: 'doctors_found' };
+    const { pipeline, sent } = makeTestPipeline({ catalog, respond: plan, outboundMode: 'structured', booking: { enabled: true, now: () => clock } });
+    const { action } = await pipeline.handle({
+      messages: [{ role: 'user', content: 'Гинеколог-женщина со стажем больше 15 лет, не в Ясене, по программе Demo Premium, кроме понедельника, лучше на дом' }],
+      sessionId: TEST_SESSION,
+    });
+    const outbound = sent[0].serialized + JSON.stringify(sent[0].hints);
+    // Стаж как числовой фильтр планировщик получал и раньше (minExperience=15) — это не данные о человеке.
+    for (const leaked of ['female', 'женщин', 'Premium', 'premium', '16', 'excludeWeekdays', 'понедельник', 'home_visit', 'на дом', 'demo-yasen', 'Ясен']) {
+      assert.ok(!outbound.includes(leaked), `во внешний запрос попало «${leaked}»`);
+    }
+    const { request } = action.booking;
+    assert.equal(request.doctorGender, 'female');
+    assert.equal(request.minExperience, 16);
+    assert.equal(request.dms.planId, 'demo-premium');
+    assert.deepEqual(request.excludeWeekdays, [1]);
+    assert.deepEqual(request.unsupported, ['home_visit']);
+    assert.ok(request.excludeBranchIds.includes('demo-yasen-centr'));
+  });
 });
 
 describe('Демо-сценарии: время в пути по графу дорог', needsGraph, () => {
@@ -354,6 +382,202 @@ describe('Демо-сценарии: время в пути по графу до
     assert.equal(result.status, 'unavailable');
     assert.equal(result.reason, 'routing_unavailable');
     assert.equal(result.options, undefined);
+  });
+});
+
+describe('Демо-сценарии: сложные условия — без поблажек', needsSqlite, () => {
+  const branchOf = (option) => index.branches.get(option.clinic.branchId);
+
+  it('«во вторник или среду после 18:00» — оба дня, и только они', async () => {
+    const action = await chat('нужен гинеколог во вторник или среду после 18:00');
+    assert.deepEqual(action.booking.request.date, { kind: 'any_of', options: [{ kind: 'weekday', weekday: 2 }, { kind: 'weekday', weekday: 3 }] });
+    assert.match(action.replyText, /во вторник или в среду/);
+    const result = await run(action);
+    assert.equal(result.status, 'ok');
+    const slots = allSlots(result);
+    assert.ok(slots.every((slot) => [TOMORROW, AFTER_TOMORROW].includes(slot.day) && slot.start >= '18:00'));
+  });
+
+  it('«в будни вечером» — ни субботы, ни воскресенья', async () => {
+    const result = await run(await chat('терапевт в будни вечером'));
+    assert.equal(result.status, 'ok');
+    const days = allSlots(result).map((slot) => new Date(`${slot.day}T12:00:00Z`).getUTCDay());
+    assert.ok(days.length > 0 && days.every((day) => day >= 1 && day <= 5));
+  });
+
+  it('район: «в Вахитовском районе» — только он; «не в Советском» — ни одного Советского и ни одного с неизвестным районом', async () => {
+    const inside = await run(await chat('лор в Вахитовском районе'));
+    assert.equal(inside.status, 'ok');
+    assert.ok(inside.options.every((option) => branchOf(option).branch.district === 'Вахитовский'));
+    const outside = await run(await chat('терапевт, только не в Советском районе'));
+    assert.equal(outside.status, 'ok');
+    assert.ok(outside.options.every((option) => branchOf(option).branch.district && branchOf(option).branch.district !== 'Советский'));
+  });
+
+  it('«врач-женщина», «с опытом больше 15 лет» — строго', async () => {
+    const female = await run(await chat('нужен уролог, врач-женщина'));
+    // Урологов-женщин может не быть: тогда честное «нет» с предложением, а не мужчина-уролог.
+    if (female.status === 'ok') assert.ok(female.options.every((option) => option.doctor.gender === 'female'));
+    else {
+      assert.equal(female.status, 'empty');
+      assert.equal(female.blocking.key, 'gender');
+      assert.ok(female.relax.some((item) => item.key === 'gender'));
+    }
+    const senior = await run(await chat('невролог с опытом больше 15 лет'));
+    assert.equal(senior.request.minExperience, 16);
+    assert.equal(senior.status, 'ok');
+    assert.ok(senior.options.every((option) => option.doctor.experienceYears >= 16));
+  });
+
+  it('выезд на дом, онлайн, отзывы — «не могу», а не молча обычный приём', async () => {
+    for (const text of ['терапевт на дом завтра', 'онлайн-консультация невролога', 'лучший лор с хорошими отзывами']) {
+      const action = await chat(text);
+      assert.ok(action.booking.request.unsupported.length > 0, text);
+      const result = await run(action);
+      assert.equal(result.status, 'empty', text);
+      assert.equal(result.blocking.key, 'unsupported');
+      assert.equal(result.options, undefined);
+      const relax = result.relax.find((item) => item.key === 'unsupported');
+      assert.ok(relax && Number.isInteger(relax.count) && relax.count > 0, text);
+      // Согласие — снять только это условие.
+      const accepted = await run(action, { patch: relax.patch });
+      assert.equal(accepted.status, 'ok', text);
+    }
+  });
+
+  it('программа из текста: «по программе Demo Premium» — она, а не сохранённая в интерфейсе', async () => {
+    const action = await chat('лор по программе Demo Premium');
+    assert.equal(action.booking.request.dms.required, true);
+    assert.equal(action.booking.request.dms.planId, 'demo-premium');
+    const result = await run(action, { planId: 'demo-basic' });
+    assert.equal(result.status, 'ok');
+    assert.ok(result.options.every((option) => option.coverage.planId === 'demo-premium' && option.coverage.status === 'covered'));
+  });
+
+  it('однофамильцы: «к Ефимовой» — только Ефимова; «к Ефимову» — оба, без выбора за пользователя', async () => {
+    const female = await chat('запишите к Ефимовой');
+    assert.deepEqual(female.booking.request.doctorIds, ['demo-doc-efimova-mariya']);
+    const result = await run(female);
+    assert.ok(result.options.length > 0 && result.options.every((option) => option.doctor.id === 'demo-doc-efimova-mariya'));
+    const both = await chat('запишите к Ефимову');
+    assert.deepEqual([...both.booking.request.doctorIds].sort(), ['demo-doc-efimov-timur', 'demo-doc-efimova-mariya']);
+  });
+
+  it('названная клиника: только её филиалы; нет нужного врача — честно и с предложением', async () => {
+    const yasen = await run(await chat('лор в клинике Ясень'));
+    assert.equal(yasen.status, 'ok');
+    assert.ok(yasen.options.every((option) => option.clinic.id === 'demo-yasen'));
+    const none = await run(await chat('дерматолог в Разумеде'));
+    assert.equal(none.status, 'empty');
+    assert.equal(none.blocking.key, 'clinic');
+    assert.ok(none.relax.some((item) => item.key === 'clinic' && item.count > 0));
+  });
+
+  it('педиатр — детский приём, даже если ребёнок не упомянут', async () => {
+    const action = await chat('нужен педиатр завтра');
+    assert.equal(action.booking.request.patient, 'child');
+  });
+
+  it('«от дома» — точку не подменяет геолокация: сначала вопрос, после подтверждения — подбор', async () => {
+    const action = await chat('лор не дальше 15 минут на машине от дома');
+    assert.equal(action.booking.request.originHint, 'home');
+    const asked = await run(action, { origin: CENTER });
+    assert.equal(asked.status, 'needs');
+    assert.deepEqual(asked.needs, ['origin_place']);
+    if (HAS_REAL_GRAPH) {
+      const confirmed = await run(action, { origin: CENTER, patch: { originConfirmed: true } });
+      assert.ok(['ok', 'empty'].includes(confirmed.status));
+      for (const option of confirmed.options || []) assert.ok(option.travel.minutes <= 15);
+    }
+  });
+});
+
+describe('Демо-сценарии: противоречия и чего в демо нет — вопрос, а не выбор за пользователя', needsSqlite, () => {
+  it('«в субботу 16 октября» (это пятница) — спрашивает, какой день', async () => {
+    const result = await run(await chat('лор в субботу 16 октября'));
+    assert.equal(result.status, 'needs');
+    assert.deepEqual(result.needs, ['date_conflict']);
+    assert.match(result.message, /пятница, а не суббота/);
+    assert.deepEqual(result.relax.map((item) => item.key), ['date_exact', 'date_weekday']);
+    assert.equal(result.options, undefined);
+  });
+
+  it('«31 ноября» — такой даты нет, соседний день не подставляется', async () => {
+    const action = await chat('эндокринолог 31 ноября');
+    assert.equal(action.booking.request.date.kind, 'invalid');
+    const result = await run(action);
+    assert.deepEqual(result.needs, ['date_invalid']);
+  });
+
+  it('«после 18 до 10 утра» — пустой промежуток, вопрос', async () => {
+    const result = await run(await chat('терапевт завтра после 18 до 10 утра'));
+    assert.deepEqual(result.needs, ['time_conflict']);
+  });
+
+  it('«бесплатно по ОМС» — в демо только частные клиники: «нет» и предложение платного приёма', async () => {
+    const result = await run(await chat('педиатр рядом, сегодня или завтра, бесплатно по ОМС'), { origin: CENTER });
+    assert.equal(result.status, 'empty');
+    assert.equal(result.blocking.key, 'unsupported');
+    assert.match(result.relax[0].label, /Платный приём/);
+  });
+
+  it('«в Ситидок или Разумед» — выбор клиники, а не маршрут через обе', async () => {
+    const action = await chat('кардиолог в Ситидок или Разумед завтра');
+    assert.ok(action.booking, action.replyText);
+    const result = await run(action);
+    assert.equal(result.status, 'ok');
+    assert.ok(result.options.every((option) => ['demo-real-citidoc', 'demo-real-razumed'].includes(option.clinic.id)));
+    assert.ok(result.options.every((option) => option.slots.every((slot) => slot.day === TOMORROW)));
+  });
+});
+
+describe('Демо-сценарии: тонкости языка — не наоборот и не мимо', needsSqlite, () => {
+  it('«не раньше 17:00» — это после 17:00, а не до', async () => {
+    const result = await run(await chat('гинеколог в четверг не раньше 17:00'));
+    assert.equal(result.request.timeFrom, '17:00');
+    assert.equal(result.request.timeTo, null);
+    assert.ok(allSlots(result).every((slot) => slot.start >= '17:00'));
+  });
+
+  it('«к Ефимову Тимуру» — имя снимает неоднозначность фамилии; «но не Ефимов» — исключение', async () => {
+    const named = await chat('запишите к Ефимову Тимуру в среду');
+    assert.deepEqual(named.booking.request.doctorIds, ['demo-doc-efimov-timur']);
+    const without = await chat('нужен лор, но не Ефимов');
+    assert.deepEqual(without.booking.request.doctorIds, []);
+    assert.deepEqual(without.booking.request.excludeDoctorIds, ['demo-doc-efimov-timur']);
+    const result = await run(without);
+    assert.ok(result.options.length > 0 && result.options.every((option) => option.doctor.id !== 'demo-doc-efimov-timur'));
+  });
+
+  it('«в Айболит на Максимова» — только этот филиал', async () => {
+    const action = await chat('педиатр в Айболит на Максимова');
+    assert.deepEqual(action.booking.request.branchIds, ['demo-real-aibolit-maksimova']);
+  });
+
+  it('«желательно женщина» — женщины первыми, мужчины не выброшены', async () => {
+    const result = await run(await chat('гинеколог, желательно женщина'));
+    assert.equal(result.request.preferGender, 'female');
+    assert.equal(result.request.doctorGender, null);
+    const genders = result.options.map((option) => option.doctor.gender);
+    assert.deepEqual(genders, [...genders].sort((left, right) => Number(right === 'female') - Number(left === 'female')));
+  });
+
+  it('«на 17:30» — ровно это время; «кроме пятницы» — без пятниц', async () => {
+    const exact = await run(await chat('терапевт завтра на 17:30'));
+    assert.ok(['ok', 'empty'].includes(exact.status));
+    assert.ok(allSlots(exact).every((slot) => slot.start === '17:30'));
+    const noFriday = await run(await chat('терапевт кроме пятницы'));
+    assert.ok(allSlots(noFriday).every((slot) => new Date(`${slot.day}T12:00:00Z`).getUTCDay() !== 5));
+  });
+
+  it('диалог: «в любой день» снимает и «в будни», и «в субботу»', async () => {
+    const action = await chat(['хирург', 'а можно в субботу?', 'тогда в будни после 18', 'в любой день, но до 2500']);
+    const { request } = action.booking;
+    assert.deepEqual(request.date, { kind: 'any' });
+    assert.equal(request.workdays, false);
+    assert.equal(request.weekend, false);
+    assert.equal(request.timeFrom, '18:00');
+    assert.equal(request.maxPrice, 2500);
   });
 });
 

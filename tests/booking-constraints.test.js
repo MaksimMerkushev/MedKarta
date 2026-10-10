@@ -24,6 +24,7 @@ describe('Условия записи из текста', () => {
     ['сегодня', { date: { kind: 'today' } }],
     ['в пятницу', { date: { kind: 'weekday', weekday: 5 } }],
     ['во вторник', { date: { kind: 'weekday', weekday: 2 } }],
+    ['не раньше 17:00', {}],
     ['на 15 октября', { date: { kind: 'date', month: 10, dayOfMonth: 15 } }],
     ['на 15.10', { date: { kind: 'date', month: 10, dayOfMonth: 15 } }],
     ['в любой день', { date: null }],
@@ -37,7 +38,7 @@ describe('Условия записи из текста', () => {
     ['в Иннополисе', { city: 'innopolis' }],
     ['я из Москвы', { city: 'moscow' }],
     ['в Казани', { city: 'kazan' }],
-    ['в Московском районе', {}],
+    ['в Московском районе', { districts: ['Московский'] }],
     ['на Нижнекамской улице', {}],
     ['по ДМС', { dms: true }],
     ['по страховке', { dms: true }],
@@ -60,6 +61,50 @@ describe('Условия записи из текста', () => {
     ['профессиональная чистка зубов', { serviceId: 'proc.dentist.hygiene', procedureSpecialty: 'dentist' }],
     ['к гинекологу на УЗИ', { serviceId: 'proc.gynecologist.ultrasound', procedureSpecialty: 'gynecologist' }],
     ['УЗИ брюшной полости', {}],
+    // Несколько дней сразу — все, а не последний.
+    ['во вторник или среду', { date: { kind: 'any_of', options: [{ kind: 'weekday', weekday: 2 }, { kind: 'weekday', weekday: 3 }] } }],
+    ['сегодня или завтра', { date: { kind: 'any_of', options: [{ kind: 'today' }, { kind: 'tomorrow' }] } }],
+    ['в понедельник, среду или пятницу', { date: { kind: 'any_of', options: [{ kind: 'weekday', weekday: 1 }, { kind: 'weekday', weekday: 3 }, { kind: 'weekday', weekday: 5 }] } }],
+    ['на 15 или 16 октября', { date: { kind: 'any_of', options: [{ kind: 'date', month: 10, dayOfMonth: 15 }, { kind: 'date', month: 10, dayOfMonth: 16 }] } }],
+    ['не в понедельник, а во вторник', { date: { kind: 'weekday', weekday: 2 }, excludeWeekdays: [1] }],
+    ['только не в понедельник', { excludeWeekdays: [1] }],
+    ['кроме пятницы и субботы', { excludeWeekdays: [5, 6], suppressWeekend: true }],
+    ['гинеколог, желательно женщина', { preferGender: 'female' }],
+    ['запишите на 17:30', { timeExact: '17:30' }],
+    ['около 18:00', { timeAround: '18:00' }],
+    ['лор в субботу 16 октября', { date: { kind: 'date', month: 10, dayOfMonth: 16, expectWeekday: 6 } }],
+    ['педиатр бесплатно по ОМС', { unsupported: ['oms'] }],
+    ['онлайн-консультация не нужна', {}],
+    ['в будни', { workdays: true }],
+    // Район — только со словом «район»; «Московский проспект» — улица.
+    ['в Вахитовском или Приволжском районе, но не в Советском районе', { districts: ['Вахитовский', 'Приволжский'], excludeDistricts: ['Советский'] }],
+    ['кроме Советского района', { excludeDistricts: ['Советский'] }],
+    ['на Московском проспекте', {}],
+    ['в центре', { districts: ['Вахитовский'] }],
+    ['в медицинском центре', {}],
+    // Пол — только о враче.
+    ['врач-женщина', { doctorGender: 'female' }],
+    ['чтобы врач был мужчина', { doctorGender: 'male' }],
+    ['нужен гинеколог женщина', { doctorGender: 'female' }],
+    ['гинеколог женщине 30 лет', {}],
+    ['я женщина, нужен терапевт', {}],
+    // Стаж: «больше 15» — строго больше.
+    ['с опытом больше 15 лет', { minExperience: 16 }],
+    ['стаж от 10 лет', { minExperience: 10 }],
+    ['мне 40 лет', {}],
+    // Чего в демо нет — помечается, а не теряется.
+    ['вызвать врача на дом', { unsupported: ['home_visit'] }],
+    ['онлайн-консультация', { unsupported: ['online'] }],
+    ['запишите онлайн', {}],
+    ['лучший лор с отзывами', { unsupported: ['rating'] }],
+    // Программа ДМС по названию; «Кама Премиум» — клиника, а не программа.
+    ['по программе Demo Premium', { planId: 'demo-premium', dms: true }],
+    ['в клинику Кама Премиум', {}],
+    // Точка отправления словами — только рядом со словами о дороге.
+    ['не дальше 20 минут от дома', { originHint: 'home' }],
+    ['рядом с Кремлём', { originHint: 'place' }],
+    ['что-нибудь от кашля', {}],
+    ['рядом со мной', {}],
   ];
   for (const [text, expected] of cases) {
     it(`«${text}»`, () => {
@@ -83,6 +128,22 @@ describe('Условия записи из текста', () => {
     assert.equal(merged.evening, false);
     assert.equal(merged.timeFrom, null);
     assert.equal(merged.timeTo, '12:00');
+  });
+
+  it('слияние: будни и выходные сменяют друг друга; район, пол, стаж держатся до отмены', () => {
+    const merge = (texts) => mergeBookingTurns(texts.map((text) => ({ booking: extractBookingConstraints(text), constraints: extractConstraints(text) })));
+    const weekdays = merge(['терапевт в выходные', 'нет, лучше в будни']);
+    assert.equal(weekdays.workdays, true);
+    assert.equal(weekdays.weekend, false);
+    const back = merge(['терапевт в будни', 'а можно в субботу']);
+    assert.equal(back.workdays, false);
+    const kept = merge(['лор в Вахитовском районе, врач-женщина, стаж от 10 лет', 'а завтра?']);
+    assert.deepEqual(kept.districts, ['Вахитовский']);
+    assert.equal(kept.doctorGender, 'female');
+    assert.equal(kept.minExperience, 10);
+    const cleared = merge(['лор в Вахитовском районе, врач-женщина', 'район не важен, пол врача не важен']);
+    assert.deepEqual(cleared.districts, []);
+    assert.equal(cleared.doctorGender, null);
   });
 
   it('слияние реплик: поздняя важнее, снятие обнуляет', () => {

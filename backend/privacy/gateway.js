@@ -42,6 +42,7 @@ import { decideGatewayPolicy, POLICY, POLICY_VERSION } from './policies.js';
 import { FAIL_CLOSED_REASON, GATEWAY_DECISION, mintSanitizedPlannerRequest } from './models.js';
 import { SPECIALTY_CANON } from './catalog.js';
 import { extractBookingConstraints, mergeBookingTurns } from './bookingConstraints.js';
+import { demoRefsOf } from './demoRefs.js';
 import {
   checkClosedVocabulary,
   findKnownPlaces,
@@ -82,8 +83,9 @@ export const extractConstraints = (text) => {
    * «До 3 000 ₽», «до 3 тысяч», «до 2к» — это цена, а не «приём до 03:00»:
    * число, за которым идут ещё три цифры, тысячи или рубли, временем не считается.
    */
-  const TIME_AFTER = /(?<![\p{L}\p{N}])(?:после|позже|начиная\s+с|с)\s+(\d{1,2})(?::(\d{2}))?(?![\d.:-])(?!\s*(?:мин|час|тыс|руб|₽|р\.|т\.?\s?р|к(?!\p{L})|\d{3}(?!\d)))/u;
-  const TIME_BEFORE = /(?<![\p{L}\p{N}])(?:до|раньше|ранее)\s+(\d{1,2})(?::(\d{2}))?(?![\d.:-])(?!\s*(?:мин|час|тыс|руб|₽|р\.|т\.?\s?р|к(?!\p{L})|\d{3}(?!\d)))/u;
+  // «Не раньше 17:00» — это «после», а «не позже 17:00» — «до»: отрицание меняет сторону.
+  const TIME_AFTER = /(?<![\p{L}\p{N}])(?:после|(?<!не\s)позже|начиная\s+с|с|не\s+раньше|не\s+ранее)\s+(\d{1,2})(?::(\d{2}))?(?![\d.:-])(?!\s*(?:мин|час|тыс|руб|₽|р\.|т\.?\s?р|к(?!\p{L})|\d{3}(?!\d)))/u;
+  const TIME_BEFORE = /(?<![\p{L}\p{N}])(?:до|(?<!не\s)раньше|(?<!не\s)ранее|не\s+позже|не\s+позднее)\s+(\d{1,2})(?::(\d{2}))?(?![\d.:-])(?!\s*(?:мин|час|тыс|руб|₽|р\.|т\.?\s?р|к(?!\p{L})|\d{3}(?!\d)))/u;
 
   const after = lower.match(TIME_AFTER);
   if (after) {
@@ -531,7 +533,10 @@ export const createPrivacyGateway = ({
      * это смена врача, а не два врача сразу.
      */
     const lastSpecialties = [...perTurnSpecialties].reverse().find((keys) => keys.length > 0) || [];
-    const mergedBooking = mergeBookingTurns(userTexts.map((text, index) => ({ booking: extractBookingConstraints(text), constraints: turnConstraints[index] })));
+    const mergedBooking = mergeBookingTurns(userTexts.map((text, index) => ({
+      booking: { ...extractBookingConstraints(text), ...demoRefsOf(analyses[index]) },
+      constraints: turnConstraints[index],
+    })));
     // «Подбор очков» без слова «офтальмолог»: профиль однозначно задан процедурой.
     const bookingSpecialties = lastSpecialties.length > 0
       ? lastSpecialties

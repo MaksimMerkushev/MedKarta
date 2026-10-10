@@ -65,6 +65,8 @@ import { DataReportButton, SearchFeedbackPrompt } from './FeedbackWidgets';
 import DmsPanel from './DmsPanel';
 import { fetchServerConfig, loadDemoData, readDemoPreference, setDemoPreference } from './demoMode';
 import MyBookingsPanel from './MyBookingsPanel';
+import PlaceDetailsModal from './PlaceDetailsModal';
+import DemoDoctorSchedule from './DemoDoctorSchedule';
 import { readMyBookings, toStoredBooking, writeMyBookings } from './services/demoBooking';
 import { coverageBadge, coverageFor, findPlan, findProvider } from '@shared/dms.js';
 import { track } from './services/analytics';
@@ -1044,6 +1046,14 @@ const calculateDistanceKm = (origin, target) => {
   return earthRadius * c;
 };
 
+const pluralYears = (count) => {
+  const tail = count % 100;
+  if (tail >= 11 && tail <= 14) return 'лет';
+  if (count % 10 === 1) return 'год';
+  if (count % 10 >= 2 && count % 10 <= 4) return 'года';
+  return 'лет';
+};
+
 const formatDistance = (meters) => {
   if (meters == null) {
     return '—';
@@ -1250,6 +1260,8 @@ export default function App() {
   const [assistantBookings, setAssistantBookings] = useState({});
   const bookingEnabledRef = useRef(false);
   const [bookingTarget, setBookingTarget] = useState(null);
+  // Окно подробностей карточки: в списке — кратко, всё остальное — здесь.
+  const [detailsId, setDetailsId] = useState(null);
   const [myBookings, setMyBookings] = useState(() => readMyBookings());
   const [bookingsRefresh, setBookingsRefresh] = useState(0);
   const [isMyBookingsOpen, setIsMyBookingsOpen] = useState(false);
@@ -1472,7 +1484,10 @@ export default function App() {
   const sourceFacilities = useMemo(() => {
     // Источники: проверенные врачи с официальных сайтов больниц,
     // учреждения из OpenStreetMap и данные по клиникам.
-    const all = [...verifiedDoctors, ...doctorsData, ...kazanFacilities.map(withOsmSchedule), ...clinicsFacilities, ...COLLECTED_FACILITIES, ...demoState.items];
+    // Реальная частная клиника из демо-набора заменяет свою карточку из OSM, а не дублирует её.
+    const replacedByDemo = new Set(demoState.items.map((item) => item.osmId).filter(Boolean));
+    const osmFacilities = replacedByDemo.size > 0 ? kazanFacilities.filter((item) => !replacedByDemo.has(item.id)) : kazanFacilities;
+    const all = [...verifiedDoctors, ...doctorsData, ...osmFacilities.map(withOsmSchedule), ...clinicsFacilities, ...COLLECTED_FACILITIES, ...demoState.items];
     // Демо-режим: государственные учреждения скрыты из выдачи (флаг сервера PUBLIC_CLINICS).
     const base = demoState.enabled && !demoState.publicClinics ? all.filter((item) => item.ownership !== PUBLIC_OWNERSHIP) : all;
     const clinicAddressMap = new Map();
@@ -2174,19 +2189,6 @@ export default function App() {
   }, [travelFilteredDoctors, now, sortBy]);
 
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-  const [expandedSchedules, setExpandedSchedules] = useState(() => new Set());
-
-  const toggleSchedule = useCallback((id) => {
-    setExpandedSchedules((current) => {
-      const next = new Set(current);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  }, []);
 
   // Отражаем фильтры в адресной строке через replaceState: ссылку можно
   // переслать или сохранить, но история браузера не засоряется — иначе
@@ -2523,6 +2525,12 @@ export default function App() {
   const favoritesCount = enrichedDoctors.filter((doc) => doc.isFavorite).length;
   // Сортировка «сначала дешевле» имеет смысл, только когда в справочнике есть цены.
   const hasPrices = useMemo(() => sourceFacilities.some((doc) => Number.isFinite(doc.consultPrice)), [sourceFacilities]);
+
+  // Карточка в окне подробностей — та же, что в списке (со временем в пути), а если её отфильтровали — из справочника.
+  const detailsDoc = useMemo(() => {
+    if (!detailsId) return null;
+    return sortedDoctors.find((doc) => doc.id === detailsId) || dmsAnnotatedDoctors.find((doc) => doc.id === detailsId) || null;
+  }, [detailsId, sortedDoctors, dmsAnnotatedDoctors]);
   // Сколько записей фильтр «Открытые сейчас» прячет не потому, что они закрыты,
   // а потому, что графика нет в данных. Молча терять половину базы нечестно.
   const unknownScheduleCount = enrichedDoctors.filter((doc) => doc.openState === OPEN_STATE.UNKNOWN).length;
@@ -2719,13 +2727,13 @@ export default function App() {
     });
   }, []);
 
-  const openBookingForDoc = useCallback((doc) => {
+  const openBookingForDoc = useCallback((doc, slot = null) => {
     if (!doc?.doctorId || !doc.branchId) return;
     setBookingTarget({
       doctorId: doc.doctorId,
       branchId: doc.branchId,
-      serviceId: null,
-      slotId: null,
+      serviceId: slot?.serviceId || null,
+      slotId: slot?.id || null,
       patient: childrenOnly && doc.ageGroups?.includes('child') ? 'child' : null,
       doctorName: doc.name,
       specialty: doc.specialty,
@@ -3107,6 +3115,14 @@ export default function App() {
                     {primary.isFavorite ? <Heart size={14} fill="currentColor" /> : <HeartOff size={14} />}{' '}
                     {primary.isFavorite ? 'В избранном' : 'В избранное'}
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setDetailsId(primary.id)}
+                    className="mt-1.5 inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition-all hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300"
+                    data-testid="popup-details"
+                  >
+                    Подробнее{primary.demo && primary.entityKind === 'doctor' ? ' и расписание' : ''}
+                  </button>
                 </div>
               ) : (
                 <PlaceDoctorList
@@ -3114,6 +3130,7 @@ export default function App() {
                   onAddToRoute={handleRouteClick}
                   onRemoveFromRoute={removeFromRoute}
                   onToggleFavorite={toggleFavorite}
+                  onOpenDetails={setDetailsId}
                 />
               )}
             </div>
@@ -3211,20 +3228,26 @@ export default function App() {
     window.addEventListener('mouseup', onMouseUp);
   };
 
-  const renderRouteButton = (doc, isPopup = false) => {
+  // variant: false — крупная кнопка (окно подробностей), true — окно на карте, 'compact' — краткая карточка списка.
+  const renderRouteButton = (doc, variant = false) => {
+    const isPopup = variant === true;
     const isTarget = routeTargets.some(t => t.id === doc.id);
     const commonClasses = isPopup
       ? 'mt-3 w-full text-sm font-medium py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition-all'
-      : 'w-full flex-1 bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white font-medium px-5 py-2.5 rounded-xl inline-flex items-center justify-center gap-2.5 transition-all border border-blue-200 dark:bg-blue-900 dark:text-blue-300 dark:border-blue-800 dark:hover:bg-blue-700 dark:hover:text-blue-100';
+      : variant === 'compact'
+        ? 'w-full bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white text-xs font-semibold px-2.5 py-1.5 rounded-lg inline-flex items-center justify-center gap-1.5 transition-all border border-blue-200 dark:bg-blue-900 dark:text-blue-300 dark:border-blue-800 dark:hover:bg-blue-700 dark:hover:text-blue-100'
+        : 'w-full flex-1 bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white font-medium px-5 py-2.5 rounded-xl inline-flex items-center justify-center gap-2.5 transition-all border border-blue-200 dark:bg-blue-900 dark:text-blue-300 dark:border-blue-800 dark:hover:bg-blue-700 dark:hover:text-blue-100';
+    const iconSize = isPopup ? 16 : variant === 'compact' ? 13 : 18;
 
     const redClasses = isPopup
       ? `${commonClasses} bg-red-50 text-red-600 border border-red-200`
       : `${commonClasses} bg-red-50 text-red-600 hover:bg-red-600 hover:text-white border-red-200 dark:bg-red-900 dark:text-red-300 dark:hover:bg-red-700 dark:hover:text-red-100 dark:border-red-800`;
 
+    const compact = variant === 'compact';
     if (isTarget) {
       return (
-        <button type="button" onClick={() => removeFromRoute(doc.id)} className={redClasses}>
-          <XCircle size={isPopup ? 16 : 18} /> {isPopup ? 'Убрать' : 'Убрать из маршрута'}
+        <button type="button" onClick={() => removeFromRoute(doc.id)} className={redClasses} aria-label={compact ? 'Убрать из маршрута' : undefined}>
+          <XCircle size={iconSize} /> {isPopup ? 'Убрать' : compact ? 'Убрать' : 'Убрать из маршрута'}
         </button>
       );
     }
@@ -3234,18 +3257,114 @@ export default function App() {
         type="button"
         onClick={() => handleRouteClick(doc)}
         className={isPopup ? `${commonClasses} bg-blue-50 text-blue-600 border border-blue-200 dark:bg-blue-900 dark:text-blue-300 dark:border-blue-800` : commonClasses}
+        aria-label={compact ? 'Добавить в маршрут' : undefined}
       >
-        <Navigation size={isPopup ? 16 : 18} /> {isPopup ? 'Показать путь' : 'Добавить в маршрут'}
+        <Navigation size={iconSize} /> {isPopup ? 'Показать путь' : compact ? 'В маршрут' : 'Добавить в маршрут'}
       </button>
     );
   };
 
+  /*
+   * Краткая карточка списка: кто, где, сколько ехать, цена, ДМС — и
+   * действия. Всё остальное (график на неделю, цены, контакты, ссылки на
+   * карты, расписание демо-врача) — в окне «Подробнее».
+   */
   const renderListingCard = (doc, index = 0) => {
-    const isTarget = routeTargets.some(t => t.id === doc.id);
+    const isTarget = routeTargets.some((t) => t.id === doc.id);
+    const isDoctorCard = doc.entityKind === 'doctor';
+    const distanceLabel = doc.distanceKm == null ? null : formatDistance(doc.distanceKm * 1000);
+    const dmsBadge = dmsPlan && doc.dmsCoverage ? coverageBadge(doc.dmsCoverage, dmsPlan) : null;
+    const subtitle = isDoctorCard ? doc.doctorProfile || doc.specialty : doc.facilityType || doc.specialty;
+    const openDetails = () => {
+      track('result_open', { surface: 'list', rank: Math.min(index + 1, 500), ...placeFields(doc) });
+      setDetailsId(doc.id);
+    };
+
+    return (
+      <div
+        key={doc.id}
+        className={`card-fade-in rounded-2xl border bg-white p-3 shadow-sm transition-all dark:bg-slate-800 dark:text-white ${isTarget ? 'border-blue-400 ring-2 ring-blue-100 dark:border-blue-500 dark:ring-blue-900' : isDoctorCard ? 'border-blue-100 hover:shadow-md dark:border-blue-900' : 'border-emerald-100 hover:shadow-md dark:border-emerald-900'}`}
+        data-testid="place-card"
+      >
+        <div className="flex items-start gap-2">
+          <button type="button" onClick={openDetails} className="min-w-0 flex-1 text-left" aria-label={`Подробнее: ${doc.name}`}>
+            <h3 className="text-[15px] font-extrabold leading-5 text-slate-800 hover:text-blue-700 dark:text-white dark:hover:text-blue-300">{doc.name}</h3>
+            <p className="mt-0.5 truncate text-xs font-semibold text-blue-600 dark:text-blue-400">
+              {subtitle}{isDoctorCard && doc.experience > 0 ? ` · стаж ${doc.experience} ${pluralYears(doc.experience)}` : ''}
+            </p>
+            <p className="mt-0.5 truncate text-xs text-slate-500 dark:text-slate-400">{isDoctorCard ? doc.clinic : doc.address}</p>
+          </button>
+          <button
+            type="button"
+            onClick={() => toggleFavorite(doc.id)}
+            className={`shrink-0 rounded-full border p-1.5 transition-all ${doc.isFavorite ? 'border-amber-200 bg-amber-50 text-amber-600 dark:border-amber-800 dark:bg-amber-900 dark:text-amber-300' : 'border-slate-200 bg-white text-slate-400 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-400'}`}
+            title={doc.isFavorite ? 'Убрать из избранного' : 'Добавить в избранное'}
+            aria-label={doc.isFavorite ? 'Убрать из избранного' : 'Добавить в избранное'}
+          >
+            {doc.isFavorite ? <Heart size={16} fill="currentColor" /> : <HeartOff size={16} />}
+          </button>
+        </div>
+
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] font-semibold">
+          {doc.demo && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 uppercase tracking-[0.08em] text-amber-800 dark:bg-amber-900 dark:text-amber-100" title={doc.realClinic ? 'Клиника реальная, врачи и расписание вымышлены' : 'Вымышленная запись для проверки сценариев'}>
+              <FlaskConical size={11} aria-hidden="true" /> Демо
+            </span>
+          )}
+          {doc.realClinic && (
+            <span className="rounded-full bg-sky-50 px-2 py-0.5 text-sky-700 dark:bg-sky-900/50 dark:text-sky-200" title="Название, адрес и часы — из OpenStreetMap">Реальная клиника</span>
+          )}
+          {doc.openState === OPEN_STATE.OPEN && <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-100">Открыто</span>}
+          {doc.openState === OPEN_STATE.CLOSED && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-500 dark:bg-slate-700 dark:text-slate-300">Закрыто</span>}
+          {distanceLabel && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-600 dark:bg-slate-700 dark:text-slate-300">{distanceLabel}</span>}
+          {doc.travelSeconds != null && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-blue-700 dark:bg-blue-900 dark:text-blue-200" title={doc.travelApproximate ? 'Оценка по расстоянию: точное время ещё считается' : 'Время по дорогам, без учёта пробок'}>
+              <Timer size={11} aria-hidden="true" /> {doc.travelApproximate ? '≈ ' : ''}{Math.max(1, Math.round(doc.travelSeconds / 60))} мин
+            </span>
+          )}
+          {Number.isFinite(doc.consultPrice) && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">
+              <Wallet size={11} aria-hidden="true" /> от {doc.consultPrice.toLocaleString('ru-RU')} ₽
+            </span>
+          )}
+          {dmsBadge && (
+            <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 ${dmsBadge.tone === 'covered' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200' : 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-300'}`}>
+              <ShieldCheck size={11} aria-hidden="true" /> {dmsBadge.tone === 'covered' ? 'ДМС' : 'не по ДМС'}
+            </span>
+          )}
+        </div>
+
+        <div className="mt-2.5 flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            onClick={openDetails}
+            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-300 hover:text-blue-700 dark:border-slate-600 dark:text-slate-200"
+            data-testid="place-card-details"
+          >
+            {doc.demo && isDoctorCard && demoState.booking ? 'Расписание' : 'Подробнее'}
+          </button>
+          {doc.demo && isDoctorCard && demoState.booking && doc.doctorId && (
+            <button
+              type="button"
+              onClick={() => openBookingForDoc(doc)}
+              className="inline-flex items-center gap-1 rounded-lg bg-violet-600 px-2.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-violet-700"
+              data-testid="card-book-button"
+            >
+              <CalendarCheck size={13} aria-hidden="true" /> Записаться
+            </button>
+          )}
+          <div className="ml-auto">{renderRouteButton(doc, 'compact')}</div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderPlaceDetails = (doc) => {
     const isDoctorCard = doc.entityKind === 'doctor';
     const distanceLabel = doc.distanceKm == null ? 'Геолокация недоступна' : formatDistance(doc.distanceKm * 1000);
     const hasVisibleDescription = Boolean((doc.description || '').trim()) && !/данные из openstreetmap/i.test(String(doc.description));
-    const isScheduleOpen = expandedSchedules.has(doc.id);
+    // В окне подробностей график на неделю виден сразу — без лишнего нажатия.
+    const isScheduleOpen = true;
     const isState = doc.ownership === 'Государственная';
     const oms = omsHint(doc);
     const referralUrl = withReferral(doc.websiteUrl, 'card');
@@ -3256,15 +3375,10 @@ export default function App() {
     const pultHref = dmsProvider ? toTelHref(dmsProvider.pultPhone) : null;
 
     return (
-      <div
-        key={doc.id}
-        className={`card-fade-in rounded-2xl sm:rounded-3xl border bg-white p-3 sm:p-5 shadow-sm transition-all dark:bg-slate-800 dark:text-white ${isTarget ? 'border-blue-400 ring-2 ring-blue-100 dark:border-blue-500 dark:ring-blue-900' : isDoctorCard ? 'border-blue-100 hover:shadow-md dark:border-blue-900' : 'border-emerald-100 hover:shadow-md dark:border-emerald-900'
-          }`}
-      >
+      <div className="text-slate-800 dark:text-white" data-testid="place-details-body">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-lg font-extrabold text-slate-800 dark:text-white">{doc.name}</h3>
               <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.18em] ${isDoctorCard ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-100' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-100'}`}>
                 {isDoctorCard ? 'Врач' : 'Учреждение'}
               </span>
@@ -3335,6 +3449,10 @@ export default function App() {
             {verifiedLabel ? `Официальный сайт · проверено ${verifiedLabel}` : 'Проверено по официальному сайту'}
             <ExternalLink size={11} className="opacity-60" aria-hidden="true" />
           </a>
+        ) : doc.demo && doc.realClinic ? (
+          <p className="mt-3 text-[11px] leading-4 text-amber-700 dark:text-amber-300" data-testid="real-clinic-note">
+            Клиника реальная: название, адрес, точка и часы работы — из OpenStreetMap. {isDoctorCard ? 'Врач, его расписание и цены' : 'Врачи, расписание и цены'} — вымышленные, демонстрационные; запись в клинику не уходит, телефон клиники в демо не показываем.
+          </p>
         ) : doc.demo ? (
           <p className="mt-3 text-[11px] leading-4 text-amber-700 dark:text-amber-300">
             Демо-данные: вымышленная клиника для проверки сценариев. Сайт и телефон не настоящие.
@@ -3367,27 +3485,26 @@ export default function App() {
           <div className="flex items-center gap-2">
             <Clock size={16} className="shrink-0 text-slate-400 dark:text-slate-500" aria-hidden="true" />
             {doc.weekSchedule ? (
-              <button
-                type="button"
-                onClick={() => {
-                  if (!isScheduleOpen) track('result_open', { surface: 'list', rank: Math.min(index + 1, 500), ...placeFields(doc) });
-                  toggleSchedule(doc.id);
-                }}
-                aria-expanded={isScheduleOpen}
-                className="inline-flex items-center gap-1 text-left underline decoration-dotted underline-offset-4 transition-colors hover:text-blue-600 dark:hover:text-blue-400"
-              >
-                Сегодня: {doc.todayHours}
-                {isScheduleOpen ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
-              </button>
+              <span>Сегодня: {doc.todayHours}</span>
             ) : (
               <span className="text-slate-400 dark:text-slate-500">График не указан</span>
             )}
           </div>
           <div className="flex items-center gap-2">
             {isDoctorCard ? <TrendingUp size={16} className="shrink-0 text-slate-400 dark:text-slate-500" aria-hidden="true" /> : <Building2 size={16} className="shrink-0 text-slate-400 dark:text-slate-500" aria-hidden="true" />}
-            <span>{isDoctorCard ? `Стаж: ${doc.experience > 0 ? `${doc.experience} лет` : 'не указан'}` : `Тип: ${doc.facilityType || doc.specialty}`}</span>
+            <span>{isDoctorCard ? `Стаж: ${doc.experience > 0 ? `${doc.experience} ${pluralYears(doc.experience)}` : 'не указан'}` : `Тип: ${doc.facilityType || doc.specialty}`}</span>
           </div>
         </div>
+
+        {doc.demo && isDoctorCard && demoState.booking && doc.doctorId && doc.branchId && (
+          <DemoDoctorSchedule
+            doctorId={doc.doctorId}
+            branchId={doc.branchId}
+            planId={dmsPlan?.id || null}
+            patient={childrenOnly && doc.ageGroups?.includes('child') ? 'child' : null}
+            onPick={(slot) => openBookingForDoc(doc, slot)}
+          />
+        )}
 
         {/* Расписание на неделю — данные лежали в doc.schedule, но наружу
             выходил только сегодняшний день. */}
@@ -3834,9 +3951,9 @@ export default function App() {
                 <div className="mb-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-100" role="note">
                   <FlaskConical size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
                   <p>
-                    <b>Демо-режим.</b> Частные клиники с пометкой «Демо», врачи, расписание, цены и программы ДМС вымышлены — для проверки сценариев.
-                    {demoState.booking && ' Запись — демонстрационная: в клиники ничего не отправляется.'}
-                    {!demoState.publicClinics && ' Государственные клиники в демо временно скрыты.'}{' '}
+                    <b>Демо-режим.</b> Врачи, расписание, цены и ДМС с пометкой «Демо» вымышлены; клиники — вымышленные и реальные частные (данные OSM).
+                    {demoState.booking && ' Запись демонстрационная — в клиники ничего не уходит.'}
+                    {!demoState.publicClinics && ' Госклиники временно скрыты.'}{' '}
                     <button type="button" onClick={disableDemo} className="font-semibold underline underline-offset-2">Выключить</button>
                   </p>
                 </div>
@@ -4469,6 +4586,17 @@ export default function App() {
           </Suspense>
         )}
       </main>
+
+      {detailsDoc && (
+        <PlaceDetailsModal
+          key={detailsDoc.id}
+          title={detailsDoc.name}
+          subtitle={detailsDoc.entityKind === 'doctor' ? detailsDoc.clinic : detailsDoc.facilityType || detailsDoc.specialty}
+          onClose={() => setDetailsId(null)}
+        >
+          {renderPlaceDetails(detailsDoc)}
+        </PlaceDetailsModal>
+      )}
 
       {bookingTarget && (
         <Suspense fallback={null}>

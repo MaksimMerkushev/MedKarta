@@ -28,6 +28,7 @@ import { createExecutor } from './executor/actions.js';
 import { createRoutingProviderFromEnv } from './executor/routing.js';
 import { buildEmergencyAction, buildUiAction } from './executor/resultBuilder.js';
 import { bookingModeFromEnv, bookingReplyText, buildBookingRequest, summarizeBooking } from './demo/chatBridge.js';
+import { getDemoCatalog } from './demo/catalog.js';
 import { demoNow } from './demo/time.js';
 import { publicClinicsHidden } from './demo/flags.js';
 import { logger as defaultLogger } from './observability/safeLogger.js';
@@ -246,14 +247,16 @@ export const createPipeline = ({
       });
 
       if (booking.enabled) {
-        const built = buildBookingRequest({ booking: gate.context.booking, execution, now: booking.now() });
+        // Справочник демо — для подписей названных врачей и клиник (кэшируется на процесс).
+        const index = await (booking.getIndex || getDemoCatalog)().catch(() => null);
+        const built = buildBookingRequest({ booking: gate.context.booking, execution, now: booking.now(), index });
         if (built) {
           action.booking = { request: built.request, summary: summarizeBooking(built) };
           action.replyText = [noticeFor(gate.reason), bookingReplyText({ ...built, booking: gate.context.booking })].filter(Boolean).join(' ');
           metrics.increment('pipeline.booking_request');
         } else if (execution.action === 'CLARIFY' && booking.publicHidden) {
           // Не нашли — возможно, искали государственную клинику, которую демо скрывает.
-          action.replyText = `${action.replyText} В демо-режиме показываются только вымышленные частные клиники — государственные временно скрыты.`;
+          action.replyText = `${action.replyText} В демо-режиме показываются только частные клиники (вымышленные и реальные с вымышленными врачами) — государственные временно скрыты.`;
         }
       }
 

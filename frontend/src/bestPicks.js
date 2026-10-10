@@ -12,6 +12,15 @@
 
 export const TOP_PICKS_LIMIT = 3;
 
+/** «21 год», «23 года», «25 лет». */
+const yearsWord = (count) => {
+  const tail = count % 100;
+  if (tail >= 11 && tail <= 14) return 'лет';
+  if (count % 10 === 1) return 'год';
+  if (count % 10 >= 2 && count % 10 <= 4) return 'года';
+  return 'лет';
+};
+
 /*
  * Три врача из одной поликлиники — это одна поездка, а не три варианта.
  * Сначала берём лучших из разных мест, но только среди первых
@@ -110,7 +119,7 @@ export const pickReasons = (doc, { travelMode = 'driving', childrenOnly = false,
 
   if (childrenOnly && doc.features?.children) reasons.push({ kind: 'child', text: 'Детский приём' });
   if (doc.rating > 0) reasons.push({ kind: 'rating', text: `★ ${doc.rating.toFixed(1).replace('.', ',')}` });
-  if (doc.experience >= 5) reasons.push({ kind: 'experience', text: `Стаж ${doc.experience} лет` });
+  if (doc.experience >= 5) reasons.push({ kind: 'experience', text: `Стаж ${doc.experience} ${yearsWord(doc.experience)}` });
 
   return reasons.slice(0, maxReasons);
 };

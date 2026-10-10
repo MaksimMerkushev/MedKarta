@@ -6,11 +6,17 @@
  * Клиники, врачи, цены, расписания, слоты и программы ДМС нужны, чтобы
  * показать сценарий «запрос → строгий подбор → свободное окно → запись»
  * на согласованных данных. Ни одна запись не выдаёт себя за реальную:
- *   — в названиях клиник есть «Демо», id начинаются с «demo-»;
- *   — адреса условные («демо-адрес»), без реальных номеров домов;
+ *   — в названиях вымышленных клиник есть «Демо», id начинаются с «demo-»;
+ *   — их адреса условные («демо-адрес»), без реальных номеров домов;
  *   — телефоны с несуществующим кодом 000, сайты — в зоне .example;
  *   — страховщик «Демо-Страхование» и программы Demo Basic / Standard /
  *     Premium не связаны ни с одной реальной страховой компанией.
+ *
+ * Кроме вымышленных, в наборе есть РЕАЛЬНЫЕ ЧАСТНЫЕ клиники
+ * (data/demo/realClinics.js): название, адрес, точка, сайт и часы — из
+ * OpenStreetMap. Врачи, цены, расписание и покрытие ДМС в них вымышлены
+ * так же, как везде; клиника помечена real: true, телефон не выдаётся, а
+ * смены врачей не выходят за часы работы клиники по OSM.
  *
  * Детерминированность: всё выводится из seed (DEMO_SEED). Статичная часть
  * (клиники, врачи, услуги, цены, графики, ДМС) записывается в
@@ -28,6 +34,8 @@
 
 import { SPECIALTY_CANON, SPECIALTY_KEYS } from '../../shared/specialties.js';
 import { SERVICE_BY_ID } from '../../shared/services.js';
+import { slug } from '../../shared/translit.js';
+import { REAL_PRIVATE_CLINIC_POINTS } from '../../data/demo/realClinics.js';
 import { createRandom, unit } from './random.js';
 import { addDays, dayIndex, minutesOf, timeOf, weekdayOf } from './time.js';
 
@@ -114,6 +122,26 @@ const CLINICS = Object.freeze([
   { id: 'demo-semya', name: 'Демо-клиника «Семейный доктор»', type: 'Клиника', tier: 'economy', hours: 'weekdaysSat', branches: [['moskovsky', 'Московский', 'moskovsky2']], specialties: ['therapist', 'pediatrician', 'lor', 'ophthalmologist'], extra: ['therapist'], age: 'both' },
 ]);
 
+/*
+ * Реальные частные клиники: точки — по osm-id из data/demo/realClinics.js.
+ * Профили врачей — правдоподобные для клиники (глазная — офтальмологи,
+ * «Мать и дитя» — женское и детское здоровье), но сами врачи вымышлены.
+ */
+const REAL_CLINICS = Object.freeze([
+  { id: 'demo-real-razumed', name: 'Разумед', type: 'Клиника', tier: 'standard', branches: [['pushkina', 'ул. Пушкина', 'osm-node-12863010208'], ['leningradskaya', 'Ленинградская ул.', 'osm-node-4277729442']], specialties: ['therapist', 'lor', 'neurologist', 'cardiologist', 'gynecologist', 'endocrinologist', 'gastroenterologist', 'urologist'], extra: ['therapist', 'neurologist'], age: 'adult' },
+  { id: 'demo-real-budzdorov', name: 'Будь здоров', type: 'Клиника', tier: 'premium', branches: [['narimanova', 'ул. Нариманова', 'osm-node-10837307213']], specialties: ['therapist', 'lor', 'cardiologist', 'dermatologist', 'gynecologist', 'ophthalmologist'], extra: [], age: 'adult' },
+  { id: 'demo-real-aibolit', name: 'Айболит', type: 'Медцентр', tier: 'economy', branches: [['maksimova', 'ул. Максимова', 'osm-node-11403915602'], ['kurskaya', 'Курская ул.', 'osm-node-7309478748']], specialties: ['therapist', 'pediatrician', 'lor', 'neurologist', 'ophthalmologist', 'dermatologist'], extra: ['pediatrician', 'therapist'], age: 'both' },
+  { id: 'demo-real-kuzlyar', name: 'Кузляр', type: 'Клиника', tier: 'standard', branches: [['kutuya', 'ул. Аделя Кутуя', 'osm-node-8370818131'], ['lobachevskogo', 'ул. Лобачевского', 'osm-node-9984003800']], specialties: ['ophthalmologist'], extra: ['ophthalmologist', 'ophthalmologist'], age: 'both' },
+  { id: 'demo-real-citidoc', name: 'Ситидок', type: 'Клиника', tier: 'standard', branches: [['zelenaya', 'Зелёная ул.', 'osm-node-5214562721']], specialties: ['therapist', 'lor', 'neurologist', 'cardiologist', 'gastroenterologist'], extra: [], age: 'adult' },
+  { id: 'demo-real-mamadeti', name: 'Мать и дитя', type: 'Клиника', tier: 'premium', branches: [['daurskaya', 'Даурская ул.', 'osm-node-8521190137']], specialties: ['gynecologist', 'pediatrician', 'endocrinologist', 'therapist', 'lor'], extra: ['gynecologist', 'pediatrician'], age: 'both' },
+  { id: 'demo-real-nurievy', name: 'Клиника Нуриевых', type: 'Клиника', tier: 'standard', branches: [['serova', 'ул. Серова', 'osm-node-9937772987'], ['zorge', 'ул. Рихарда Зорге', 'osm-node-12136502789']], specialties: ['gynecologist', 'urologist', 'therapist', 'endocrinologist'], extra: ['gynecologist'], age: 'adult' },
+]);
+
+const REAL_POINTS = new Map(REAL_PRIVATE_CLINIC_POINTS.map((point) => [point.osmId, point]));
+
+/** Все клиники набора: сначала вымышленные (их порядок задаёт имена и id), потом реальные. */
+const ALL_CLINICS = Object.freeze([...CLINICS, ...REAL_CLINICS.map((spec) => ({ ...spec, real: true }))]);
+
 /* ---------- Имена ---------- */
 
 /*
@@ -132,6 +160,25 @@ const SURNAMES = [
   ['Сафиуллин', 'Сафиуллина'], ['Тагиров', 'Тагирова'], ['Уразов', 'Уразова'], ['Фаттахов', 'Фаттахова'], ['Хабибуллин', 'Хабибуллина'],
   ['Шарафутдинов', 'Шарафутдинова'], ['Юнусов', 'Юнусова'], ['Агеев', 'Агеева'], ['Булыгин', 'Булыгина'], ['Воронцов', 'Воронцова'],
 ];
+/*
+ * Фамилии врачей реальных клиник — отдельный список: у вымышленных клиник
+ * имена и id прежние (от длины списка зависит выбор), а фамилии в наборе
+ * не повторяются. Без фамилий, совпадающих с названиями клиник набора.
+ */
+const SURNAMES_EXTRA = [
+  ['Алексеев', 'Алексеева'], ['Баранов', 'Баранова'], ['Волков', 'Волкова'], ['Гаязов', 'Гаязова'], ['Еремеев', 'Еремеева'],
+  ['Зайцев', 'Зайцева'], ['Ильин', 'Ильина'], ['Карпов', 'Карпова'], ['Лебедев', 'Лебедева'], ['Миронов', 'Миронова'],
+  ['Назаров', 'Назарова'], ['Орлов', 'Орлова'], ['Павлов', 'Павлова'], ['Романов', 'Романова'], ['Соколов', 'Соколова'],
+  ['Титов', 'Титова'], ['Хайруллин', 'Хайруллина'], ['Шакиров', 'Шакирова'], ['Ахметов', 'Ахметова'], ['Гарипов', 'Гарипова'],
+  ['Закиров', 'Закирова'], ['Минуллин', 'Минуллина'], ['Валиуллин', 'Валиуллина'], ['Гимадиев', 'Гимадиева'], ['Борисов', 'Борисова'],
+  ['Кузнецов', 'Кузнецова'], ['Морозов', 'Морозова'], ['Поляков', 'Полякова'], ['Смирнов', 'Смирнова'], ['Степанов', 'Степанова'],
+  ['Тихонов', 'Тихонова'], ['Филиппов', 'Филиппова'], ['Шамсутдинов', 'Шамсутдинова'], ['Яруллин', 'Яруллина'], ['Камалов', 'Камалова'],
+  ['Белов', 'Белова'], ['Гусев', 'Гусева'], ['Денисов', 'Денисова'], ['Журавлёв', 'Журавлёва'], ['Комаров', 'Комарова'],
+  ['Афанасьев', 'Афанасьева'], ['Бикмуллин', 'Бикмуллина'], ['Власов', 'Власова'], ['Галимов', 'Галимова'], ['Дмитриев', 'Дмитриева'],
+  ['Ерофеев', 'Ерофеева'], ['Зуев', 'Зуева'], ['Исаев', 'Исаева'], ['Киселёв', 'Киселёва'], ['Лукин', 'Лукина'],
+  ['Макаров', 'Макарова'], ['Низамов', 'Низамова'], ['Осокин', 'Осокина'], ['Пономарёв', 'Пономарёва'], ['Рашитов', 'Рашитова'],
+  ['Сергеев', 'Сергеева'], ['Тарасов', 'Тарасова'], ['Ушаков', 'Ушакова'], ['Фахрутдинов', 'Фахрутдинова'], ['Чистяков', 'Чистякова'],
+];
 const MALE_NAMES = ['Айдар', 'Артём', 'Булат', 'Вадим', 'Глеб', 'Данияр', 'Евгений', 'Ильдар', 'Кирилл', 'Ленар', 'Марат', 'Никита', 'Олег', 'Ринат', 'Тимур', 'Фарид'];
 const FEMALE_NAMES = ['Алина', 'Гузель', 'Дарья', 'Елена', 'Зульфия', 'Ирина', 'Камила', 'Лилия', 'Мария', 'Наиля', 'Ольга', 'Регина', 'Светлана', 'Татьяна', 'Эльмира', 'Юлия'];
 const PATRONYMICS = [
@@ -139,12 +186,6 @@ const PATRONYMICS = [
   ['Маратович', 'Маратовна'], ['Николаевич', 'Николаевна'], ['Олегович', 'Олеговна'], ['Ринатович', 'Ринатовна'], ['Сергеевич', 'Сергеевна'],
   ['Рустемович', 'Рустемовна'], ['Павлович', 'Павловна'],
 ];
-
-const TRANSLIT = Object.freeze({
-  а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o',
-  п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'h', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya',
-});
-const slug = (text) => [...text.toLowerCase()].map((char) => TRANSLIT[char] ?? (/[a-z0-9]/.test(char) ? char : '-')).join('').replace(/-+/g, '-').replace(/^-|-$/g, '');
 
 /* ---------- Графики ---------- */
 
@@ -202,6 +243,42 @@ export const branchOpenOn = (hoursKey, weekday) => {
   return pair ? [minutesOf(pair[0]), minutesOf(pair[1])] : null;
 };
 
+/** Часы реального филиала (по OSM) в день недели: [начало, конец] в минутах или null. */
+const realOpenOn = (point, weekday) => {
+  const pair = point.hours[weekday];
+  return pair ? [minutesOf(pair[0]), minutesOf(pair[1])] : null;
+};
+
+/*
+ * Смена, подогнанная под часы клиники: врач не принимает раньше открытия и
+ * позже закрытия. Перерыв остаётся, только если он целиком внутри смены.
+ * Короче трёх часов — смены нет.
+ */
+const MIN_SHIFT_MINUTES = 180;
+const fitShift = (shift, open) => {
+  if (!open) return null;
+  const start = Math.max(minutesOf(shift.start), open[0]);
+  const end = Math.min(minutesOf(shift.end), open[1]);
+  if (end - start < MIN_SHIFT_MINUTES) return null;
+  const breakAt = shift.breakAt && minutesOf(shift.breakAt[0]) > start && minutesOf(shift.breakAt[1]) < end ? shift.breakAt : null;
+  return { start: timeOf(start), end: timeOf(end), breakAt };
+};
+
+const realHoursText = (point) => {
+  const groups = new Map();
+  for (let weekday = 1; weekday <= 7; weekday += 1) {
+    const pair = point.hours[weekday];
+    if (!pair) continue;
+    const key = `${pair[0]}-${pair[1]}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(weekday);
+  }
+  return [...groups.entries()].map(([text, list]) => {
+    const contiguous = list.length > 2 && list[list.length - 1] - list[0] === list.length - 1;
+    return `${contiguous ? `${DAY_CODES[list[0]]}-${DAY_CODES[list[list.length - 1]]}` : list.map((day) => DAY_CODES[day]).join(',')} ${text}`;
+  }).join('; ');
+};
+
 /* ---------- Генерация справочника ---------- */
 
 /**
@@ -246,21 +323,65 @@ export const generateDemoCatalog = ({ seed = DEMO_SEED } = {}) => {
     });
   }
 
+  /*
+   * Реальные частные клиники: всё о самой клинике — из OSM, без выдумок
+   * (ни телефона, ни «есть парковка»). Вымышлено только то, что внутри:
+   * врачи, цены, расписание.
+   */
+  for (const spec of REAL_CLINICS) {
+    const points = spec.branches.map(([, , osmId]) => REAL_POINTS.get(osmId));
+    if (points.some((point) => !point)) throw new Error(`нет точки реальной клиники ${spec.id}`);
+    const branches = spec.branches.map(([suffix, label], position) => {
+      const point = points[position];
+      const id = `${spec.id}-${suffix}`;
+      const branch = {
+        id,
+        name: label,
+        district: point.district,
+        address: point.address,
+        lat: point.lat,
+        lng: point.lng,
+        phone: null,
+        hours: realHoursText(point),
+        osmId: point.osmId,
+        features: {},
+      };
+      branchMeta.set(id, { clinic: spec, branch, point });
+      return branch;
+    });
+    clinics.push({
+      id: spec.id,
+      name: spec.name,
+      ownership: 'Частная',
+      facilityType: spec.type,
+      website: points.find((point) => point.website)?.website || null,
+      description: 'Реальная частная клиника: название, адрес, точка и часы работы — из OpenStreetMap. Врачи, цены, расписание и запись здесь вымышленные, демонстрационные — клиника о них не знает.',
+      real: true,
+      source: 'OSM',
+      tier: spec.tier,
+      branches,
+    });
+  }
+
   /* Врачи: по одному на специальность клиники, по два — на extra. */
   const usedNames = new Set();
-  const nameFor = (key) => {
+  const nameFor = (key, surnames = SURNAMES) => {
     const name = createRandom(seed, `name|${key}`);
     for (let attempt = 0; attempt < 200; attempt += 1) {
       const female = name.chance(0.55);
-      const surname = name.pick(SURNAMES)[female ? 1 : 0];
+      const pair = name.pick(surnames);
+      const surname = pair[female ? 1 : 0];
       const first = name.pick(female ? FEMALE_NAMES : MALE_NAMES);
       const patronymic = name.pick(PATRONYMICS)[female ? 1 : 0];
       const full = `${surname} ${first} ${patronymic}`;
-      // Однофамильцы в одном наборе путают: фамилия не повторяется.
-      if (!usedNames.has(full) && !usedNames.has(surname)) {
+      // Однофамильцы в одном наборе путают: фамилия не повторяется,
+      // а в новом списке — и в другой форме («Белов» и «Белова»).
+      const family = surnames === SURNAMES ? surname : `family|${pair[0]}`;
+      if (!usedNames.has(full) && !usedNames.has(surname) && !usedNames.has(family)) {
         usedNames.add(full);
         usedNames.add(surname);
-        return full;
+        usedNames.add(family);
+        return { full, gender: female ? 'female' : 'male' };
       }
     }
     throw new Error(`не удалось подобрать уникальное имя для ${key}`);
@@ -270,14 +391,14 @@ export const generateDemoCatalog = ({ seed = DEMO_SEED } = {}) => {
   const prices = [];
   const pricedServices = new Set();
 
-  for (const spec of CLINICS) {
+  for (const spec of ALL_CLINICS) {
     const branchIds = spec.branches.map(([suffix]) => `${spec.id}-${suffix}`);
     const roster = [...spec.specialties, ...spec.extra];
     const counts = new Map();
     for (const [order, specialty] of roster.entries()) {
       counts.set(specialty, (counts.get(specialty) || 0) + 1);
       const key = `${spec.id}|${specialty}|${counts.get(specialty)}`;
-      const name = nameFor(key);
+      const { full: name, gender } = nameFor(key, spec.real ? SURNAMES_EXTRA : SURNAMES);
       const rnd = createRandom(seed, `doctor|${key}`);
 
       /* Возраст пациентов: детская клиника — дети; семейная — оба. */
@@ -308,15 +429,30 @@ export const generateDemoCatalog = ({ seed = DEMO_SEED } = {}) => {
         const branchId = doctorBranches[twoBranches ? index % 2 : 0];
         // Через день — другая смена: у врача бывают и утренние, и вечерние приёмы.
         const shiftKey = index % 3 === 2 ? rnd.pick(shiftKinds) : mainShift;
-        schedule.push({ branchId, weekday, shift: SHIFTS[shiftKey] });
+        if (!spec.real) {
+          schedule.push({ branchId, weekday, shift: SHIFTS[shiftKey] });
+          return;
+        }
+        // Реальная клиника: смена — в часах её работы по OSM; не помещается — другая смена или выходной.
+        const open = realOpenOn(branchMeta.get(branchId).point, weekday);
+        const shift = [shiftKey, ...shiftKinds].map((kind) => fitShift(SHIFTS[kind], open)).find(Boolean);
+        if (shift) schedule.push({ branchId, weekday, shift });
       });
+      if (spec.real) {
+        // Суббота и воскресенье — только если клиника по OSM в эти дни работает.
+        for (const [weekday, base, chance] of [[6, SATURDAY_SHIFT, 0.4], [7, SUNDAY_SHIFT, 0.3]]) {
+          const shift = fitShift(base, realOpenOn(branchMeta.get(doctorBranches[0]).point, weekday));
+          if (shift && rnd.chance(chance)) schedule.push({ branchId: doctorBranches[0], weekday, shift });
+        }
+        if (schedule.length === 0) throw new Error(`у врача ${name} нет ни одной смены в часах клиники`);
+      }
       const hoursKey = spec.hours;
-      if (rnd.chance(0.4)) schedule.push({ branchId: doctorBranches[0], weekday: 6, shift: SATURDAY_SHIFT });
-      if (BRANCH_HOURS[hoursKey].sunday && rnd.chance(0.3)) schedule.push({ branchId: doctorBranches[0], weekday: 7, shift: SUNDAY_SHIFT });
+      if (!spec.real && rnd.chance(0.4)) schedule.push({ branchId: doctorBranches[0], weekday: 6, shift: SATURDAY_SHIFT });
+      if (!spec.real && BRANCH_HOURS[hoursKey].sunday && rnd.chance(0.3)) schedule.push({ branchId: doctorBranches[0], weekday: 7, shift: SUNDAY_SHIFT });
 
       // Смена внутри часов филиала: на случай правки таблиц выше — проверка здесь же.
       for (const entry of schedule) {
-        const open = branchOpenOn(hoursKey, entry.weekday);
+        const open = spec.real ? realOpenOn(branchMeta.get(entry.branchId).point, entry.weekday) : branchOpenOn(hoursKey, entry.weekday);
         const [start, end] = [minutesOf(entry.shift.start), minutesOf(entry.shift.end)];
         if (!open || start < open[0] || end > open[1]) {
           throw new Error(`смена врача ${name} вне часов филиала ${entry.branchId}`);
@@ -349,8 +485,11 @@ export const generateDemoCatalog = ({ seed = DEMO_SEED } = {}) => {
           breakAt: entry.shift.breakAt,
         })),
         experienceYears: rnd.int(3, 28),
+        gender,
         features: { children: ageGroups.includes('child') },
-        description: 'Демонстрационный врач: вымышленное лицо для показа записи.',
+        description: spec.real
+          ? `Демонстрационный врач: вымышленное лицо. Клиника «${spec.name}» реальная, но этот врач, его расписание и цены придуманы для показа записи.`
+          : 'Демонстрационный врач: вымышленное лицо для показа записи.',
       });
 
       /* Цены: единые для всех филиалов клиники. */
@@ -384,7 +523,7 @@ export const generateDemoCatalog = ({ seed = DEMO_SEED } = {}) => {
       version: DEMO_VERSION,
       seed,
       verifiedAt: '2026-10-09',
-      disclaimer: 'Демонстрационные данные: клиники, врачи, цены, расписание и программы ДМС вымышлены и не являются предложениями реальных организаций.',
+      disclaimer: 'Демонстрационные данные: врачи, цены, расписание и программы ДМС вымышлены и не являются предложениями реальных организаций. Клиники с «Демо» в названии вымышлены; у реальных частных клиник настоящие только название, адрес, точка и часы работы (OpenStreetMap).',
     },
     clinics,
     doctors,
@@ -406,8 +545,13 @@ const generateDemoInsurance = (clinics) => {
   const coverage = [];
   const add = (planId, branchIds, rule) => branchIds.forEach((branchId) => coverage.push({ planId, branchId, ...rule }));
 
-  /* Demo Basic: эконом-сеть, базовые специалисты, процедуры не входят. */
-  const basic = branchesOf('demo-beresta', 'demo-semya', 'demo-travma');
+  /*
+   * Demo Basic: эконом-сеть, базовые специалисты, процедуры не входят.
+   * Реальные клиники в программах — тоже часть вымысла: «Демо-Страхование»
+   * с ними ни о чём не договаривалось.
+   */
+  const basicClinics = ['demo-beresta', 'demo-semya', 'demo-travma', 'demo-real-aibolit'];
+  const basic = branchesOf(...basicClinics);
   for (const specialty of ['therapist', 'lor', 'ophthalmologist', 'gynecologist', 'surgeon', 'traumatologist']) {
     add('demo-basic', basic, { scope: 'specialty', specialty, access: 'direct' });
   }
@@ -419,7 +563,11 @@ const generateDemoInsurance = (clinics) => {
   }
 
   /* Demo Standard: взрослые и дети, большинство клиник; процедуры — по согласованию. */
-  const standard = branchesOf('demo-yasen', 'demo-beresta', 'demo-semya', 'demo-detstvo', 'demo-pediatr-plus', 'demo-zhenskoe', 'demo-travma', 'demo-derma', 'demo-dent');
+  const standardClinics = [
+    'demo-yasen', 'demo-beresta', 'demo-semya', 'demo-detstvo', 'demo-pediatr-plus', 'demo-zhenskoe', 'demo-travma', 'demo-derma', 'demo-dent',
+    'demo-real-razumed', 'demo-real-aibolit', 'demo-real-citidoc', 'demo-real-kuzlyar',
+  ];
+  const standard = branchesOf(...standardClinics);
   add('demo-standard', standard, { scope: 'all_outpatient', access: 'direct' });
   for (const serviceId of ['proc.lor.tonsils', 'proc.ophthalmologist.glasses', 'proc.dermatologist.dermatoscopy', 'proc.gynecologist.ultrasound', 'diag.ecg']) {
     add('demo-standard', standard, { scope: 'service', serviceId, access: 'approval_required', notes: 'Процедура — после согласования со страховой.' });
@@ -444,9 +592,9 @@ const generateDemoInsurance = (clinics) => {
       },
     ],
     plans: [
-      { id: 'demo-basic', providerId: 'demo-insurer', name: 'Demo Basic', insured: 'adult', validFrom: '2026-01-01', validTo: '2027-12-31', sourceDoc: 'Демо-программа, не реальный полис', summary: 'Терапевт, ЛОР, офтальмолог, гинеколог, хирург и травматолог в трёх клиниках эконом-сети. Невролог, кардиолог, эндокринолог — по направлению. Процедуры не входят.' },
-      { id: 'demo-standard', providerId: 'demo-insurer', name: 'Demo Standard', insured: 'family', validFrom: '2026-01-01', validTo: '2027-12-31', sourceDoc: 'Демо-программа, не реальный полис', summary: 'Взрослые и дети, девять клиник. Приёмы напрямую, процедуры — после согласования. Психиатрия и профгигиена не входят.' },
-      { id: 'demo-premium', providerId: 'demo-insurer', name: 'Demo Premium', insured: 'family', validFrom: '2026-01-01', validTo: '2027-12-31', sourceDoc: 'Демо-программа, не реальный полис', summary: 'Все демо-клиники и все услуги напрямую. Профгигиена — раз в год по согласованию.' },
+      { id: 'demo-basic', providerId: 'demo-insurer', name: 'Demo Basic', insured: 'adult', validFrom: '2026-01-01', validTo: '2027-12-31', sourceDoc: 'Демо-программа, не реальный полис', summary: `Терапевт, ЛОР, офтальмолог, гинеколог, хирург и травматолог в ${basicClinics.length} клиниках эконом-сегмента. Невролог, кардиолог, эндокринолог — по направлению. Процедуры не входят.` },
+      { id: 'demo-standard', providerId: 'demo-insurer', name: 'Demo Standard', insured: 'family', validFrom: '2026-01-01', validTo: '2027-12-31', sourceDoc: 'Демо-программа, не реальный полис', summary: `Взрослые и дети, ${standardClinics.length} клиник. Приёмы напрямую, процедуры — после согласования. Психиатрия и профгигиена не входят.` },
+      { id: 'demo-premium', providerId: 'demo-insurer', name: 'Demo Premium', insured: 'family', validFrom: '2026-01-01', validTo: '2027-12-31', sourceDoc: 'Демо-программа, не реальный полис', summary: `Все ${clinics.length} клиник демо-набора и все услуги напрямую. Профгигиена — раз в год по согласованию.` },
     ],
     coverage,
   };
@@ -525,4 +673,4 @@ export const generateDaySlots = (catalog, doctor, day, { seed = catalog.meta.see
 /** Дни окна расписания, начиная с даты. */
 export const windowDays = (startDay, days = SLOT_WINDOW_DAYS) => Array.from({ length: days }, (_, offset) => addDays(startDay, offset));
 
-export const DEMO_SPECIALTIES = Object.freeze([...new Set(CLINICS.flatMap((clinic) => clinic.specialties))].filter((key) => SPECIALTY_KEYS.includes(key)));
+export const DEMO_SPECIALTIES = Object.freeze([...new Set(ALL_CLINICS.flatMap((clinic) => clinic.specialties))].filter((key) => SPECIALTY_KEYS.includes(key)));

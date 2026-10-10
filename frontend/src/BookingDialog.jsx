@@ -430,7 +430,9 @@ export default function BookingDialog({ target, planId = null, onClose, onBooked
               </dl>
               {booking.coverage && <div className="mt-2"><CoverageLine coverage={booking.coverage} /></div>}
               <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-[11px] leading-4 text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
-                Демонстрационная запись: клиника и врач вымышлены, в реальную клинику ничего не отправлено.
+                {booking.clinic?.real
+                  ? 'Демонстрационная запись: клиника реальная, но врач и расписание вымышлены — в клинику ничего не отправлено, звонить туда по этой записи не нужно.'
+                  : 'Демонстрационная запись: клиника и врач вымышлены, в реальную клинику ничего не отправлено.'}
               </p>
             </div>
           )}

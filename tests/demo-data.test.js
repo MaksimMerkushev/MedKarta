@@ -59,9 +59,13 @@ describe('Демо-набор: воспроизводимость', () => {
 });
 
 describe('Демо-набор: объём', () => {
-  it('10–15 клиник, 60–100 врачей, 15–20 специальностей, 3 программы ДМС', () => {
-    assert.ok(catalog.clinics.length >= 10 && catalog.clinics.length <= 15, `клиник ${catalog.clinics.length}`);
-    assert.ok(catalog.doctors.length >= 60 && catalog.doctors.length <= 100, `врачей ${catalog.doctors.length}`);
+  it('12 вымышленных и 7 реальных частных клиник, 100–140 врачей, 15–20 специальностей, 3 программы ДМС', () => {
+    assert.equal(catalog.clinics.filter((clinic) => !clinic.real).length, 12);
+    assert.equal(catalog.clinics.filter((clinic) => clinic.real).length, 7);
+    assert.ok(catalog.doctors.length >= 100 && catalog.doctors.length <= 140, `врачей ${catalog.doctors.length}`);
+    // Пол врача — у каждого: по нему фильтрует «врач-женщина».
+    assert.ok(catalog.doctors.every((doctor) => doctor.gender === 'female' || doctor.gender === 'male'));
+    assert.ok(catalog.doctors.some((doctor) => doctor.gender === 'female') && catalog.doctors.some((doctor) => doctor.gender === 'male'));
     const specialties = new Set(catalog.doctors.map((doctor) => doctor.specialtyKey));
     assert.ok(specialties.size >= 15 && specialties.size <= 20, `специальностей ${specialties.size}`);
     assert.deepEqual(catalog.insurance.plans.map((plan) => plan.name), ['Demo Basic', 'Demo Standard', 'Demo Premium']);
@@ -86,7 +90,7 @@ describe('Демо-набор: маркировка и отделение от �
   it('каждая запись явно демонстрационная', () => {
     assert.equal(catalog.meta.source, 'demo');
     assert.match(catalog.meta.disclaimer, /вымышлены/);
-    for (const clinic of catalog.clinics) {
+    for (const clinic of catalog.clinics.filter((item) => !item.real)) {
       assert.match(clinic.name, /демо/i, clinic.name);
       assert.match(clinic.website, /^https:\/\/[a-z0-9-]+\.example$/);
       assert.match(clinic.description, /Демонстрационная/);
@@ -96,6 +100,12 @@ describe('Демо-набор: маркировка и отделение от �
       }
     }
     for (const doctor of catalog.doctors) assert.match(doctor.description, /вымышленное лицо/);
+    // Реальная клиника: описание говорит, что настоящее, а что вымышлено; телефона нет.
+    for (const clinic of catalog.clinics.filter((item) => item.real)) {
+      assert.match(clinic.description, /Реальная частная клиника/);
+      assert.match(clinic.description, /вымышленные/);
+      for (const branch of clinic.branches) assert.equal(branch.phone, null, branch.id);
+    }
     assert.ok(catalog.insurance.providers.every((provider) => provider.demo === true && /Демо/.test(provider.name)));
   });
 
@@ -117,14 +127,70 @@ describe('Демо-набор: маркировка и отделение от �
     assert.deepEqual(validatePrivateCatalog(demoPrivateCatalog), []);
   });
 
-  it('точки филиалов — в Казани и не на адресах реальных учреждений из OSM', () => {
-    for (const clinic of catalog.clinics) {
+  it('точки вымышленных филиалов — в Казани и не на адресах реальных учреждений из OSM', () => {
+    for (const clinic of catalog.clinics.filter((item) => !item.real)) {
       for (const branch of clinic.branches) {
         assert.ok(branch.lat > 55.70 && branch.lat < 55.90 && branch.lng > 48.95 && branch.lng < 49.30, branch.id);
         const near = kazanFacilities.find((item) => Math.abs(item.lat - branch.lat) < 0.0004 && Math.abs(item.lng - branch.lng) < 0.0007);
         assert.equal(near, undefined, `${branch.id} стоит на точке реального учреждения ${near?.name}`);
       }
     }
+  });
+});
+
+describe('Демо-набор: реальные частные клиники', () => {
+  /*
+   * Частный статус проверен по открытым источникам для каждой сети
+   * (data/demo/realClinics.js). Здесь — что снимок совпадает с OSM и что
+   * ни одно учреждение не государственное.
+   */
+  const VERIFIED_PRIVATE = new Set(['Разумед', 'Будь здоров', 'Айболит', 'Кузляр', 'Ситидок', 'Мать и дитя', 'Клиника Нуриевых']);
+  const GOV_WORDS = /(гбуз|гауз|государ|городск|республиканск|поликлиник|больниц|диспансер|мсч|фкуз|университетск)/i;
+
+  it('только частные: сети из проверенного списка, в OSM — «Частная», без признаков госучреждения', () => {
+    for (const clinic of catalog.clinics.filter((item) => item.real)) {
+      assert.ok(VERIFIED_PRIVATE.has(clinic.name), clinic.name);
+      assert.equal(clinic.ownership, 'Частная');
+      assert.doesNotMatch(clinic.name, GOV_WORDS);
+      for (const branch of clinic.branches) {
+        const osm = kazanFacilities.find((item) => item.id === branch.osmId);
+        assert.ok(osm, `${branch.id}: нет ${branch.osmId} в facilities.js`);
+        assert.equal(osm.ownership, 'Частная', branch.id);
+        assert.doesNotMatch(osm.name, GOV_WORDS);
+        assert.equal(osm.name.toLowerCase(), clinic.name.toLowerCase());
+      }
+    }
+  });
+
+  it('точка, адрес и часы — как в OSM; смены врачей — внутри часов клиники', () => {
+    const DAY_KEYS = ['', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+    for (const clinic of catalog.clinics.filter((item) => item.real)) {
+      for (const branch of clinic.branches) {
+        const osm = kazanFacilities.find((item) => item.id === branch.osmId);
+        assert.equal(branch.lat, osm.lat);
+        assert.equal(branch.lng, osm.lng);
+        assert.equal(branch.address, osm.address);
+      }
+    }
+    for (const doctor of catalog.doctors) {
+      const { clinic, branch } = index.branches.get(doctor.branchIds[0]);
+      if (!clinic.real) continue;
+      for (const entry of doctor.schedule) {
+        const osm = kazanFacilities.find((item) => item.id === index.branches.get(entry.branchId).branch.osmId);
+        const open = osm.schedule?.[DAY_KEYS[entry.weekday]];
+        assert.match(open || '', /^\d{2}:\d{2}-\d{2}:\d{2}$/, `${doctor.id}: смена в день, когда ${branch.id} закрыт`);
+        const [from, to] = open.split('-');
+        assert.ok(entry.start >= from && entry.end <= to, `${doctor.id}: ${entry.start}–${entry.end} вне ${open}`);
+      }
+    }
+  });
+
+  it('врачи реальных клиник — вымышленные, фамилии в наборе не повторяются ни в одной форме', () => {
+    const real = catalog.doctors.filter((doctor) => index.branches.get(doctor.branchIds[0]).clinic.real);
+    assert.ok(real.length >= 30, `врачей реальных клиник ${real.length}`);
+    for (const doctor of real) assert.match(doctor.description, /вымышленное лицо/);
+    const stems = real.map((doctor) => doctor.name.split(' ')[0].replace(/а$/u, ''));
+    assert.equal(new Set(stems).size, stems.length);
   });
 });
 

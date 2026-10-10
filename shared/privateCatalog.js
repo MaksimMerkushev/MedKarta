@@ -169,6 +169,12 @@ export const flattenPrivateCatalog = (catalog) => {
     sourceUrl: branch.sourceUrl || clinic.sourceUrl || null,
     verifiedAt: branch.verifiedAt || clinic.verifiedAt || meta.verifiedAt || null,
     demo: meta.source === 'demo',
+    /*
+     * Реальная клиника в демо-наборе: настоящие название, адрес, точка и
+     * часы (OSM), вымышленные врачи и запись. osmId — чтобы не показывать
+     * ту же клинику второй раз карточкой из OSM.
+     */
+    ...(clinic.real ? { realClinic: true, osmId: branch.osmId || null } : {}),
   });
 
   const items = [];
@@ -228,6 +234,7 @@ export const flattenPrivateCatalog = (catalog) => {
           children: isPediatricRecord(doctor),
         },
         experience: Number(doctor.experienceYears) || 0,
+        ...(doctor.gender === 'female' || doctor.gender === 'male' ? { gender: doctor.gender } : {}),
         rating: 0,
         ...(Array.isArray(doctor.ageGroups) ? { ageGroups: [...doctor.ageGroups] } : {}),
         ...(doctor.specialtyKey ? { specialtyKey: doctor.specialtyKey } : {}),

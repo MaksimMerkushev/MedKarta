@@ -78,7 +78,8 @@ export const searchDemo = (searchRequest, { origin = null, planId = null, signal
       request: {
         ...searchRequest,
         origin: roundOrigin(origin),
-        dms: { required: Boolean(searchRequest?.dms?.required), planId: planId || null },
+        // Программа, названная в запросе («по программе Demo Premium»), важнее выбранной в интерфейсе.
+        dms: { required: Boolean(searchRequest?.dms?.required), planId: searchRequest?.dms?.planId || planId || null },
       },
     },
   });

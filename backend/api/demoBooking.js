@@ -94,7 +94,7 @@ export const createDemoBookingService = ({ index, store, getEngine, now }) => {
       ...view,
       demo: true,
       doctor: { id: doctor.id, name: doctor.name, specialty: doctor.specialty },
-      clinic: { id: clinic.id, name: clinic.name, branchId: branch.id, branchName: branch.name, address: branch.address, lat: branch.lat, lng: branch.lng, phone: branch.phone },
+      clinic: { id: clinic.id, name: clinic.name, branchId: branch.id, branchName: branch.name, address: branch.address, lat: branch.lat, lng: branch.lng, phone: branch.phone || null, real: Boolean(clinic.real) },
       service: { id: service.id, name: service.name, durationMinutes: service.durationMinutes },
       price: index.priceOf(branch.id, service.id),
       coverage,

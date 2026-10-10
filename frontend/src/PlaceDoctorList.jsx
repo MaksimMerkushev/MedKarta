@@ -46,7 +46,7 @@ const metaOf = (doc, withSpecialty) =>
     .filter(Boolean)
     .join(' · ');
 
-export default function PlaceDoctorList({ items, onAddToRoute, onRemoveFromRoute, onToggleFavorite }) {
+export default function PlaceDoctorList({ items, onAddToRoute, onRemoveFromRoute, onToggleFavorite, onOpenDetails = null }) {
   const [query, setQuery] = useState('');
   const [specialty, setSpecialty] = useState(null);
   const [allChips, setAllChips] = useState(false);
@@ -236,9 +236,20 @@ export default function PlaceDoctorList({ items, onAddToRoute, onRemoveFromRoute
                         }`}
                       >
                         <div className="min-w-0 flex-1">
-                          <div className="text-[13px] font-semibold leading-snug text-slate-800 dark:text-white">
-                            <Highlight text={doc.name} tokens={result.tokens} />
-                          </div>
+                          {onOpenDetails ? (
+                            <button
+                              type="button"
+                              onClick={() => onOpenDetails(doc.id)}
+                              className="text-left text-[13px] font-semibold leading-snug text-slate-800 hover:text-blue-700 hover:underline dark:text-white dark:hover:text-blue-300"
+                              title="Подробнее"
+                            >
+                              <Highlight text={doc.name} tokens={result.tokens} />
+                            </button>
+                          ) : (
+                            <div className="text-[13px] font-semibold leading-snug text-slate-800 dark:text-white">
+                              <Highlight text={doc.name} tokens={result.tokens} />
+                            </div>
+                          )}
                           {meta && (
                             <div className="truncate text-[11px] leading-snug text-slate-500 dark:text-slate-400" title={meta}>
                               <Highlight text={meta} tokens={result.tokens} />
