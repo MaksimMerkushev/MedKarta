@@ -532,7 +532,9 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
     /* Ничего не подошло: какое условие отсекло последних, и что будет, если его снять. */
     const blockingStage = result.funnel.find((item) => item.count === 0) || result.funnel[result.funnel.length - 1];
     const relax = [];
+    const tried = [];
     const tryRelax = async (key, patch) => {
+      tried.push({ key, patch });
       const relaxed = normalizeSearchRequest({ ...request, ...patch }).request;
       const attempt = await run(relaxed, { at, today, travelCache });
       if (attempt.candidates.length > 0) relax.push({ key, label: RELAX_LABELS[key], count: attempt.candidates.length, patch });
@@ -549,6 +551,20 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
     if (request.maxPrice) await tryRelax('price', { maxPrice: null });
     if (request.dms.required) await tryRelax('dms', { dms: { required: false, planId: request.dms.planId } });
     if (request.travel.maxMinutes) await tryRelax('travel', { travel: { ...request.travel, maxMinutes: null } });
+
+    /*
+     * Ни одно условие по отдельности не помогает («психиатр-мужчина со стажем
+     * от 20 лет»): предлагаем снять сразу те, что мешают, — и называем их все.
+     * Это тоже только предложение: без нажатия ничего не меняется.
+     */
+    if (relax.length === 0 && tried.length > 1) {
+      const patch = Object.assign({}, ...tried.map((item) => item.patch));
+      const relaxed = normalizeSearchRequest({ ...request, ...patch }).request;
+      const attempt = await run(relaxed, { at, today, travelCache });
+      if (attempt.candidates.length > 0) {
+        relax.push({ key: 'combined', label: `Снять сразу: ${tried.map((item) => RELAX_LABELS[item.key]).join('; ')}`, count: attempt.candidates.length, patch });
+      }
+    }
 
     const days = result.days;
     const noDays = days.length === 0;

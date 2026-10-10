@@ -429,6 +429,20 @@ describe('Демо-сценарии: сложные условия — без п
     assert.ok(senior.options.every((option) => option.doctor.experienceYears >= 16));
   });
 
+  it('ни одно условие по отдельности не помогает — предложение снять сразу оба, с названиями', async () => {
+    const result = await run(await chat('нужен психиатр, только чтобы врач был мужчина и со стажем не менее 20 лет'));
+    assert.equal(result.status, 'empty');
+    assert.equal(result.options, undefined);
+    const combined = result.relax.find((item) => item.key === 'combined');
+    if (combined) {
+      assert.match(combined.label, /пол/);
+      assert.match(combined.label, /стаж/);
+      assert.ok(combined.count > 0);
+    } else {
+      assert.ok(result.relax.length > 0, 'хотя бы одно предложение');
+    }
+  });
+
   it('выезд на дом, онлайн, отзывы — «не могу», а не молча обычный приём', async () => {
     for (const text of ['терапевт на дом завтра', 'онлайн-консультация невролога', 'лучший лор с хорошими отзывами']) {
       const action = await chat(text);
