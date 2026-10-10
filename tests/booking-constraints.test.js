@@ -75,6 +75,17 @@ describe('Условия записи из текста', () => {
     ['лор в субботу 16 октября', { date: { kind: 'date', month: 10, dayOfMonth: 16, expectWeekday: 6 } }],
     ['педиатр бесплатно по ОМС', { unsupported: ['oms'] }],
     ['онлайн-консультация не нужна', {}],
+    // Часы словами и с частью суток.
+    ['после шести вечера', { spokenAfter: '18:00' }],
+    ['в 2 часа дня', { timeExact: '14:00' }],
+    ['с 9 утра до 2 дня', { spokenAfter: '09:00', spokenBefore: '14:00' }],
+    ['около семи вечера', { timeAround: '19:00' }],
+    ['в два раза дешевле', {}],
+    ['уролог после работы', { afterWork: true }],
+    ['в пн или ср', { date: { kind: 'any_of', options: [{ kind: 'weekday', weekday: 1 }, { kind: 'weekday', weekday: 3 }] } }],
+    ['через 2 дня', { date: { kind: 'in_days', days: 2 } }],
+    ['через 2 часа', {}],
+    ['в районе Горок', { originHint: 'place', nearPlace: true }],
     ['в будни', { workdays: true }],
     // Район — только со словом «район»; «Московский проспект» — улица.
     ['в Вахитовском или Приволжском районе, но не в Советском районе', { districts: ['Вахитовский', 'Приволжский'], excludeDistricts: ['Советский'] }],
@@ -113,7 +124,7 @@ describe('Условия записи из текста', () => {
   }
 
   it('цена не принимается за время приёма: «до 3 000 ₽» — не «до 03:00»', () => {
-    for (const text of ['до 3 000 рублей', 'до 3 тысяч', 'до 2к', 'с 3 000']) {
+    for (const text of ['до 3 000 рублей', 'до 3 тысяч', 'до 2к', 'с 3 000', 'до 2 дней', 'до 5 лет']) {
       const constraints = extractConstraints(text);
       assert.equal(constraints.availableBefore, undefined, text);
       assert.equal(constraints.availableAfter, undefined, text);

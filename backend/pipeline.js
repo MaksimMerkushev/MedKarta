@@ -252,6 +252,16 @@ export const createPipeline = ({
         const built = buildBookingRequest({ booking: gate.context.booking, execution, now: booking.now(), index });
         if (built) {
           action.booking = { request: built.request, summary: summarizeBooking(built) };
+          // Карта не должна противоречить подбору: ни лишнего маршрута, ни фильтра по исключённой клинике.
+          if (built.dropRoute) {
+            action.buildRoute = false;
+            action.targetStops = [];
+          }
+          if (built.dropPlaceFilter) {
+            action.searchQuery = null;
+            action.clinic = null;
+            action.targetStops = [];
+          }
           action.replyText = [noticeFor(gate.reason), bookingReplyText({ ...built, booking: gate.context.booking })].filter(Boolean).join(' ');
           metrics.increment('pipeline.booking_request');
         } else if (execution.action === 'CLARIFY' && booking.publicHidden) {

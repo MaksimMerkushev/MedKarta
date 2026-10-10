@@ -54,7 +54,7 @@ const branchFits = (branchId, clinicIds, words) => {
 };
 
 /* «Но не Ефимов», «кроме Ясеня», «только не в Разумед» — исключение, а не выбор. */
-const EXCLUDED_BEFORE = /(?:^|[^\p{L}])(?:не|кроме|исключая|без|только\s+не|но\s+не)\s+(?:(?:к|ко|у|в|во|на)\s+)?$/u;
+const EXCLUDED_BEFORE = /(?:^|[^\p{L}])(?:не|кроме|исключая|без|только\s+не|но\s+не)\s+(?:(?:к|ко|у|в|во|на)\s+)?(?:(?:клиник|медцентр|центр|стоматологи|врач|доктор)\p{L}*\s+)?[«"]?$/u;
 
 /**
  * Врачи и клиники, названные в реплике. Несколько названных («к Ефимовой
@@ -75,7 +75,7 @@ export const demoRefsOf = (analysis) => {
   let clinicNamed = false;
   for (const entity of analysis.entities || []) {
     if (!Array.isArray(entity.ids) || entity.ids.length === 0) continue;
-    const excluded = EXCLUDED_BEFORE.test(lower.slice(Math.max(0, entity.start - 24), entity.start));
+    const excluded = EXCLUDED_BEFORE.test(lower.slice(Math.max(0, entity.start - 36), entity.start));
     if (entity.kind === ENTITY_KIND.DOCTOR) {
       const words = content.slice(entity.start, entity.end).split(/[^\p{L}-]+/u).filter(Boolean).map(slug);
       const ids = [...new Set(entity.ids.filter((id) => id.startsWith(DEMO_DOCTOR)).map((id) => id.split('--')[0]))];

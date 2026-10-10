@@ -570,6 +570,33 @@ describe('Демо-сценарии: тонкости языка — не нао
     assert.ok(allSlots(noFriday).every((slot) => new Date(`${slot.day}T12:00:00Z`).getUTCDay() !== 5));
   });
 
+  it('«после шести вечера» — с 18:00; «в 2 часа дня» — ровно 14:00; «через 2 дня» — 14.10', async () => {
+    const evening = await chat('лор завтра после шести вечера');
+    assert.equal(evening.booking.request.timeFrom, '18:00');
+    const exact = await chat('терапевт в 2 часа дня');
+    assert.equal(exact.booking.request.timeFrom, '14:00');
+    assert.match(exact.replyText, /ровно в 14:00/);
+    const later = await chat('лор через 2 дня');
+    assert.deepEqual(later.booking.request.date, { kind: 'date', day: AFTER_TOMORROW });
+  });
+
+  it('«не в клинике Разумед» — подбор без неё, и карта не фильтрует по ней', async () => {
+    const action = await chat('хочу к кардиологу не в клинике Разумед');
+    assert.ok(action.booking.request.excludeBranchIds.every((id) => id.startsWith('demo-real-razumed')));
+    assert.ok(action.booking.request.excludeBranchIds.length > 0);
+    assert.equal(action.clinic, null);
+    assert.equal(action.searchQuery, null);
+    const result = await run(action);
+    assert.ok(result.options.every((option) => option.clinic.id !== 'demo-real-razumed'));
+  });
+
+  it('«ЛОР не дальше 15 минут от дома» — без маршрута «ЛОР → дом» на карте', async () => {
+    const action = await chat('лор не дальше 15 минут на машине от дома');
+    assert.ok(action.booking);
+    assert.equal(action.buildRoute, false);
+    assert.deepEqual(action.targetStops, []);
+  });
+
   it('диалог: «в любой день» снимает и «в будни», и «в субботу»', async () => {
     const action = await chat(['хирург', 'а можно в субботу?', 'тогда в будни после 18', 'в любой день, но до 2500']);
     const { request } = action.booking;

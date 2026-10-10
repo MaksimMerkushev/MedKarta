@@ -16,7 +16,7 @@
 
 import { describeRequest, LOCALITIES, normalizeSearchRequest } from '../../shared/demoSearch.js';
 import { SPECIALTY_CANON } from '../../shared/specialties.js';
-import { moscowDay } from './time.js';
+import { addDays, moscowDay } from './time.js';
 
 const BOOKING_ACTIONS = new Set(['FIND_DOCTOR', 'GET_AVAILABLE_SLOTS']);
 // «ЛОР в клинике Ясень»: модель может ответить поиском клиники, а запись — к врачу в ней.
@@ -38,7 +38,9 @@ const resolveCalendarDate = ({ month, dayOfMonth }, today) => {
 
 const hasBookingCue = (booking) =>
   Boolean(booking.date || booking.timeFrom || booking.timeTo || booking.evening || booking.maxPrice || booking.dms || booking.city || booking.serviceId
-    || booking.workdays || booking.minExperience || booking.doctorGender || booking.doctorIds?.length || booking.unsupported?.length);
+    || booking.workdays || booking.minExperience || booking.doctorGender || booking.preferGender || booking.doctorIds?.length || booking.unsupported?.length
+    || booking.excludeDoctorIds?.length || booking.excludeBranchIds?.length || booking.excludeWeekdays?.length || booking.districts?.length
+    || booking.excludeDistricts?.length || booking.planId);
 
 const resolveDate = (date, today) => {
   if (date.kind === 'date') {
@@ -47,6 +49,7 @@ const resolveDate = (date, today) => {
     // Несуществующая дата («31 ноября») — вопрос, а не соседний день.
     return day ? { kind: 'date', day, ...expect } : { kind: 'invalid', month: date.month, dayOfMonth: date.dayOfMonth };
   }
+  if (date.kind === 'in_days') return { kind: 'date', day: addDays(today, date.days) };
   if (date.kind === 'any_of') return { kind: 'any_of', options: date.options.map((option) => resolveDate(option, today)) };
   return date;
 };
@@ -148,7 +151,15 @@ export const buildBookingRequest = ({ booking, execution, now, index = null }) =
     originHint: booking.originHint,
     city: booking.city,
   });
-  return { request: normalized, ...refLabels(index, normalized), planName: index?.plans.get(normalized.dms.planId)?.name || null };
+  return {
+    request: normalized,
+    ...refLabels(index, normalized),
+    planName: index?.plans.get(normalized.dms.planId)?.name || null,
+    // Маршрут «ЛОР → дом» или «Ситидок → Разумед», который составил планировщик, — не то, о чём просили.
+    dropRoute: fromPlace || clinicChoice,
+    // Исключённую клинику или врача фильтр карты выразить не может — фильтр по ним снимается.
+    dropPlaceFilter: normalized.excludeBranchIds.length > 0 || normalized.excludeDoctorIds.length > 0,
+  };
 };
 
 /** Условия запроса словами — для чата; названные демо-врачи идут первыми. */

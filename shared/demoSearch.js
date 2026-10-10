@@ -261,7 +261,13 @@ export const describeRequest = (request, {
   const weekendDay = date.kind === 'weekday' && date.weekday >= 6;
   if ((request.weekend || date.kind === 'weekend') && !weekendDay) parts.push('в выходные');
   if (request.workdays) parts.push('в будни');
-  if (request.timeFrom && request.timeTo) parts.push(`с ${request.timeFrom} до ${request.timeTo}`);
+  const minutes = (time) => Number(time.slice(0, 2)) * 60 + Number(time.slice(3));
+  const width = request.timeFrom && request.timeTo ? minutes(request.timeTo) - minutes(request.timeFrom) : null;
+  const clock = (value) => `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`;
+  // «На 17:30» — окно в минуту, «около 18:00» — ±30 минут: так и пишем, а не «с 17:30 до 17:31».
+  if (width === 1) parts.push(`ровно в ${request.timeFrom}`);
+  else if (width === 61) parts.push(`около ${clock(minutes(request.timeFrom) + 30)} (±30 мин)`);
+  else if (request.timeFrom && request.timeTo) parts.push(`с ${request.timeFrom} до ${request.timeTo}`);
   else if (request.timeFrom) parts.push(`после ${request.timeFrom}`);
   else if (request.evening) parts.push(`вечером (с ${EVENING_FROM})`);
   if (request.timeTo && !request.timeFrom) parts.push(`до ${request.timeTo}`);
