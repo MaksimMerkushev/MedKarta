@@ -246,14 +246,14 @@ export const describeRequest = (request, {
   if (request.visit === 'repeat') parts.push('повторный приём');
   const date = request.date || { kind: 'any' };
   const simple = describeSimpleDate(date);
-  if (simple) parts.push(simple);
+  // Названный день недели показываем рядом с датой и только если он с ней расходится.
+  const mismatch = date.expectWeekday && !(date.day && weekdayOfDay(date.day) === date.expectWeekday);
+  if (simple) parts.push(mismatch ? `${simple} (вы указали ${WEEKDAYS_ACC[date.expectWeekday]})` : simple);
   if (date.kind === 'any_of') {
     const options = date.options.map(describeSimpleDate);
     parts.push(options.length > 2 ? `${options.slice(0, -1).join(', ')} или ${options[options.length - 1]}` : options.join(' или '));
   }
   if (date.kind === 'invalid') parts.push(`${String(date.dayOfMonth).padStart(2, '0')}.${String(date.month).padStart(2, '0')} — такой даты нет`);
-  // Названный день недели показываем, только если он расходится с датой.
-  if (date.expectWeekday && !(date.day && weekdayOfDay(date.day) === date.expectWeekday)) parts.push(`(вы указали ${WEEKDAYS_ACC[date.expectWeekday]})`);
   if (request.excludeWeekdays?.length) parts.push(`кроме ${request.excludeWeekdays.map((day) => WEEKDAYS_GEN[day]).join(' и ')}`);
   if (date.kind === 'this_week') parts.push('на этой неделе');
   if (date.kind === 'next_week') parts.push('на следующей неделе');

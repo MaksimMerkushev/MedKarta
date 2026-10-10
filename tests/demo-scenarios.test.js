@@ -433,6 +433,9 @@ describe('Демо-сценарии: сложные условия — без п
     for (const text of ['терапевт на дом завтра', 'онлайн-консультация невролога', 'лучший лор с хорошими отзывами']) {
       const action = await chat(text);
       assert.ok(action.booking.request.unsupported.length > 0, text);
+      // Ответ не обещает «подбор ниже» по условию, которое не проверить.
+      assert.match(action.replyText, /проверить не могу/);
+      assert.doesNotMatch(action.replyText, /подбор ниже/);
       const result = await run(action);
       assert.equal(result.status, 'empty', text);
       assert.equal(result.blocking.key, 'unsupported');
@@ -494,7 +497,10 @@ describe('Демо-сценарии: сложные условия — без п
 
 describe('Демо-сценарии: противоречия и чего в демо нет — вопрос, а не выбор за пользователя', needsSqlite, () => {
   it('«в субботу 16 октября» (это пятница) — спрашивает, какой день', async () => {
-    const result = await run(await chat('лор в субботу 16 октября'));
+    const action = await chat('лор в субботу 16 октября');
+    assert.match(action.replyText, /16\.10\.2026 \(вы указали субботу\)/);
+    assert.match(action.replyText, /не совпадают/);
+    const result = await run(action);
     assert.equal(result.status, 'needs');
     assert.deepEqual(result.needs, ['date_conflict']);
     assert.match(result.message, /пятница, а не суббота/);

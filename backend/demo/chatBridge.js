@@ -14,7 +14,7 @@
  * ослабить «завтра», «после 18:00», «по ДМС» или «до 3000 ₽».
  */
 
-import { describeRequest, LOCALITIES, normalizeSearchRequest } from '../../shared/demoSearch.js';
+import { describeRequest, LOCALITIES, normalizeSearchRequest, UNSUPPORTED_CONDITIONS } from '../../shared/demoSearch.js';
 import { SPECIALTY_CANON } from '../../shared/specialties.js';
 import { addDays, moscowDay } from './time.js';
 
@@ -178,6 +178,10 @@ export const bookingReplyText = ({ request, booking, ...labels }) => {
   } else if (!request.specialty && request.doctorIds.length === 0) {
     parts.push('Подберу врача и свободное время. Подскажите, какой специалист нужен?');
     if (summary.length > 0) parts.push(`Условия, которые я учту: ${summary.join(', ')}.`);
+  } else if (blockingNote(request)) {
+    // Условие, которое не проверить, или противоречие: не обещаем «подбор ниже» — говорим, что мешает.
+    parts.push(`Понял запрос: ${summary.join(', ')}.`);
+    parts.push(blockingNote(request));
   } else {
     parts.push(`Ищу свободное время: ${summary.join(', ')}.`);
     parts.push('Показываю только варианты, которые подходят под все условия, — подбор ниже. Условия без вашего согласия не ослабляю.');
@@ -185,7 +189,29 @@ export const bookingReplyText = ({ request, booking, ...labels }) => {
   if (booking?.medicalText && request.specialty) {
     parts.push('Профиль врача подобран по описанию — это не диагноз.');
   }
-  parts.push('Запись демонстрационная: клиники и расписание вымышлены.');
+  parts.push(request.branchIds.some((id) => id.startsWith('demo-real-'))
+    ? 'Запись демонстрационная: клиника реальная, но врачи и расписание вымышлены — в клинику ничего не уходит.'
+    : 'Запись демонстрационная: врачи и расписание вымышлены.');
   return parts.join(' ');
+};
+
+const weekdayOfDay = (day) => {
+  const value = new Date(`${day}T12:00:00Z`).getUTCDay();
+  return value === 0 ? 7 : value;
+};
+
+/** Что мешает подбору ещё до поиска: условие, которого в демо нет, или противоречие. */
+const blockingNote = (request) => {
+  if (request.unsupported.length > 0) {
+    const names = request.unsupported.map((key) => UNSUPPORTED_CONDITIONS[key]).join(', ');
+    return `${names[0].toUpperCase()}${names.slice(1)} — этого в демо нет, проверить не могу. Ниже — что могу предложить вместо, и только с вашего согласия.`;
+  }
+  if (request.date.kind === 'invalid') return 'Такой даты в календаре нет — уточните день, соседний подставлять не буду.';
+  if (request.date.kind === 'date' && request.date.expectWeekday && weekdayOfDay(request.date.day) !== request.date.expectWeekday) {
+    return 'Дата и день недели не совпадают — уточните, какой день имели в виду; выбирать за вас не буду.';
+  }
+  if (request.timeFrom && request.timeTo && request.timeFrom >= request.timeTo) return 'Условия по часам не оставляют ни минуты — уточните время, выбирать за вас не буду.';
+  if (request.originHint) return 'Точку отправления вы назвали словами — по названию я её не определяю: поставьте её на карте или подтвердите, что вы сейчас там.';
+  return null;
 };
 
