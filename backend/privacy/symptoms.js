@@ -158,7 +158,7 @@ const RULES = [
   { id: 'derma', weight: 3, stems: ['кож', 'сып', 'зуд', 'прыщ', 'родинк', 'экзем', 'псориаз', 'волос', 'ногт', 'шелушени'], specialties: ['dermatologist'] },
   { id: 'ophthalmo', weight: 3, stems: ['глаз', 'зрени', 'век', 'слезит', 'близорук', 'дальнозорк', 'ячмен'], specialties: ['ophthalmologist'] },
   { id: 'lor', weight: 3, stems: ['ухо', 'уши', 'ушн', 'горл', 'нос', 'насморк', 'гайморит', 'ангин', 'слух', 'миндалин', 'осиплост', 'храп'], specialties: ['lor', 'therapist'] },
-  { id: 'endo', weight: 3, stems: ['щитовидн', 'сахар', 'гормон', 'диабет', 'похудени'], specialties: ['endocrinologist', 'therapist'] },
+  { id: 'endo', weight: 3, stems: ['щитовидн', 'щитовидк', 'сахар', 'гормон', 'диабет', 'похудени'], specialties: ['endocrinologist', 'therapist'] },
   { id: 'gyneco', weight: 3, stems: ['беременн', 'менструа', 'цикл', 'гинеколог'], specialties: ['gynecologist'] },
   { id: 'uro', weight: 3, stems: ['почк', 'мочев', 'простат', 'мочеиспускани'], specialties: ['urologist', 'therapist'] },
   { id: 'ortho', weight: 2, stems: ['перелом', 'вывих', 'ушиб', 'сустав', 'колен', 'травм', 'связк', 'плеч'], specialties: ['traumatologist', 'orthopedist'] },

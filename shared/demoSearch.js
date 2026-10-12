@@ -13,7 +13,8 @@ import { SPECIALTY_KEYS } from './specialties.js';
 import { SERVICE_BY_ID } from './services.js';
 
 export const VISIT_KINDS = Object.freeze(['first', 'repeat', 'procedure', 'any']);
-export const DATE_KINDS = Object.freeze(['any', 'today', 'tomorrow', 'after_tomorrow', 'weekday', 'weekend', 'this_week', 'next_week', 'date', 'any_of', 'range', 'invalid']);
+// past — «вчера», «1 января 2020»: день уже прошёл, подбор спросит другой.
+export const DATE_KINDS = Object.freeze(['any', 'today', 'tomorrow', 'after_tomorrow', 'weekday', 'weekend', 'this_week', 'next_week', 'date', 'any_of', 'range', 'invalid', 'past']);
 /* Дни, которые можно перечислить через «или»: «во вторник или среду», «сегодня или завтра». */
 const SIMPLE_DATE_KINDS = Object.freeze(['today', 'tomorrow', 'after_tomorrow', 'weekday', 'date']);
 
@@ -45,6 +46,8 @@ export const CONSENTED_FALLBACKS = Object.freeze({
   oms: 'платно: приёма по ОМС в демо нет, вы разрешили платный',
   home_visit: 'в клинике: выезда на дом в демо нет, вы согласились приехать',
   online: 'очно: онлайн-консультаций в демо нет, вы согласились на очный приём',
+  rating: 'без отзывов: их в демо нет, вы согласились на любого врача',
+  doctor_age: 'без учёта возраста врача: в демо его нет, вы согласились на любого',
 });
 
 /*
@@ -166,6 +169,10 @@ export const normalizeSearchRequest = (raw = {}) => {
   const specialtyAny = uniqueList(input.specialtyAny, (item) => SPECIALTY_KEYS.includes(item), 3);
   // «Желательно в 18:30» — такие варианты первыми; условие — окно пошире.
   const preferTime = typeof input.preferTime === 'string' && TIME.test(input.preferTime) ? input.preferTime : null;
+  // «Желательно до 12», «лучше после 17» — окно-пожелание: подходящие первыми.
+  const softFrom = TIME.test(input.preferWindow?.from || '') ? input.preferWindow.from : null;
+  const softTo = TIME.test(input.preferWindow?.to || '') ? input.preferWindow.to : null;
+  const preferWindow = (softFrom || softTo) && !(softFrom && softTo && softFrom >= softTo) ? { from: softFrom, to: softTo } : null;
   // Доступная среда и парковка — свойства филиала.
   const wheelchair = input.wheelchair === true;
   const parking = input.parking === true;
@@ -283,7 +290,7 @@ export const normalizeSearchRequest = (raw = {}) => {
   return {
     request: {
       specialty, specialtyAny, doctorIds, excludeDoctorIds, branchIds, excludeBranchIds, districts, preferDistricts, excludeDistricts, serviceId, visit, patient,
-      minExperience, preferMinExperience, doctorGender, preferGender, preferExperience, preferCheap, excludeWeekdays, excludeDates, preferTime, wheelchair, parking, fallbacks,
+      minExperience, preferMinExperience, doctorGender, preferGender, preferExperience, preferCheap, excludeWeekdays, excludeDates, preferTime, preferWindow, wheelchair, parking, fallbacks,
       date, timeFrom: timeWindows.length > 0 ? null : timeFrom, timeTo: timeWindows.length > 0 ? null : timeTo, timeWindows, timeChoice, evening, weekend, workdays, maxPrice, dms, travel, origin, originHint, originConfirmed, city, unsupported, limit,
     },
     errors,
@@ -344,7 +351,6 @@ export const describeRequest = (request, {
 } = {}) => {
   const parts = [];
   if (doctorLabels.length > 0) parts.push(doctorLabels.join(' или '));
-  if (excludedDoctorLabels.length > 0) parts.push(`не ${excludedDoctorLabels.join(', не ')}`);
   // Профиль уже виден в подписи названного врача («Ефимова Мария (невролог)») — второй раз не пишем.
   const specialtyShown = request.specialty && doctorLabels.length > 0
     && doctorLabels.every((label) => label.toLowerCase().includes(`(${specialtyLabel(request.specialty).toLowerCase()})`));
@@ -353,6 +359,8 @@ export const describeRequest = (request, {
     // «Невролог или терапевт»: после первого — со строчной (кроме аббревиатур вроде «ЛОР»).
     parts.push(request.specialtyAny.map(specialtyLabel).map((label, position) => (position === 0 || label === label.toUpperCase() ? label : label[0].toLowerCase() + label.slice(1))).join(' или '));
   }
+  // «Не Морозов» — после профиля: «Уролог или хирург, не Морозов…», а не «не Морозов, Уролог…».
+  if (excludedDoctorLabels.length > 0) parts.push(`не ${excludedDoctorLabels.join(', не ')}`);
   if (request.patient === 'child') parts.push('детский приём');
   if (request.branchIds?.includes(NO_DEMO_BRANCH)) parts.push('в названной клинике');
   else if (branchLabels.length > 0) parts.push(`клиника: ${branchLabels.join(' или ')}`);
@@ -399,6 +407,7 @@ export const describeRequest = (request, {
     parts.push(options.length > 2 ? `${options.slice(0, -1).join(', ')} или ${options[options.length - 1]}` : options.join(' или '));
   }
   if (date.kind === 'invalid') parts.push(`${String(date.dayOfMonth).padStart(2, '0')}.${String(date.month).padStart(2, '0')} — такой даты нет`);
+  if (date.kind === 'past') parts.push('прошедший день (уточните)');
   if (date.kind === 'range') {
     const short = (day) => day.split('-').reverse().slice(0, 2).join('.');
     if (date.from && date.to) parts.push(date.from === date.to ? short(date.from) : `с ${short(date.from)} по ${short(date.to)} включительно`);
@@ -437,6 +446,7 @@ export const describeRequest = (request, {
   else if (request.evening) parts.push(`вечером (с ${EVENING_FROM})`);
   if (request.timeTo && !request.timeFrom) parts.push(`до ${request.timeTo}`);
   if (request.preferTime) parts.push(`желательно в ${request.preferTime}`);
+  if (request.preferWindow) parts.push(request.preferWindow.from && request.preferWindow.to ? `желательно с ${request.preferWindow.from} до ${request.preferWindow.to}` : request.preferWindow.from ? `желательно после ${request.preferWindow.from}` : `желательно до ${request.preferWindow.to}`);
   // «По ДМС, а если не входит — не дороже 2000»: потолок цены — для платного приёма.
   const paidLimit = request.maxPrice ? ` до ${request.maxPrice.toLocaleString('ru-RU')} ₽` : '';
   if (request.maxPrice && !request.dms?.prefer) parts.push(`до ${request.maxPrice.toLocaleString('ru-RU')} ₽`);

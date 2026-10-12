@@ -43,6 +43,8 @@ import { metrics as defaultMetrics } from './observability/metrics.js';
 const QUESTION_PRICE = /(?<!\p{L})(?:сколько\s+(?:это\s+)?(?:стоит|стоить|будет\s+стоить)|какая\s+цена|почём|почем|стоимость|цена\s+при[её]ма)(?!\p{L})/u;
 const QUESTION_WHERE = /(?<!\p{L})(?:где\s+(?:это|находится|она|он|клиника|принимает)|какой\s+адрес|адрес\s+клиники)(?!\p{L})/u;
 const QUESTION_HOW = /(?<!\p{L})(?:как\s+(?:мне\s+)?(?:записаться|оформить)|что\s+дальше|а\s+дальше\s+что|что\s+нажать)(?!\p{L})/u;
+/* Реплика латиницей без кириллицы: «Need ENT doctor tomorrow». */
+const LATIN_ONLY = (text) => (text.match(/[a-z]/giu) || []).length >= 5 && !/\p{Script=Cyrillic}/u.test(text);
 const DOCTOR_WORDS = /(?<!\p{L})(?:врач\p{L}*|доктор\p{L}*|специалист\p{L}*|запис\p{L}*|запиш\p{L}*)(?!\p{L})/u;
 
 /**
@@ -332,6 +334,9 @@ export const createPipeline = ({
           [QUESTION_HOW, 'Выберите время в варианте ниже и нажмите «Записаться» — запись подтверждаете вы.'],
         ].filter(([pattern]) => pattern.test(closing)).map(([, text]) => text);
         if (answers.length > 0) action.replyText = `${answers.join(' ')} ${action.replyText}`;
+      } else if (execution.action === 'CLARIFY' && !action.booking && LATIN_ONLY(closing)) {
+        // «Need ENT doctor tomorrow» — запросы понимаются только по-русски; честно и с примером.
+        action.replyText = 'Я понимаю запросы на русском языке. Напишите, например: «ЛОР завтра после 18» или «терапевт рядом по ДМС». / I understand requests in Russian only — e.g. «ЛОР завтра после 18».';
       } else if (execution.action === 'CLARIFY' && (!gate.reason || gate.reason === 'nothing_to_plan') && !(gate.context.specialties || []).length && DOCTOR_WORDS.test(closing)) {
         // «Хочу к врачу» без профиля — вопрос, а не общая справка.
         action.replyText = 'К какому врачу записать? Назовите специалиста — например, «к терапевту», — или опишите, что беспокоит: подскажу профиль. Диагнозов не ставлю.';

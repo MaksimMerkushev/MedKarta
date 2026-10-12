@@ -201,8 +201,10 @@ export const extractConstraints = (text) => {
     constraints.ownership = 'Частная';
   }
 
+  // «Чтобы рядом была парковка», «остановка рядом» — о парковке, а не «врач поближе».
+  const nearLower = lower.replace(/(?<!\p{L})(?:рядом|недалеко|поблизости)\s+(?:с\s+клиник\p{L}*\s+)?(?:(?:был\p{L}*|есть|будет)\s+)?(?:парковк|остановк|метро|аптек|стоянк)\p{L}*|(?:парковк|остановк|метро|стоянк)\p{L}*\s+(?:(?:был\p{L}*|есть|будет)\s+)?(?:рядом|недалеко|поблизости)/gu, ' ');
   if (
-    findTrigger(lower, 'ближайш', 'рядом', 'недалеко', 'поблизости', 'поближе', 'неподал') === 'affirmed'
+    findTrigger(nearLower, 'ближайш', 'рядом', 'недалеко', 'поблизости', 'поближе', 'неподал') === 'affirmed'
     || /(?:ближе|около|возле|у)\s+(?:к\s+)?дом[ау]?(?!\p{L})/u.test(lower)
   ) {
     constraints.selection = 'nearest';
@@ -679,6 +681,7 @@ export const createPrivacyGateway = ({
      */
     const routeStops = [];
     let previousSpecialties = [];
+    let bookedSpecialties = [];
     let currentSpecialties = [];
     for (let index = 0; index < analyses.length; index += 1) {
       if (perTurnSpecialties[index].length === 0) continue;
@@ -686,7 +689,9 @@ export const createPrivacyGateway = ({
       const own = named.length > 0 ? named : perTurnVariants[index];
       const text = String(userTexts[index]).toLowerCase();
       const additive = named.length > 0 && ADDITIVE_WORDS.test(text) && !REPLACE_WORDS.test(text) && currentSpecialties.length > 0;
-      previousSpecialties = additive ? currentSpecialties : [];
+      // Прежний подбор — по профилю, к которому записывали (не по всем вариантам из жалобы).
+      previousSpecialties = additive ? bookedSpecialties : [];
+      bookedSpecialties = perTurnSpecialties[index];
       if (additive && (routeIntent || sequence)) {
         routeStops.push(...currentSpecialties.filter((key) => !own.includes(key) && !routeStops.includes(key)));
         currentSpecialties = [...new Set([...currentSpecialties, ...own])];
@@ -767,7 +772,8 @@ export const createPrivacyGateway = ({
     const anyOfThem = /(?<!\p{L})(?:кто\s+угодно|кто-нибудь|кто-то|любой|любого|любому|неважно\s+кто|не\s+важно\s+кто|без\s+разницы\s+(?:кто|к\s+кому))(?:\s+из\s+(?:них|этих|трёх|трех|двух))?(?!\p{L})/iu
       .test(lastSpecialtyTurn?.message.content.slice(choiceHits[choiceHits.length - 1]?.end ?? 0) || '');
     const specialtyChoice = choiceHits.length > 1 && new Set(choiceHits.map((hit) => hit.key)).size > 1
-      && choiceGaps.every((gap) => /^\s*,?\s*(?:(?:или|либо)\s+)?(?:к\s+|ко\s+)?$/iu.test(gap))
+      // «К лору... или к неврологу...» — многоточие между ними тоже не разрывает выбор.
+      && choiceGaps.every((gap) => /^[\s,.…!?—–-]*(?:(?:или|либо)\s+)?(?:к\s+|ко\s+)?$/iu.test(gap))
       && (/(?:или|либо)\s+(?:к\s+|ко\s+)?$/iu.test(choiceGaps[choiceGaps.length - 1] || '') || anyOfThem);
     const booking = {
       ...mergedBooking,

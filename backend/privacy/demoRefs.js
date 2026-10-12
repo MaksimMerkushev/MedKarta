@@ -76,7 +76,7 @@ const EXCLUDED_BEFORE = /(?:^|[^\p{L}])(?:не|кроме|исключая|бе�
  * или Валееву», «в Ясене или Бересте») — все сразу.
  *
  * @param {{message: {content: string}, entities: Array}} analysis разбор реплики
- * @returns {{doctorIds?: string[], excludeDoctorIds?: string[], branchIds?: string[], excludeBranchIds?: string[], foreignDoctor?: true, clinicChoice?: true}}
+ * @returns {{doctorIds?: string[], excludeDoctorIds?: string[], branchIds?: string[], excludeBranchIds?: string[], foreignDoctor?: true, clinicChoice?: true, doctorChoice?: true}}
  */
 export const demoRefsOf = (analysis) => {
   const content = analysis.message.content;
@@ -135,6 +135,11 @@ export const demoRefsOf = (analysis) => {
   const clinics = (analysis.entities || []).filter((entity) => entity.kind === ENTITY_KIND.CLINIC).sort((left, right) => left.start - right.start);
   if (clinics.slice(1).some((entity, position) => /^\s*,?\s*(?:или|либо)\s+(?:в\s+|во\s+)?$/u.test(lower.slice(clinics[position].end, entity.start)))) {
     refs.clinicChoice = true;
+  }
+  /* «К Ефимовой или Валееву» — выбор врача для одной записи, а не маршрут к обоим. */
+  const doctors = (analysis.entities || []).filter((entity) => entity.kind === ENTITY_KIND.DOCTOR).sort((left, right) => left.start - right.start);
+  if (doctors.slice(1).some((entity, position) => /^\s*,?\s*(?:или|либо)\s+(?:к\s+|ко\s+)?$/u.test(lower.slice(doctors[position].end, entity.start)))) {
+    refs.doctorChoice = true;
   }
   if (doctorIds.size > 0) refs.doctorIds = [...doctorIds];
   if (excludeDoctorIds.size > 0) refs.excludeDoctorIds = [...excludeDoctorIds];

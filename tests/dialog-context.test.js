@@ -181,7 +181,7 @@ const ANSWERS = [
   [['кардиолог на дом', 'да'], { unsupported: [], fallbacks: ['home_visit'] }],
   [['кардиолог на дом', 'ок'], { unsupported: [], fallbacks: ['home_visit'] }],
   [['кардиолог на дом', 'согласен'], { unsupported: [], fallbacks: ['home_visit'] }],
-  [['кардиолог с хорошими отзывами', 'да'], { unsupported: [], fallbacks: [] }],
+  [['кардиолог с хорошими отзывами', 'да'], { unsupported: [], fallbacks: ['rating'] }],
   [['кардиолог по ОМС', 'давайте'], { unsupported: [], fallbacks: ['oms'] }],
   // «К кому записаться?» — профиль, о котором спросили.
   [['болит голова и живот', 'первый'], { specialty: 'gastroenterologist' }],
@@ -488,5 +488,108 @@ describe('Генеративная проверка ответов на уточ
         }
       }
     }
+  });
+});
+
+/*
+ * Сверхсложные запросы одной репликой и длинные диалоги: каждое условие
+ * понято, ничего не додумано, ответ не зависит от модели.
+ */
+describe('Сверхсложные запросы', () => {
+  const HARD = [
+    ['Здравствуйте! Нужен детский лор для сына 6 лет, у него третий день болит ухо и температура 37.5. Можно в четверг после 16:00 или в пятницу до обеда, но только не в Айболите на Курской. По ДМС Demo Standard, если не входит — то платно, но не дороже 2500. И чтобы ехать не дольше 20 минут от дома, я сейчас дома.', {
+      specialty: 'lor', patient: 'child', maxPrice: 2500, excludeBranchIds: ['demo-real-aibolit-kurskaya'], originHint: 'home', originConfirmed: true,
+      date: { kind: 'any_of', options: [{ kind: 'weekday', weekday: 4, from: '16:00', to: null }, { kind: 'weekday', weekday: 5, from: null, to: '12:00' }] },
+      dms: { required: false, planId: 'demo-standard', prefer: true },
+    }],
+    // «Рядом парковка» — не «врач поближе»; «если такого нет — любой» — согласие без отзывов и возраста.
+    ['Запишите маму к кардиологу, ей 70 лет, она плохо ходит — нужен пандус или лифт, и чтобы рядом была парковка. Удобно послезавтра с 10 до 13 или в субботу утром. Врач не моложе 50 лет и с хорошими отзывами, но если такого нет — то любой с большим стажем.', {
+      specialty: 'cardiologist', patient: 'adult', wheelchair: true, parking: true, preferExperience: true, unsupported: [], fallbacks: ['rating', 'doctor_age'],
+      travel: { maxMinutes: null, mode: 'driving', nearest: false },
+      date: { kind: 'any_of', options: [{ kind: 'after_tomorrow', from: '10:00', to: '13:00' }, { kind: 'weekday', weekday: 6, from: null, to: '12:00' }] },
+    }],
+    ['мне бы к лору... или к неврологу... не знаю, голова кружится и в ушах шумит, давно уже. Можно ближе к вечеру в будни', { specialty: null, specialtyAny: ['lor', 'neurologist'], workdays: true, evening: true }],
+    ['к Ефимовой или Валееву, в любой день кроме выходных, после 16, но не позже 19', { doctorIds: ['demo-doc-efimova-mariya', 'demo-doc-valeev-vadim'], timeFrom: '16:00', timeTo: '19:00', workdays: true }],
+    ['запишите меня и мужа к терапевту на одно время в пятницу', { specialty: 'therapist', unsupported: ['multi_patient'] }],
+    ['мне нужно к врачу, который лечит щитовидку, в четверг или пятницу после обеда', { specialty: 'endocrinologist', timeFrom: '13:00' }],
+    ['дерматолог-женщина или мужчина — неважно, но стаж минимум 20 лет, и чтобы не в Советском районе, на этой неделе, после 18, до 3500', { doctorGender: null, minExperience: 20, excludeDistricts: ['Советский'], timeFrom: '18:00', maxPrice: 3500 }],
+    // Часы работы, а не часы приёма: прийти можно в остальное время.
+    ['Здравствуйте, я работаю посменно: в понедельник и среду до 15, во вторник и четверг после 14, пятница свободна весь день. Нужен хирург на этой неделе, и не дороже 2500.', {
+      specialty: 'surgeon', maxPrice: 2500,
+      date: { kind: 'any_of', options: [{ kind: 'weekday', weekday: 1, from: '15:00', to: null }, { kind: 'weekday', weekday: 3, from: '15:00', to: null }, { kind: 'weekday', weekday: 2, from: null, to: '14:00' }, { kind: 'weekday', weekday: 4, from: null, to: '14:00' }] },
+    }],
+    // «Желательно до 12» — пожелание, а не условие.
+    ['Посоветуйте невролога для дочки 14 лет, в Разумед или в Кузляр, в выходные, желательно до 12, по ДМС премиум', { patient: 'child', timeTo: null, preferWindow: { from: null, to: '12:00' } }],
+    ['ЛОР на 1 января 2030', { date: { kind: 'date', day: '2030-01-01' } }],
+    ['ЛОР вчера', { date: { kind: 'past' } }],
+    ['ЛОР через 3 недели', { date: { kind: 'date', day: '2026-11-02' } }],
+    // «Завтра после 7» — двусмысленно только для завтра: вопрос о нём, четверг — как сказано.
+    ['детский лор, завтра после 7 или в четверг до обеда', { timeChoice: [{ from: '07:00', to: null }, { from: '19:00', to: null }], date: { kind: 'any_of', options: [{ kind: 'tomorrow' }, { kind: 'weekday', weekday: 4, from: null, to: '12:00' }] } }],
+    ['лор с 10 до 12 или после 7', { timeChoice: [{ from: '07:00', to: null }, { from: '19:00', to: null }] }],
+  ];
+  for (const [text, expected] of HARD) {
+    it(`«${text.slice(0, 70)}${text.length > 70 ? '…' : ''}»`, async () => {
+      const request = await requestOf(text);
+      assert.ok(request, 'нет подбора');
+      for (const [key, value] of Object.entries(expected)) assert.deepEqual(request[key], value, key);
+      for (const respond of Object.values(MODELS)) assert.deepEqual(essence(await requestOf(text, respond)), essence(request));
+    });
+  }
+
+  it('ответ о времени одного дня меняет только этот день', async () => {
+    const request = await requestOf(['детский лор, завтра после 7 или в четверг до обеда', 'вечера']);
+    assert.deepEqual(request.date.options, [{ kind: 'tomorrow', from: '19:00', to: null }, { kind: 'weekday', weekday: 4, from: null, to: '12:00' }]);
+    assert.deepEqual(request.timeChoice, []);
+    const windows = await requestOf(['лор с 10 до 12 или после 7', 'вечера']);
+    assert.deepEqual(windows.timeWindows, [{ from: '10:00', to: '12:00' }, { from: '19:00', to: null }]);
+  });
+
+  it('ответы честно говорят о прошедшем дне и о расписании дальше двух недель', async () => {
+    assert.match((await chat('ЛОР вчера')).action.replyText, /уже прошёл/);
+    assert.match((await chat('ЛОР через 3 недели')).action.replyText, /на две недели вперёд/);
+    assert.match((await chat('Need ENT doctor tomorrow after 6pm')).action.replyText, /на русском языке/);
+    assert.equal((await search.search(await requestOf('ЛОР вчера'))).status, 'needs');
+  });
+});
+
+describe('Сложные диалоги: контекст через 10+ реплик', () => {
+  it('исправления, уточнения, вопрос о цене, «всё же завтра, остальное оставьте»', async () => {
+    const turns = ['нужен стоматолог завтра', 'ой нет, не стоматолог, а лор, и не завтра, а в четверг', 'после 7', 'вечера', 'и чтобы мужчина, стаж от 10',
+      'а если в четверг нет, можно в пятницу', 'по ДМС', 'стандарт', 'и не в Айболите', 'спасибо, а сколько стоит?', 'ладно, давайте всё же завтра, но всё остальное оставьте'];
+    const request = await requestOf(turns.slice(0, 6));
+    assert.deepEqual(request.date, { kind: 'any_of', options: [{ kind: 'weekday', weekday: 4 }, { kind: 'weekday', weekday: 5 }] });
+    const final = await requestOf(turns);
+    assert.equal(final.specialty, 'lor');
+    assert.deepEqual(final.date, { kind: 'tomorrow' });
+    // «Не завтра» из второй реплики снято: завтра названо снова.
+    assert.deepEqual(final.excludeDates, []);
+    assert.equal(final.timeFrom, '19:00');
+    assert.equal(final.doctorGender, 'male');
+    assert.equal(final.minExperience, 10);
+    assert.deepEqual(final.dms, { required: true, planId: 'demo-standard', prefer: false });
+    assert.deepEqual(final.excludeBranchIds, ['demo-real-aibolit-maksimova', 'demo-real-aibolit-kurskaya']);
+  });
+
+  it('неделя, дни и исключения: «на следующей неделе» → «в пн или вт» → «кроме понедельника»', async () => {
+    const request = await requestOf(['запишите на следующей неделе', 'к лору', 'в понедельник или вторник', 'кроме понедельника']);
+    assert.deepEqual(request.date, { kind: 'weekday', weekday: 2, week: 'next' });
+  });
+
+  it('районы через «или» добавляются; прежний подбор — по профилю записи, а не по вариантам жалобы', async () => {
+    assert.deepEqual((await requestOf(['терапевт в Советском районе', 'а в Приволжском?', 'или в Вахитовском'])).districts, ['Приволжский', 'Вахитовский']);
+    const { action } = await chat(['у дочки 5 лет болит ухо', 'а мне заодно к терапевту, тоже завтра']);
+    assert.match(action.replyText, /Подбор к врачу «ЛОР» остался/);
+    assert.doesNotMatch(action.replyText, /Педиатр/);
+  });
+
+  it('«я на работе до 17» — расписание, а не «я сейчас на работе»', async () => {
+    const request = await requestOf('Терапевт не дальше 15 минут пешком от работы, я на работе до 17, так что после 17:30');
+    assert.equal(request.originConfirmed, false);
+    assert.equal(request.timeFrom, '17:30');
+  });
+
+  it('номер документа — одно предупреждение, а не два одинаковых', async () => {
+    const { action } = await chat('1234567890');
+    assert.equal(action.replyText.split('не присылайте номера документов').length, 2);
   });
 });

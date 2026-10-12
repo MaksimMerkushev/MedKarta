@@ -304,7 +304,9 @@ export const buildUiAction = (execution, context = {}) => {
    * отработал успешно. Иначе пользователь, приславший номер СНИЛС, получал бы
    * обычный результат поиска и не узнал бы, что документы присылать не нужно.
    */
-  draft.replyText = [context.notice, buildReplyText(execution, context)].filter(Boolean).join(' ');
+  // Уточнение уже начинается с того же предупреждения («не присылайте номера документов») — второй раз не повторяем.
+  const reply = buildReplyText(execution, context);
+  draft.replyText = [context.notice && !String(reply || '').startsWith(context.notice) ? context.notice : null, reply].filter(Boolean).join(' ');
 
   /*
    * Финальная нормализация тем же санитайзером, что использует клиент.

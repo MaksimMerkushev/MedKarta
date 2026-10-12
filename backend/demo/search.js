@@ -422,6 +422,12 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
       const byTime = hasTime(right) - hasTime(left);
       if (byTime !== 0) return byTime;
     }
+    // «Желательно до 12»: у кого есть время в этом окне — первыми.
+    if (request.preferWindow) {
+      const inWindow = (item) => Number(item.slots.some((slot) => (!request.preferWindow.from || slot.start >= request.preferWindow.from) && (!request.preferWindow.to || slot.start < request.preferWindow.to)));
+      const byWindow = inWindow(right) - inWindow(left);
+      if (byWindow !== 0) return byWindow;
+    }
     // «В Советском, а если там никого — Приволжский»: названный первым район — первым.
     if (request.preferDistricts.length > 0) {
       const preferred = (item) => Number(request.preferDistricts.includes(index.branches.get(item.branchId).branch.district));
@@ -562,6 +568,15 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
         status: 'needs',
         needs: ['date_invalid'],
         message: `${label} — такой даты в календаре нет. Уточните день — подставлять соседний за вас не буду.`,
+        relax: [{ key: 'date', label: RELAX_LABELS.date, say: RELAX_SAY.date, patch: { date: { kind: 'any' } } }],
+      };
+    }
+    if (request.date.kind === 'past') {
+      return {
+        ...base,
+        status: 'needs',
+        needs: ['date_invalid'],
+        message: 'Этот день уже прошёл — записаться можно только на будущее время. Уточните день.',
         relax: [{ key: 'date', label: RELAX_LABELS.date, say: RELAX_SAY.date, patch: { date: { kind: 'any' } } }],
       };
     }

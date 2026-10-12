@@ -106,6 +106,26 @@ const DATE_PATTERNS = [
     value: { kind: 'weekend' },
   },
   {
+    // «1 января 2030», «15 октября 2026 г.» — с годом: другой год не подменяется ближайшим.
+    pattern: new RegExp(`(?<![\\p{L}\\p{N}.:])(\\d{1,2})\\s+(${MONTHS.join('|')})\\p{L}*\\s+(20\\d{2})(?:\\s*(?:г\\.?|года?))?(?!\\d)`, 'u'),
+    value: (match) => {
+      const month = MONTHS.findIndex((stem) => new RegExp(`^${stem}`, 'u').test(match[2])) + 1;
+      return { kind: 'date', month, dayOfMonth: Number(match[1]), year: Number(match[3]) };
+    },
+  },
+  {
+    // «01.01.2030», «15.10.26»
+    pattern: /(?<![\p{L}\p{N}.:])(\d{1,2})\.(\d{1,2})\.(20\d{2}|\d{2})(?![\d.:])/u,
+    value: (match) => ({ kind: 'date', month: Number(match[2]), dayOfMonth: Number(match[1]), year: match[3].length === 2 ? 2000 + Number(match[3]) : Number(match[3]) }),
+  },
+  // «Вчера», «позавчера» — день уже прошёл: вопрос, а не «любой день» молча.
+  { pattern: new RegExp(`(?<!${WORD})(?:вчера|позавчера|вчерашн\\p{L}*)(?!${WORD})`, 'u'), value: { kind: 'past' } },
+  {
+    // «Через 3 недели», «через месяц» — дальше окна расписания: подбор честно скажет, что так далеко его нет.
+    pattern: new RegExp(`(?<!${WORD})через\\s+(\\d|два|две|три|четыре|пару)\\s+недел\\p{L}*|(?<!${WORD})через\\s+(месяц)(?!${WORD})`, 'u'),
+    value: (match) => ({ kind: 'in_days', days: match[2] ? 30 : 7 * ({ два: 2, две: 2, три: 3, четыре: 4, пару: 2 }[match[1]] || Number(match[1])) }),
+  },
+  {
     // «13 октября», «на 5 ноября»
     pattern: new RegExp(`(?<![\\p{L}\\p{N}.:])(\\d{1,2})\\s+(${MONTHS.join('|')})\\p{L}*`, 'u'),
     value: (match) => {
@@ -310,7 +330,7 @@ const excludedDays = (text) => {
  * «сегодня, а если никого — завтра»: оба дня, а не только последний.
  */
 const FALLBACK_SPLIT = new RegExp(
-  `[,;]?\\s*(?:а\\s+)?если\\s+(?:[^.!?,;]{0,30}?\\s)?(?:нельзя|нет|не\\s+получится|не\\s+выйдет|никого|занято|не\\s+будет|не\\s+найд\\p{L}*)(?:[^.!?;]{0,25}?)\\s*(?:,\\s*)?(?:то|тогда|—|–|-|:)\\s+`,
+  `[,;]?\\s*(?:а\\s+)?если\\s+(?:[^.!?,;]{0,30}?\\s)?(?:нельзя|нет|не\\s+получится|не\\s+выйдет|никого|занято|не\\s+будет|не\\s+найд\\p{L}*)(?:[^.!?;]{0,25}?)\\s*(?:,\\s*)?(?:то|тогда|можно|давай(?:те)?|—|–|-|:)\\s+`,
   'u',
 );
 
@@ -550,26 +570,49 @@ const clockOf = (raw, dayPart) => {
   if (!digits && !dayPart && hour >= 1 && hour <= 7) hour += 12;
   return `${String(hour).padStart(2, '0')}:${minutes}`;
 };
+/*
+ * Прочтения границы «после 7» / «до 9» без части суток — как у gateway:
+ * понятное достраивается («после 5» — 17:00, «до 7» — 19:00), а
+ * двусмысленное («после 7–8», «до 8–9», «в 7–9») даёт два прочтения.
+ */
+const boundReadings = (raw, dayPart, kind, clause = '') => {
+  const clock = clockOf(raw, dayPart);
+  if (!clock || dayPart || !/^\d{1,2}$/u.test(raw)) return clock ? [clock] : [];
+  const hour = Number(raw);
+  if (hour === 0 || hour >= 12) return [clock];
+  const evening = /(?<!\p{L})(?:вечер|после\s+работы)/u.test(clause);
+  const morning = /(?<!\p{L})(?:утр|с\s+утра)/u.test(clause);
+  const pm = `${hour + 12}:00`;
+  if (evening) return [pm];
+  if (morning) return [clock];
+  const [clear, doubtful] = kind === 'before' ? [hour <= 7, hour === 8 || hour === 9] : kind === 'after' ? [hour <= 6, hour === 7 || hour === 8] : [hour <= 6, hour >= 7 && hour <= 9];
+  if (clear) return [pm];
+  return doubtful ? [clock, pm] : [clock];
+};
 const plusMinute = (clock) => {
   const total = Number(clock.slice(0, 2)) * 60 + Number(clock.slice(3)) + 1;
   return total >= 24 * 60 ? '23:59' : `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
 };
+/*
+ * Возвращает окна через «или» (массив) или null. Если одно из окон
+ * двусмысленно («с 10 до 12 или после 7»), — { windows, ask }: остальные
+ * окна и два прочтения спорного; ассистент спросит «утра или вечера?».
+ */
 const timeWindowsOf = (text) => {
   const found = [];
+  const asWindow = (kind, clock) => (kind === 'after' ? { from: clock, to: null } : kind === 'before' ? { from: null, to: clock } : { from: clock, to: plusMinute(clock) });
   for (const [kind, regex] of WINDOW_FORMS) {
     for (const match of text.matchAll(regex)) {
       // «В 18» без минут и части суток — не время («в 18 лет» отсекается выше, но «в 2 клиники» — нет).
       if (kind === 'exact' && !/[:]/u.test(match[1]) && !match[2] && /^\d/u.test(match[1])) continue;
-      let window = null;
+      let readings = [];
       if (kind === 'between') {
-        const from = clockOf(match[1], match[2] || match[4]);
-        const to = clockOf(match[3], match[4]);
-        if (from && to) window = { from, to };
+        const pair = combineTimeReadings(boundReadings(match[1], match[2] || match[4], 'after', text), boundReadings(match[3], match[4], 'before', text));
+        readings = pair.ambiguity ? pair.ambiguity : pair.from && pair.to ? [{ from: pair.from, to: pair.to }] : [];
       } else {
-        const clock = clockOf(match[1], match[2]);
-        if (clock) window = kind === 'after' ? { from: clock, to: null } : kind === 'before' ? { from: null, to: clock } : { from: clock, to: plusMinute(clock) };
+        readings = boundReadings(match[1], match[2], kind, text).map((clock) => asWindow(kind, clock));
       }
-      if (window) found.push({ start: match.index, end: match.index + match[0].length, window });
+      if (readings.length > 0) found.push({ start: match.index, end: match.index + match[0].length, readings });
     }
   }
   found.sort((left, right) => left.start - right.start || right.end - left.end);
@@ -587,38 +630,55 @@ const timeWindowsOf = (text) => {
     }
   }
   if (chain.length > 1) best = chain;
-  return best ? best.map((item) => item.window).slice(0, 3) : null;
+  if (!best) return null;
+  best = best.slice(0, 3);
+  const doubtful = best.filter((item) => item.readings.length > 1);
+  if (doubtful.length === 0) return best.map((item) => item.readings[0]);
+  if (doubtful.length > 1) return null;
+  return { windows: best.filter((item) => item.readings.length === 1).map((item) => item.readings[0]), ask: doubtful[0].readings };
 };
 
 /** Окно времени одной части фразы: «после 15:30», «только до обеда», «с утра, но не раньше девяти». */
 const clauseWindow = (text) => {
-  let from = null;
-  let to = null;
-  const tighten = (start, end) => {
-    if (start && (!from || start > from)) from = start;
-    if (end && (!to || end < to)) to = end;
-  };
-  for (const [kind, regex] of WINDOW_FORMS) {
-    for (const match of text.matchAll(regex)) {
-      if (kind === 'between') {
-        const start = clockOf(match[1], match[2] || match[4]);
-        const end = clockOf(match[3], match[4]);
-        if (start && end) tighten(start, end);
-        continue;
+  /*
+   * pick — какое из двух прочтений двусмысленного часа взять: «после 7» в
+   * окне дня — это и 07:00, и 19:00. Если прочтения дают разные окна, день
+   * получает вопрос ask, а не молча утро.
+   */
+  const build = (pick) => {
+    let from = null;
+    let to = null;
+    const tighten = (start, end) => {
+      if (start && (!from || start > from)) from = start;
+      if (end && (!to || end < to)) to = end;
+    };
+    const choose = (readings) => readings[Math.min(pick, readings.length - 1)];
+    for (const [kind, regex] of WINDOW_FORMS) {
+      for (const match of text.matchAll(regex)) {
+        if (kind === 'between') {
+          const pair = combineTimeReadings(boundReadings(match[1], match[2] || match[4], 'after', text), boundReadings(match[3], match[4], 'before', text));
+          const chosen = pair.ambiguity ? pair.ambiguity[Math.min(pick, pair.ambiguity.length - 1)] : pair;
+          if (chosen.from && chosen.to) tighten(chosen.from, chosen.to);
+          continue;
+        }
+        if (kind === 'exact' && !/:/u.test(match[1]) && !match[2]) continue;
+        const clock = choose(boundReadings(match[1], match[2], kind, text));
+        if (!clock) continue;
+        if (kind === 'exact') tighten(clock, plusMinute(clock));
+        else if (kind === 'after') tighten(clock, null);
+        else tighten(null, clock);
       }
-      if (kind === 'exact' && !/:/u.test(match[1]) && !match[2]) continue;
-      const clock = clockOf(match[1], match[2]);
-      if (!clock) continue;
-      if (kind === 'exact') tighten(clock, plusMinute(clock));
-      else if (kind === 'after') tighten(clock, null);
-      else tighten(null, clock);
     }
-  }
-  if (/(?<!\p{L})(?:утром|с\s+утра|до\s+обеда|в\s+первой\s+половине\s+дня)(?!\p{L})/u.test(text)) tighten(null, '12:00');
-  if (/(?<!\p{L})(?:после\s+обеда|во\s+второй\s+половине\s+дня)(?!\p{L})/u.test(text)) tighten('13:00', null);
-  if (/(?<!\p{L})(?:вечером|вечерком|по\s+вечерам)(?!\p{L})/u.test(text)) tighten('17:00', null);
-  if (/(?<!\p{L})дн[её]м(?!\p{L})/u.test(text)) tighten('12:00', '17:00');
-  return from || to ? { from, to } : null;
+    if (/(?<!\p{L})(?:утром|с\s+утра|до\s+обеда|в\s+первой\s+половине\s+дня)(?!\p{L})/u.test(text)) tighten(null, '12:00');
+    if (/(?<!\p{L})(?:после\s+обеда|во\s+второй\s+половине\s+дня)(?!\p{L})/u.test(text)) tighten('13:00', null);
+    if (/(?<!\p{L})(?:вечером|вечерком|по\s+вечерам)(?!\p{L})/u.test(text)) tighten('17:00', null);
+    if (/(?<!\p{L})дн[её]м(?!\p{L})/u.test(text)) tighten('12:00', '17:00');
+    return from || to ? { from, to } : null;
+  };
+  const morning = build(0);
+  const evening = build(1);
+  if (morning && evening && JSON.stringify(morning) !== JSON.stringify(evening)) return { ask: [morning, evening] };
+  return morning;
 };
 
 /*
@@ -649,11 +709,40 @@ const perDayWindows = (text, { excludeWeekdays = [], excludeDays = [] } = {}) =>
     let clause = text.slice(item.end, next);
     const stop = clause.search(/[.!?;]/u);
     if (stop >= 0) clause = clause.slice(0, stop);
-    return { ...item, window: clauseWindow(clause) };
+    const window = clauseWindow(clause);
+    return { ...item, clause, window: window?.ask ? null : window, ask: window?.ask || null };
   });
-  const windowed = withWindows.filter((item) => item.window);
-  if (windowed.length < 2 || new Set(windowed.map((item) => JSON.stringify(item.window))).size < 2) return null;
-  return withWindows.slice(0, 7).map(({ value, window }) => ({ ...value, ...(window ? { from: window.from, to: window.to } : {}) }));
+  /*
+   * «В понедельник и среду до 15»: дни через «и», «или», запятую делят одно
+   * окно — то, что сказано после последнего из них. Раньше окно получал
+   * только последний день, а первый оставался «в любое время».
+   */
+  for (let position = withWindows.length - 2; position >= 0; position -= 1) {
+    if (!withWindows[position].window && !withWindows[position].ask && /^\s*(?:,|и|или|либо)?\s*(?:в|во)?\s*$/u.test(withWindows[position].clause)) {
+      withWindows[position] = { ...withWindows[position], window: withWindows[position + 1].window, ask: withWindows[position + 1].ask };
+    }
+  }
+  /*
+   * «Работаю посменно: в понедельник до 15, во вторник после 14» — это часы
+   * работы, а прийти можно в остальное время: после 15 и до 14.
+   */
+  const busyPrefix = new RegExp(`(?<!${WORD})(?:работаю|на\\s+работе|смен\\p{L}*|занят\\p{L}?|учусь)(?!${WORD})`, 'u').test(text.slice(0, withWindows[0]?.index ?? 0));
+  if (busyPrefix) {
+    // Только дни из того же предложения: «…Нужен хирург, лучше в пятницу утром» — уже не часы работы.
+    const sentence = text.slice(withWindows[0].index).search(/[.!?;]/u);
+    const sentenceEnd = sentence >= 0 ? withWindows[0].index + sentence : text.length;
+    for (const [position, item] of withWindows.entries()) {
+      if (!item.window || item.index > sentenceEnd || /свобод|могу|удобно|можно/u.test(item.clause.split(',')[0])) continue;
+      const { from, to } = item.window;
+      withWindows[position] = { ...item, window: from && to ? null : from ? { from: null, to: from } : { from: to, to: null } };
+    }
+  }
+  const windowed = withWindows.filter((item) => item.window || item.ask);
+  if (windowed.length < 2 || new Set(windowed.map((item) => JSON.stringify(item.window || item.ask))).size < 2) return null;
+  // Один и тот же день дважды («пятница свободна… лучше в пятницу утром») — один раз, первое упоминание.
+  const unique = withWindows.filter((item, position) => withWindows.findIndex((other) => JSON.stringify(other.value) === JSON.stringify(item.value)) === position);
+  // ask — «завтра после 7»: у дня два прочтения, ассистент спросит «утра или вечера?».
+  return unique.slice(0, 7).map(({ value, window, ask }) => ({ ...value, ...(window ? { from: window.from, to: window.to } : {}), ...(ask ? { ask } : {}) }));
 };
 
 /**
@@ -834,7 +923,9 @@ const UNSUPPORTED_PATTERNS = [
     'u',
   )],
   // Несколько пациентов подряд («двойня», «два слота подряд») — подбор ищет одну запись.
-  ['multi_patient', new RegExp(`(?<!${WORD})(?:дв(?:а|ух)\\s+(?:слот|талон|запис|при[её]м)\\p{L}*\\s+(?:подряд|сразу|одновременно)|(?:подряд|сразу)\\s+дв(?:а|е|ух)\\s+(?:слот|талон|запис|при[её]м)\\p{L}*|двойн\\p{L}*|близнец\\p{L}*|двоих\\s+детей|на\\s+двоих|обоих\\s+детей|всей\\s+семь[её]й)`, 'u')],
+  ['multi_patient', new RegExp(`(?<!${WORD})(?:дв(?:а|ух)\\s+(?:слот|талон|запис|при[её]м)\\p{L}*\\s+(?:подряд|сразу|одновременно)|(?:подряд|сразу)\\s+дв(?:а|е|ух)\\s+(?:слот|талон|запис|при[её]м)\\p{L}*|двойн\\p{L}*|близнец\\p{L}*|двоих\\s+детей|на\\s+двоих|обоих\\s+детей|всей\\s+семь[её]й`
+    // «Запишите меня и мужа», «нас с мамой на одно время» — два пациента.
+    + `|(?:меня|нас)\\s+(?:и|с)\\s+(?:мужа|мужем|жену|женой|сына|сыном|дочь|дочку|дочкой|маму|мамой|папу|папой|ребенка|ребенком|детей|детьми|бабушку|дедушку|подругу|друга)(?!${WORD})|на\\s+одно\\s+(?:и\\s+то\\s+же\\s+)?время|на\\s+обоих|нас\\s+двоих|нас\\s+троих)`, 'u')],
   // Справка (в бассейн, на работу, водительская) — отдельная услуга, которой в демо-наборе нет.
   ['certificate', new RegExp(`(?<!${WORD})(?:справк\\p{L}*|медкомисси\\p{L}*|медосмотр\\p{L}*|санаторно-курортн\\p{L}*\\s+карт\\p{L}*|больничн(?:ый|ого)\\s+лист\\p{L}*)`, 'u')],
   // Анонимный приём — порядок клиники, которого демо-набор не знает.
@@ -1158,6 +1249,14 @@ export const extractBookingConstraints = (text, { nested = false } = {}) => {
     if (bare) result[bare[1] ? 'preferGender' : 'doctorGender'] = bare[2] === 'женщин' ? 'female' : 'male';
   }
   if (/(?<![\p{L}])пол\s+врача\s+(?:не\s+важен|неважен)|(?:неважно|не\s+важно|без\s+разницы)[,\s]+(?:мужчина\s+или\s+женщина|женщина\s+или\s+мужчина)/u.test(lower)) result.genderAny = true;
+  // «Дерматолог-женщина или мужчина — неважно»: названы оба пола — это не условие.
+  const bothGenders = /(?<!\p{L})(женщин|мужчин)\p{L}*\s+или\s+(?:врач\p{L}*[-\s]+)?(женщин|мужчин)\p{L}*/u.exec(lower);
+  if (bothGenders && bothGenders[1] !== bothGenders[2]) {
+    result.genderAny = true;
+    delete result.doctorGender;
+    delete result.preferGender;
+    delete result.genderAlsoOk;
+  }
 
   const experienceEntry = lastAffirmedEntry(lower, EXPERIENCE_PATTERNS);
   const experience = experienceEntry?.value;
@@ -1192,6 +1291,14 @@ export const extractBookingConstraints = (text, { nested = false } = {}) => {
   const fallbacks = [];
   if (unsupported.includes('oms') && PAID_FALLBACK.test(lower)) fallbacks.push('oms');
   for (const key of ['home_visit', 'online']) if (unsupported.includes(key) && IN_PERSON_FALLBACK.test(lower)) fallbacks.push(key);
+  /*
+   * «Врач не моложе 50 и с хорошими отзывами, но если такого нет — то любой
+   * с большим стажем»: на врача без проверки возраста и отзывов согласие уже
+   * дано — эти условия не блокируют подбор («с большим стажем» остаётся).
+   */
+  const anyDoctorFallback = new RegExp(`${FALLBACK_LEAD}[^.!?]{0,40}?(?<!${WORD})(?:любой|любого|любому|кто\\s+угодно|кто-нибудь|неважно\\s+кто)(?!${WORD})`, 'u').test(lower);
+  // Согласие видно в понятых условиях: «без отзывов: их в демо нет, вы согласились на любого врача».
+  if (anyDoctorFallback) fallbacks.push(...unsupported.filter((key) => key === 'rating' || key === 'doctor_age'));
   if (fallbacks.length > 0) result.fallbacks = fallbacks;
   const kept = unsupported.filter((key) => !fallbacks.includes(key));
   if (kept.length > 0) result.unsupported = kept;
@@ -1253,6 +1360,29 @@ export const extractBookingConstraints = (text, { nested = false } = {}) => {
   if (spoken.around && !result.timeAround) {
     result.timeAround = spoken.around;
     delete result.timeExact;
+  }
+  /*
+   * «Желательно до 12», «лучше после 17», «по возможности до 15» — пожелание,
+   * а не условие: такие варианты первыми, остальные не отбрасываются. Раньше
+   * это было жёсткое окно, и подбор пустел из-за слова «желательно».
+   */
+  const soft = new RegExp(`(?<!${WORD})(?:лучше|желательно|предпочтительно|по\\s+возможности|хорошо\\s+бы|если\\s+можно|в\\s+идеале)\\s+(?:(?:бы|всё\\s+же|все\\s+же)\\s+)?(после|до|не\\s+позже|не\\s+раньше)\\s+(\\d{1,2})(?::(\\d{2}))?(?:\\s+час\\p{L}*)?(?:\\s+(утра|дня|вечера))?(?![\\d:])(?!\\s*(?:тыс|руб|₽|мин|к(?!\\p{L})))`, 'u').exec(lower);
+  // «А лучше после 17» отдельной репликой — исправление прежнего времени, а не пожелание.
+  const correction = soft && /^лучше/u.test(soft[0]) && /^[\s,.!]*(?:(?:а|нет|ой|хотя|но|ну|тогда)[\s,.!]+)*$/u.test(lower.slice(0, soft.index));
+  if (soft && !correction) {
+    const after = soft[1] === 'после' || soft[1].endsWith('раньше');
+    let hour = Number(soft[2]);
+    const dayPart = soft[4];
+    const ambiguous = !dayPart && (after ? hour === 7 || hour === 8 : hour === 8 || hour === 9);
+    if (dayPart === 'вечера' && hour < 12) hour += 12;
+    else if (dayPart === 'дня' && hour >= 1 && hour <= 6) hour += 12;
+    else if (!dayPart && hour >= 1 && hour <= (after ? 6 : 7)) hour += 12;
+    if (hour <= 23 && !ambiguous) {
+      const clock = `${String(hour).padStart(2, '0')}:${soft[3] || '00'}`;
+      result.preferWindow = after ? { from: clock, to: null } : { from: null, to: clock };
+      if (after && result.spokenAfter === clock) delete result.spokenAfter;
+      if (!after && result.spokenBefore === clock) delete result.spokenBefore;
+    }
   }
   // «После работы» — вечер; в понятых условиях это так и видно.
   if (new RegExp(`(?<!${WORD})после\\s+работы(?!${WORD})`, 'u').test(lower)) result.afterWork = true;
@@ -1375,10 +1505,13 @@ export const extractBookingConstraints = (text, { nested = false } = {}) => {
     result.dayWindows = true;
   }
   /* «С 10 до 12 или после 18» — окна через «или» заменяют одиночные границы этой реплики. */
-  const windows = result.dayWindows ? null : timeWindowsOf(lower);
-  if (windows) {
+  const found = result.dayWindows ? null : timeWindowsOf(lower);
+  const windows = Array.isArray(found) ? found : found?.windows;
+  if (found) {
     result.timeWindows = windows;
-    for (const key of ['timeExact', 'timeAround', 'spokenAfter', 'spokenBefore', 'preferTime', 'busyUntil']) delete result[key];
+    // «С 10 до 12 или после 7»: спорное окно — вопрос, остальные окна ждут ответа.
+    if (!Array.isArray(found)) result.windowAsk = found.ask;
+    for (const key of ['timeExact', 'timeAround', 'spokenAfter', 'spokenBefore', 'preferTime', 'busyUntil', 'timeAmbiguity']) delete result[key];
   }
   /* Доступная среда и парковка — свойства филиала; у реальных клиник неизвестны, и тогда они не проходят. */
   // «Доступная среда и парковка не обязательны» — снятие условия, а не само условие.
@@ -1523,7 +1656,8 @@ export const extractReplySignals = (text) => {
   // «Да», «согласен», «ок», «давайте» — согласие на то, о чём спросили (без «спасибо»: это прощание).
   if (/^[\s,.!]*(?:да|ага|угу|ок|окей|ok|хорошо|ладно|согласен|согласна|согласны|давай(?:те)?|конечно|можно|подходит|устраивает|пойд[её]т|годится|верно|точно|именно)(?:[\s,.!]+(?:да|давай(?:те)?|конечно|можно|согласен|согласна|хорошо|ладно|так|пожалуйста|подходит|ищи(?:те)?|ищем))*[\s,.!)]*$/u.test(lower)) reply.yes = true;
   // «Я дома», «я на работе», «да, я там» — подтверждение точки отправления.
-  if (/(?<!\p{L})(?:я|мы)\s+(?:сейчас\s+|уже\s+|как\s+раз\s+)?(?:там|дома|на\s+работе|здесь|тут|в\s+офисе)(?!\p{L})/u.test(lower)) reply.atPlace = true;
+  // «Я на работе до 17» — о расписании, а не о том, где человек сейчас.
+  if (/(?<!\p{L})(?:я|мы)\s+(?:сейчас\s+|уже\s+|как\s+раз\s+)?(?:там|дома|на\s+работе|здесь|тут|в\s+офисе)(?!\p{L})(?!\s+(?:до|по|с|после|с\s+утра|весь|целый|каждый)(?!\p{L}))/u.test(lower)) reply.atPlace = true;
   // «Стандарт, и завтра», «стандартная программа» — программа ДМС внутри реплики.
   const planWord = /(?<!\p{L})(basic|standard|premium|базов\p{L}*|стандарт\p{L}*|премиум\p{L}*)(?!\p{L})/u.exec(lower);
   if (planWord) reply.plan = /^(?:basic|базов)/u.test(planWord[1]) ? 'demo-basic' : /^(?:standard|стандарт)/u.test(planWord[1]) ? 'demo-standard' : 'demo-premium';
@@ -1570,8 +1704,10 @@ export const mergeBookingTurns = (turns) => {
     doctorIds: [],
     branchIds: [],
     clinicChoice: false,
+    doctorChoice: false,
     foreignDoctor: false,
     preferTime: null,
+    preferWindow: null,
     withinHours: null,
     wheelchair: false,
     parking: false,
@@ -1581,6 +1717,10 @@ export const mergeBookingTurns = (turns) => {
     preferDistricts: [],
     adult: false,
     pendingTime: null,
+    // Номер дня в «в четверг или в пятницу», о времени которого спросили («после 7» — утра или вечера?).
+    pendingDay: null,
+    // «С 10 до 12 или после 7»: окна, которые ждут ответа о спорном.
+    pendingWindows: null,
     busyFrom: null,
     originConfirmed: false,
     preferCheap: false,
@@ -1625,18 +1765,39 @@ export const mergeBookingTurns = (turns) => {
       const part = !explicitTime ? booking.dayPartAnswer || reply.dayPart : null;
       const reading = byHour || (part ? merged.pendingTime[part === 'am' ? 0 : 1] : null)
         || (reply.ordinal && !explicitTime ? merged.pendingTime[reply.ordinal - 1] : null);
+      // Вопрос был о времени одного дня («завтра после 7 или в четверг до обеда») — ответ только для него.
+      const dayIndex = merged.pendingDay;
+      const setDay = (window) => {
+        merged.date = { ...merged.date, options: merged.date.options.map((option, position) => (position === dayIndex ? { ...withoutDayWindow(option), ...(window ? { from: window.from, to: window.to } : {}) } : option)) };
+      };
+      const perDay = Number.isInteger(dayIndex) && merged.date?.kind === 'any_of' && Boolean(merged.date.options[dayIndex]);
       if (reading) {
-        merged.timeFrom = reading.from;
-        merged.timeTo = reading.to;
+        if (perDay) setDay(reading);
+        else if (merged.pendingWindows) {
+          merged.timeWindows = [...merged.pendingWindows, reading];
+          merged.timeFrom = null;
+          merged.timeTo = null;
+        } else {
+          merged.timeFrom = reading.from;
+          merged.timeTo = reading.to;
+        }
         merged.pendingTime = null;
+        merged.pendingDay = null;
+        merged.pendingWindows = null;
         merged.evening = false;
         withoutTime();
         answered = true;
       } else if (reply.indifferent) {
         // «Неважно» на «утра или вечера?» — без ограничения по часам.
+        if (perDay) setDay(null);
+        else if (merged.pendingWindows) merged.timeWindows = null;
+        else {
+          merged.timeFrom = null;
+          merged.timeTo = null;
+        }
         merged.pendingTime = null;
-        merged.timeFrom = null;
-        merged.timeTo = null;
+        merged.pendingDay = null;
+        merged.pendingWindows = null;
         withoutTime();
         answered = true;
       }
@@ -1689,6 +1850,12 @@ export const mergeBookingTurns = (turns) => {
     if (booking.originHere && merged.originHint && !merged.originConfirmed) answered = true;
     if (booking.planAnswer && merged.dms === true && !merged.planId) answered = true;
     merged.answered = answered;
+    // «Желательно до 12»: строгая граница gateway из той же реплики снимается — остаётся пожелание.
+    if (booking.preferWindow) {
+      constraints = { ...constraints };
+      if (booking.preferWindow.from) delete constraints.availableAfter;
+      if (booking.preferWindow.to) delete constraints.availableBefore;
+    }
     const SIMPLE_KINDS = ['today', 'tomorrow', 'after_tomorrow', 'weekday', 'date'];
     // «Или на 14:00» после «на 13:30» — оба времени.
     if (booking.alsoOption && (booking.timeExact || booking.timeAround) && merged.timeFrom && merged.timeTo) {
@@ -1711,6 +1878,22 @@ export const mergeBookingTurns = (turns) => {
     // «На этой неделе» → «тогда в четверг»: четверг той же недели, а не просто ближайший.
     if (booking.date?.kind === 'weekday' && !booking.date.week && ['this_week', 'next_week'].includes(merged.date?.kind)) {
       booking = { ...booking, date: { ...booking.date, week: merged.date.kind === 'this_week' ? 'this' : 'next' } };
+    }
+    // «На следующей неделе» → «в понедельник или вторник»: оба дня — той же недели.
+    if (booking.date?.kind === 'any_of' && booking.date.options.every((option) => option.kind === 'weekday' && !option.week)
+      && ['this_week', 'next_week'].includes(merged.date?.kind)) {
+      const week = merged.date.kind === 'this_week' ? 'this' : 'next';
+      booking = { ...booking, date: { ...booking.date, options: booking.date.options.map((option) => ({ ...option, week })) } };
+    }
+    /*
+     * «Только не завтра» → … → «давайте всё же завтра»: названный позже день
+     * снимает его прежнее исключение. Раньше оставалось «завтра, кроме 13.10»,
+     * и подбор был пуст.
+     */
+    if (booking.date && ['today', 'tomorrow', 'after_tomorrow', 'date', 'weekday'].includes(booking.date.kind)) {
+      const named = booking.date;
+      merged.excludeDays = merged.excludeDays.filter((day) => !(day.kind === named.kind && (named.kind !== 'date' || (day.dayOfMonth === named.dayOfMonth && day.month === named.month))));
+      if (named.kind === 'weekday') merged.excludeWeekdays = merged.excludeWeekdays.filter((day) => day !== named.weekday);
     }
     if ('date' in booking) {
       merged.date = booking.date;
@@ -1739,7 +1922,9 @@ export const mergeBookingTurns = (turns) => {
       merged.excludeDistricts = [];
     }
     if (booking.districts || booking.excludeDistricts) {
-      merged.districts = booking.districts || [];
+      // «А в Приволжском?» → «или в Вахитовском»: «или» добавляет район к прежнему.
+      merged.districts = booking.alsoOption && booking.districts && !booking.excludeDistricts
+        ? [...new Set([...merged.districts, ...booking.districts])] : booking.districts || [];
       merged.excludeDistricts = booking.excludeDistricts || [];
     }
     if (booking.districts || booking.districtAny) merged.preferDistricts = booking.preferDistricts || [];
@@ -1756,7 +1941,14 @@ export const mergeBookingTurns = (turns) => {
       merged.preferGender = booking.preferGender;
       merged.doctorGender = null;
     }
-    if (booking.excludeWeekdays) merged.excludeWeekdays = [...new Set([...merged.excludeWeekdays, ...booking.excludeWeekdays])].sort();
+    if (booking.excludeWeekdays) {
+      merged.excludeWeekdays = [...new Set([...merged.excludeWeekdays, ...booking.excludeWeekdays])].sort();
+      // «В понедельник или вторник» → «кроме понедельника»: остаётся вторник, а не «в понедельник, кроме понедельника».
+      if (merged.date?.kind === 'any_of' && !('date' in booking)) {
+        const options = merged.date.options.filter((option) => option.kind !== 'weekday' || !merged.excludeWeekdays.includes(option.weekday));
+        if (options.length > 0) merged.date = options.length > 1 ? { ...merged.date, options } : options[0];
+      }
+    }
     if (booking.excludeDoctorIds) merged.excludeDoctorIds = [...new Set([...merged.excludeDoctorIds, ...booking.excludeDoctorIds])];
     if (booking.excludeBranchIds) merged.excludeBranchIds = [...new Set([...merged.excludeBranchIds, ...booking.excludeBranchIds])];
     if (booking.minExperience) merged.minExperience = booking.minExperience;
@@ -1821,6 +2013,7 @@ export const mergeBookingTurns = (turns) => {
     // Названные врач и клиника — до тех пор, пока не назовут других или не скажут «к любому».
     if (booking.doctorIds?.length) {
       merged.doctorIds = booking.doctorIds;
+      merged.doctorChoice = Boolean(booking.doctorChoice);
       merged.foreignDoctor = false;
     } else if (booking.foreignDoctor) {
       merged.doctorIds = [];
@@ -1900,6 +2093,9 @@ export const mergeBookingTurns = (turns) => {
     // «Работаю до шести, поэтому после 19» — названное время позже конца работы: берём его.
     if (booking.busyUntil && constraints.availableAfter && constraints.availableAfter > booking.spokenAfter) merged.timeFrom = constraints.availableAfter;
     if (booking.preferTime) merged.preferTime = booking.preferTime;
+    if (booking.preferWindow) merged.preferWindow = booking.preferWindow;
+    else if (booking.timeAny || booking.timeOfDay || booking.timeExact || booking.timeAround || booking.spokenAfter || booking.spokenBefore
+      || booking.timeWindows || booking.dayWindows || constraints.availableAfter || constraints.availableBefore) merged.preferWindow = null;
     if (booking.withinHours) merged.withinHours = booking.withinHours;
     if (booking.accessAny) {
       merged.wheelchair = false;
@@ -1933,6 +2129,17 @@ export const mergeBookingTurns = (turns) => {
       merged.evening = false;
     } else if (explicitTime || booking.timeAny || booking.timeOfDay) {
       merged.pendingTime = null;
+      merged.pendingDay = null;
+      merged.pendingWindows = null;
+    }
+    /* У одного из дней двусмысленный час: «завтра после 7 или в четверг до обеда» — вопрос о нём. */
+    if (booking.dayWindows && merged.date?.kind === 'any_of') {
+      const asked = merged.date.options.findIndex((option) => Array.isArray(option.ask));
+      if (asked >= 0) {
+        merged.pendingTime = merged.date.options[asked].ask;
+        merged.pendingDay = asked;
+      }
+      merged.date = { ...merged.date, options: merged.date.options.map(({ ask: _ask, ...option }) => option) };
     }
     /*
      * «Работаю до 19» → «и в выходные тоже можно»: будни — после 19:00,
@@ -1975,6 +2182,11 @@ export const mergeBookingTurns = (turns) => {
       merged.timeTo = null;
       merged.evening = false;
       merged.preferTime = null;
+      if (booking.windowAsk) {
+        merged.pendingTime = booking.windowAsk;
+        merged.pendingWindows = booking.timeWindows;
+        merged.timeWindows = null;
+      }
     } else if (booking.timeAny || booking.timeOfDay || booking.timeExact || booking.timeAround || booking.spokenAfter || booking.spokenBefore
       || constraints.availableAfter || constraints.availableBefore || constraints.evening) {
       merged.timeWindows = null;

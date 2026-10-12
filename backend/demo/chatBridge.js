@@ -17,6 +17,7 @@
 import { describeRequest, describeTimeWindow, LOCALITIES, normalizeSearchRequest, UNSUPPORTED_CONDITIONS } from '../../shared/demoSearch.js';
 import { SPECIALTY_CANON } from '../../shared/specialties.js';
 import { addDays, moscowDay, moscowParts } from './time.js';
+import { SLOT_WINDOW_DAYS } from './generator.js';
 
 const BOOKING_ACTIONS = new Set(['FIND_DOCTOR', 'GET_AVAILABLE_SLOTS']);
 // «ЛОР в клинике Ясень»: модель может ответить поиском клиники, а запись — к врачу в ней.
@@ -50,7 +51,7 @@ const hasBookingCue = (booking) =>
   Boolean(booking.date || booking.timeFrom || booking.timeTo || booking.evening || booking.maxPrice || booking.dms || booking.city || booking.serviceId
     || booking.workdays || booking.minExperience || booking.doctorGender || booking.preferGender || booking.doctorIds?.length || booking.unsupported?.length
     || booking.excludeDoctorIds?.length || booking.excludeBranchIds?.length || booking.excludeWeekdays?.length || booking.districts?.length
-    || booking.excludeDistricts?.length || booking.planId || booking.withinHours || booking.wheelchair || booking.parking || booking.preferDms || booking.preferTime
+    || booking.excludeDistricts?.length || booking.planId || booking.withinHours || booking.wheelchair || booking.parking || booking.preferDms || booking.preferTime || booking.preferWindow
     || booking.afterHours || booking.preferExperience || booking.fallbacks?.length || booking.bookingIntent);
 
 const resolveDate = (date, today) => {
@@ -58,6 +59,13 @@ const resolveDate = (date, today) => {
   if ((date.from || date.to) && date.kind !== 'range') {
     const { from, to, ...rest } = date;
     return { ...resolveDate(rest, today), from: from || null, to: to || null };
+  }
+  if (date.kind === 'date' && Number.isInteger(date.year)) {
+    // «1 января 2030» — ровно этот день; прошедший — вопрос, несуществующий — «такой даты нет».
+    const day = `${date.year}-${String(date.month).padStart(2, '0')}-${String(date.dayOfMonth).padStart(2, '0')}`;
+    const check = new Date(`${day}T12:00:00Z`);
+    if (check.getUTCMonth() + 1 !== date.month || check.getUTCDate() !== date.dayOfMonth) return { kind: 'invalid', month: date.month, dayOfMonth: date.dayOfMonth };
+    return day < today ? { kind: 'past' } : { kind: 'date', day, ...(date.expectWeekday ? { expectWeekday: date.expectWeekday } : {}) };
   }
   if (date.kind === 'date') {
     const day = resolveCalendarDate(date, today);
@@ -133,7 +141,9 @@ export const buildBookingRequest = ({ booking, execution, now, index = null }) =
    * клиник, а разговор — о записи к одному врачу. Один профиль в запросе —
    * это запись к нему в любой из клиник.
    */
-  const atClinic = CLINIC_ACTIONS.has(action) && booking.specialties.length === 1;
+  const atClinic = CLINIC_ACTIONS.has(action) && (booking.specialties.length === 1
+    || (booking.specialtyChoice && booking.specialties.length > 1 && booking.specialties.length <= 3)
+    || (booking.specialties.length === 0 && booking.doctorIds.length > 0));
   /*
    * «ЛОР не дальше 15 минут от дома»: дом здесь — точка отправления, а не
    * следующая остановка маршрута «ЛОР → дом», как может решить планировщик.
@@ -166,7 +176,9 @@ export const buildBookingRequest = ({ booking, execution, now, index = null }) =
    */
   const unaskedRoute = action === 'BUILD_ROUTE' && booking.specialties.length === 1 && booking.doctorIds.length === 0
     && !booking.routeIntent && !booking.sequence;
-  const routeAsBooking = fromPlace || clinicChoice || specialtyChoiceRoute || exclusionRoute || intentRoute || unaskedRoute;
+  // «К Ефимовой или Валееву»: планировщик видит двух врачей и строит маршрут, а это выбор одного.
+  const doctorChoiceRoute = action === 'BUILD_ROUTE' && Boolean(booking.doctorChoice) && booking.doctorIds.length > 1 && !booking.routeIntent && !booking.sequence;
+  const routeAsBooking = fromPlace || clinicChoice || specialtyChoiceRoute || exclusionRoute || intentRoute || unaskedRoute || doctorChoiceRoute;
   if (!BOOKING_ACTIONS.has(action) && !clarifying && !procedure && !atClinic && !routeAsBooking) return null;
 
   // Несколько профилей через «и» — маршрут по нескольким врачам; через «или» — выбор для одной записи.
@@ -277,6 +289,7 @@ export const buildBookingRequest = ({ booking, execution, now, index = null }) =
     timeFrom: windowFrom,
     timeTo: windowTo,
     preferTime: booking.preferTime,
+    preferWindow: booking.preferWindow,
     wheelchair: booking.wheelchair,
     parking: booking.parking,
     evening: booking.evening,
@@ -385,6 +398,11 @@ const blockingNote = (request, today = null) => {
     return `${names[0].toUpperCase()}${names.slice(1)} — этого в демо нет, проверить не могу. Ниже — что могу предложить вместо, и только с вашего согласия.`;
   }
   if (request.date.kind === 'invalid') return 'Такой даты в календаре нет — уточните день, соседний подставлять не буду.';
+  if (request.date.kind === 'past') return 'Этот день уже прошёл — записаться можно только на будущее время. На какой день записать?';
+  // Дальше окна расписания («через 3 недели», «1 января 2030») — честно, что так далеко расписания нет.
+  if (request.date.kind === 'date' && today && request.date.day > addDays(today, SLOT_WINDOW_DAYS - 1)) {
+    return `Расписание в демо — на две недели вперёд, до ${addDays(today, SLOT_WINDOW_DAYS - 1).split('-').reverse().join('.')}; на ${request.date.day.split('-').reverse().join('.')} записи пока нет. Могу подобрать ближайшее свободное время — напишите «в любой день».`;
+  }
   if (request.timeChoice?.length === 2) {
     const [morning, evening] = request.timeChoice.map(describeTimeWindow);
     return `Уточните, пожалуйста: ${morning} (утра) или ${evening} (вечера)? Ответьте «утра» или «вечера» — или нажмите кнопку ниже. Выбирать за вас не буду.`;
