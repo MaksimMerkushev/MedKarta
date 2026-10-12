@@ -119,10 +119,21 @@ export const branchLabelsOf = (index, branchIds) => {
 export const buildBookingRequest = ({ booking, execution, now, index = null }) => {
   if (!booking) return null;
   const action = execution?.action;
-  const clarifying = action === 'CLARIFY' && hasBookingCue(booking);
+  /*
+   * Модель переспросила, но запрос уже ясен: есть условие записи, названный
+   * врач или профиль, названный словами («невролог» → «а в любой клинике?»).
+   * Профиль, выведенный только из жалобы, — повод для её вопроса, а не для записи.
+   */
+  const clarifying = action === 'CLARIFY'
+    && (hasBookingCue(booking) || (booking.explicitSpecialty && booking.specialties.length === 1));
   // «Подбор очков», «ЭКГ»: модель видит в этом услугу, а запись — на процедуру к врачу.
   const procedure = action === 'SEARCH_SERVICE' && Boolean(booking.serviceId);
-  const atClinic = CLINIC_ACTIONS.has(action) && booking.specialties.length === 1 && (booking.branchIds.length > 0 || hasBookingCue(booking));
+  /*
+   * «Невролог в Разумеде» → «а в любой клинике?»: модель отвечает поиском
+   * клиник, а разговор — о записи к одному врачу. Один профиль в запросе —
+   * это запись к нему в любой из клиник.
+   */
+  const atClinic = CLINIC_ACTIONS.has(action) && booking.specialties.length === 1;
   /*
    * «ЛОР не дальше 15 минут от дома»: дом здесь — точка отправления, а не
    * следующая остановка маршрута «ЛОР → дом», как может решить планировщик.
@@ -156,6 +167,12 @@ export const buildBookingRequest = ({ booking, execution, now, index = null }) =
   if (booking.foreignDoctor) return null;
   // Последним назван профиль, которого нет («нет, лучше косметолог»): записи нет — ответит pipeline.
   if (booking.unknownSpecialty && booking.specialties.length === 0 && booking.doctorIds.length === 0) return null;
+  /*
+   * «Болит голова и живот» — два профиля поровну: не выбираем, а спрашиваем
+   * (запрос без профиля → «к кому записаться?», остальные условия сохраняются).
+   */
+  const askSpecialty = Array.isArray(booking.specialtyQuestion) && booking.specialtyQuestion.length === 2;
+  if (askSpecialty) booking = { ...booking, specialties: [] };
 
   /*
    * Врачи — только из разбора текста (все однофамильцы подходящей формы,
@@ -275,6 +292,10 @@ export const bookingReplyText = ({ request, booking, ...labels }) => {
     // Город вне покрытия: не обещаем «подбор ниже» — сразу говорим как есть.
     parts.push(`Понял запрос: ${summary.join(', ').replace(/\.$/u, '')}.`);
     parts.push(`${locality.name} — вне покрытия: демо-клиники и карта дорог МедКарты есть только по Казани. Искать в Казани вместо этого — только если скажете.`);
+  } else if (!request.specialty && request.specialtyAny.length === 0 && request.doctorIds.length === 0 && booking?.specialtyQuestion?.length === 2) {
+    const [first, second] = booking.specialtyQuestion.map((key) => SPECIALTY_CANON[key]);
+    parts.push(`По описанию подходят разные врачи — ${first.toLowerCase()} или ${second.toLowerCase()}. К кому записаться? Если не уверены, можно начать с терапевта: он посмотрит всё вместе. Гадать за вас не буду.`);
+    if (summary.length > 0) parts.push(`Условия, которые я учту: ${summary.join(', ')}.`);
   } else if (!request.specialty && request.specialtyAny.length === 0 && request.doctorIds.length === 0) {
     parts.push('Подберу врача и свободное время. Подскажите, какой специалист нужен?');
     if (summary.length > 0) parts.push(`Условия, которые я учту: ${summary.join(', ')}.`);

@@ -997,6 +997,29 @@ describe('Демо-сценарии: уточняющие вопросы и ко
     }
   });
 
+  it('модель ответила поиском клиник («а в любой клинике?») — это всё равно запись к названному врачу', async () => {
+    const clinics = { action: 'FIND_CLINIC', steps: [{ type: 'specialty', specialty: 'neurologist', selection: 'any', constraints: {} }], constraints: {}, reply_hint: 'doctors_found' };
+    const action = await chat(['невролог в Разумеде', 'а в Ситидок?', 'а в любой клинике?'], { respond: clinics });
+    assert.ok(action.booking, action.replyText);
+    assert.equal(action.booking.request.specialty, 'neurologist');
+    assert.deepEqual(action.booking.request.branchIds, []);
+  });
+
+  it('модель переспросила, хотя профиль назван словами, — запись; профиль только из жалобы — её вопрос остаётся', async () => {
+    const clarify = { action: 'CLARIFY', steps: [], constraints: {}, reply_hint: 'need_clarification' };
+    const named = await chat(['невролог в Разумеде', 'а в любой клинике?'], { respond: clarify });
+    assert.ok(named.booking, named.replyText);
+    assert.equal(named.booking.request.specialty, 'neurologist');
+    // «Голова и живот» — два профиля поровну: вопрос «к кому записаться?», а не выбор за пользователя.
+    const vague = await chat('у меня что-то болит голова и живот, хочу на завтра', { respond: clarify });
+    assert.match(vague.replyText, /К кому записаться/);
+    assert.equal(vague.booking.request.specialty, null);
+    assert.deepEqual(vague.booking.request.date, { kind: 'tomorrow' });
+    const answered = await chat(['у меня что-то болит голова и живот, хочу на завтра', 'к неврологу']);
+    assert.equal(answered.booking.request.specialty, 'neurologist');
+    assert.deepEqual(answered.booking.request.date, { kind: 'tomorrow' });
+  });
+
   it('однофамильцы — показываю обоих и спрашиваю; «спасибо» — не новый поиск; «запиши к первому» — объясняю, как записаться', async () => {
     const namesakes = await chat('хочу к Ефимова');
     if (namesakes.booking?.request.doctorIds.length > 1) assert.match(namesakes.replyText, /нескольких врачей с такой фамилией/);

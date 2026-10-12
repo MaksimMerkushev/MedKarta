@@ -365,6 +365,15 @@ export const classifySymptoms = (text) => {
   const strength = Math.min(1, top / 3);
   const confidence = Number((strength * (0.5 + 0.5 * dominance)).toFixed(3));
 
+  /*
+   * Два разных профиля с равным весом («болит голова и живот»): выбирать
+   * одного — гадать. Тогда ответ ассистента спрашивает, к кому записаться.
+   */
+  const specialists = ranked.filter(([specialty]) => specialty !== 'therapist');
+  const tied = specialists.length > 1 && specialists[0][1] === specialists[1][1]
+    ? specialists.slice(0, 2).map(([specialty]) => specialty)
+    : null;
+
   return {
     emergency: emergency ? { id: emergency.id } : null,
     hasMedicalText,
@@ -372,6 +381,7 @@ export const classifySymptoms = (text) => {
     confidence,
     isChild,
     matchedRules,
+    ...(tied ? { tied } : {}),
   };
 };
 

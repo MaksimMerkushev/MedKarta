@@ -524,6 +524,7 @@ export const createPrivacyGateway = ({
     let classification;
     let perTurnSpecialties = [];
     let perTurnChild = [];
+    let perTurnTied = [];
     try {
       /*
        * Между репликами — уступка циклу событий. Разбор синхронный, и
@@ -575,6 +576,7 @@ export const createPrivacyGateway = ({
         return (item.specialties || []).slice(0, 1);
       });
       perTurnChild = perTurn.map((item) => Boolean(item.isChild));
+      perTurnTied = perTurn.map((item) => item.tied || null);
       const lastTurn = perTurn[perTurn.length - 1] || classifier('');
       /*
        * Красные флаги проверяются и по тексту БЕЗ маскировки. Маскировка
@@ -681,6 +683,11 @@ export const createPrivacyGateway = ({
       specialtyChoice,
       specialties: bookingSpecialties.filter((key) => key in SPECIALTY_CANON),
       unknownSpecialty: unknownWins ? analyses[lastUnknownIndex].unknownSpecialties[0] : null,
+      // Профиль назван словами («ЛОР»), а не выведен из жалобы — по нему можно искать без уточнений.
+      explicitSpecialty: lastSpecialtyIndex >= 0 && analyses[lastSpecialtyIndex].specialties.length > 0,
+      // Жалоба указывает на два разных профиля поровну — ассистент спросит, к кому.
+      specialtyQuestion: lastSpecialtyIndex >= 0 && analyses[lastSpecialtyIndex].specialties.length === 0 && !doctorAfterSpecialty
+        ? perTurnTied[lastSpecialtyIndex] : null,
       /*
        * Для кого приём — по последней реплике, где это сказано: «педиатр для
        * сына» → «а теперь мне к терапевту» — взрослый приём. «Не детский, а
