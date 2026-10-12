@@ -20,7 +20,16 @@ const DEMO_DOCTOR = 'demo-doc-';
 const MALE_ENDINGS = new Set(['', 'a', 'u', 'ym', 'e', 'om']);
 const FEMALE_ENDINGS = new Set(['a', 'oy', 'u']);
 
-const surnameFits = (doctorId, words) => {
+/*
+ * Предлог уточняет падеж: «к Ибрагимову» — дательный, это мужская форма
+ * (женская — «к Ибрагимовой»); «у Ефимова» — родительный, тоже мужская.
+ */
+const CASE_ENDINGS = {
+  dative: { male: new Set(['u']), female: new Set(['oy']) },
+  genitive: { male: new Set(['a']), female: new Set(['oy']) },
+};
+
+const surnameFits = (doctorId, words, grammaticalCase = null) => {
   const surname = doctorId.slice(DEMO_DOCTOR.length).split('-')[0];
   const female = /(?:ov|ev|in|yn)a$/.test(surname);
   const male = /(?:ov|ev|in|yn)$/.test(surname);
@@ -28,7 +37,9 @@ const surnameFits = (doctorId, words) => {
   const stem = female ? surname.slice(0, -1) : surname;
   const word = words.find((item) => item.startsWith(stem));
   if (!word) return true;
-  return (female ? FEMALE_ENDINGS : MALE_ENDINGS).has(word.slice(stem.length));
+  const ending = word.slice(stem.length);
+  if (grammaticalCase) return CASE_ENDINGS[grammaticalCase][female ? 'female' : 'male'].has(ending);
+  return (female ? FEMALE_ENDINGS : MALE_ENDINGS).has(ending);
 };
 
 /*
@@ -54,6 +65,9 @@ const branchFits = (branchId, clinicIds, words) => {
 };
 
 /* «Но не Ефимов», «кроме Ясеня», «только не в Разумед» — исключение, а не выбор. */
+/* «Разумед не надо», «Кузляр не предлагай», «Морозов не подходит» — исключение после названия. */
+const EXCLUDED_AFTER = /^[»"]?\s*,?\s*(?:—\s*)?(?:не\s+(?:надо|нужно|нужен|нужна|предлагай\p{L}*|подходит|хочу|интересует|рассматрива\p{L}*|советуй\p{L}*)|исключ\p{L}*|мимо)(?!\p{L})/u;
+
 const EXCLUDED_BEFORE = /(?:^|[^\p{L}])(?:не|кроме|исключая|без|только\s+не|но\s+не)\s+(?:(?:к|ко|у|в|во|на)\s+)?(?:(?:клиник|медцентр|центр|стоматологи|врач|доктор)\p{L}*\s+)?[«"]?$/u;
 
 /**
@@ -73,15 +87,23 @@ export const demoRefsOf = (analysis) => {
   const excludeBranchIds = new Set();
   let foreignDoctor = false;
   let clinicNamed = false;
-  for (const entity of analysis.entities || []) {
+  let excludedClinicEnd = -1;
+  for (const entity of [...(analysis.entities || [])].sort((left, right) => left.start - right.start)) {
     if (!Array.isArray(entity.ids) || entity.ids.length === 0) continue;
-    const excluded = EXCLUDED_BEFORE.test(lower.slice(Math.max(0, entity.start - 36), entity.start));
+    // «Не в Айболит на Курской»: улица филиала после исключённой клиники — часть того же исключения.
+    const streetOfExcluded = entity.kind === ENTITY_KIND.CLINIC && excludedClinicEnd >= 0
+      && /^\s*,?\s*(?:на|по|в|во|у)\s+(?:ул(?:ице|\.)?\s+)?$/u.test(lower.slice(excludedClinicEnd, entity.start));
+    const excluded = streetOfExcluded || EXCLUDED_BEFORE.test(lower.slice(Math.max(0, entity.start - 36), entity.start))
+      || EXCLUDED_AFTER.test(lower.slice(entity.end, entity.end + 30));
+    if (entity.kind === ENTITY_KIND.CLINIC) excludedClinicEnd = excluded ? entity.end : -1;
+    const preposition = /(?:^|[^\p{L}])(к|ко|у|от|для)\s+(?:врачу\s+|доктору\s+|(?:\p{L}+(?:логу|педу|апевту|ургу|иатру))\s+)?$/u.exec(lower.slice(Math.max(0, entity.start - 24), entity.start))?.[1];
+    const grammaticalCase = preposition === 'к' || preposition === 'ко' ? 'dative' : preposition ? 'genitive' : null;
     if (entity.kind === ENTITY_KIND.DOCTOR) {
       const words = content.slice(entity.start, entity.end).split(/[^\p{L}-]+/u).filter(Boolean).map(slug);
       const ids = [...new Set(entity.ids.filter((id) => id.startsWith(DEMO_DOCTOR)).map((id) => id.split('--')[0]))];
       // Врач назван, но не из демо: записи к нему нет, а подменять его другим нельзя.
       if (ids.length === 0 && !excluded) foreignDoctor = true;
-      let fitting = ids.filter((id) => surnameFits(id, words));
+      let fitting = ids.filter((id) => surnameFits(id, words, grammaticalCase));
       if (fitting.length === 0) fitting = ids;
       const named = fitting.filter((id) => firstNameFits(id, messageWords));
       if (named.length > 0) fitting = named;
@@ -89,12 +111,15 @@ export const demoRefsOf = (analysis) => {
     }
     if (entity.kind === ENTITY_KIND.CLINIC) {
       const demoBranches = entity.ids.filter((id) => id.startsWith('demo-') && !id.startsWith(DEMO_DOCTOR));
+      const clinicIds = [...new Set(demoBranches.map((id) => id.replace(/-[a-z0-9]+$/, '')))];
+      // Улица сужает и исключение: «не в Айболит на Курской» — без филиала на Курской, а не без всего «Айболита».
+      const nearWords = lower.slice(entity.end, entity.end + 40).split(/[^\p{L}-]+/u).filter(Boolean).map(slug);
       if (excluded) {
-        demoBranches.forEach((id) => excludeBranchIds.add(id));
+        const streetExcluded = demoBranches.filter((id) => branchFits(id, clinicIds, nearWords));
+        (streetExcluded.length > 0 ? streetExcluded : demoBranches).forEach((id) => excludeBranchIds.add(id));
         continue;
       }
       clinicNamed = true;
-      const clinicIds = [...new Set(demoBranches.map((id) => id.replace(/-[a-z0-9]+$/, '')))];
       const onStreet = demoBranches.filter((id) => branchFits(id, clinicIds, messageWords));
       (onStreet.length > 0 ? onStreet : demoBranches).forEach((id) => branchIds.add(id));
     }

@@ -32,6 +32,24 @@
   color: var(--panel-secondary);
 }
 
+/*
+ * Шапка панели на узкой ширине (планшет — 340 px, телефон с кнопкой
+ * «закрыть»): без значка-булавки, название мельче, кнопки плотнее —
+ * название не наезжает на кнопки.
+ */
+.sidebar-header { container-type: inline-size; }
+@container (max-width: 23.9rem) {
+  .sidebar-header .sidebar-title-pin { display: none; }
+  .sidebar-header .sidebar-title { font-size: 20px; }
+  .sidebar-header .sidebar-header-icons { gap: 2px; }
+  .sidebar-header .sidebar-icon-button { width: 34px; height: 34px; }
+}
+@media (pointer: coarse) {
+  @container (max-width: 23.9rem) {
+    .sidebar-header .sidebar-icon-button { width: 36px; height: 36px; }
+  }
+}
+
 .sidebar-icon-button:hover,
 .sidebar-icon-button[aria-pressed="true"] {
   background: var(--panel-selected);

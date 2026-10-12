@@ -28,6 +28,8 @@ import { createExecutor } from './executor/actions.js';
 import { createRoutingProviderFromEnv } from './executor/routing.js';
 import { buildEmergencyAction, buildUiAction } from './executor/resultBuilder.js';
 import { bookingModeFromEnv, bookingReplyText, buildBookingRequest, summarizeBooking } from './demo/chatBridge.js';
+import { UNKNOWN_SPECIALTIES } from './privacy/unknownSpecialties.js';
+import { SPECIALTY_CANON } from '../shared/specialties.js';
 import { getDemoCatalog } from './demo/catalog.js';
 import { demoNow } from './demo/time.js';
 import { publicClinicsHidden } from './demo/flags.js';
@@ -267,6 +269,29 @@ export const createPipeline = ({
         } else if (execution.action === 'CLARIFY' && booking.publicHidden) {
           // Не нашли — возможно, искали государственную клинику, которую демо скрывает.
           action.replyText = `${action.replyText} В демо-режиме показываются только частные клиники (вымышленные и реальные с вымышленными врачами) — государственные временно скрыты.`;
+        }
+      }
+
+      /*
+       * Профиль, которого в справочнике нет («косметолог», «мануальный
+       * терапевт»): честное «такого врача нет» вместо общего «уточните» или,
+       * хуже, подбора по прежнему профилю. Похожий профиль — только словами.
+       */
+      const unknownSpecialty = gate.context.booking?.unknownSpecialty;
+      if (unknownSpecialty && UNKNOWN_SPECIALTIES[unknownSpecialty]) {
+        const { label, related } = UNKNOWN_SPECIALTIES[unknownSpecialty];
+        const note = `Врачей профиля «${label}» в справочнике МедКарты нет — показать или записать к такому врачу не могу, а подменять другим профилем без вашего согласия не буду.`;
+        const hint = related ? ` Похожий профиль, который есть, — ${SPECIALTY_CANON[related].toLowerCase()}: напишите, если он подойдёт.` : '';
+        if (action.booking) {
+          // Назван и профиль, который есть («косметолог или дерматолог»): подбор — только по нему.
+          action.replyText = `Врачей профиля «${label}» в справочнике МедКарты нет — подбираю только по профилю, который вы назвали вместе с ним. ${action.replyText}`;
+        } else if ((gate.context.booking?.specialties || []).length === 0) {
+          action.replyText = `${note}${hint}`;
+          action.specialty = null;
+          action.doctorProfile = null;
+          action.searchQuery = null;
+          action.buildRoute = false;
+          action.targetStops = [];
         }
       }
 

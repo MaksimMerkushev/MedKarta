@@ -19,7 +19,7 @@ import { __resetCatalogCache, loadCatalog } from '../backend/privacy/catalog.js'
 describe('Условия записи из текста', () => {
   const cases = [
     ['Нужен ЛОР завтра после 18:00', { date: { kind: 'tomorrow' } }],
-    ['не сегодня, а завтра', { date: { kind: 'tomorrow' } }],
+    ['не сегодня, а завтра', { date: { kind: 'tomorrow' }, excludeDays: [{ kind: 'today' }] }],
     ['послезавтра вечером', { date: { kind: 'after_tomorrow' } }],
     ['сегодня', { date: { kind: 'today' } }],
     ['в пятницу', { date: { kind: 'weekday', weekday: 5 } }],
@@ -43,7 +43,8 @@ describe('Условия записи из текста', () => {
     ['по ДМС', { dms: true }],
     ['по страховке', { dms: true }],
     ['без ДМС', { dms: false }],
-    ['платно', { dms: false }],
+    // «Платно» — ещё и согласие на платный приём вместо ОМС, если ОМС просили раньше.
+    ['платно', { dms: false, consentPaid: true }],
     ['повторный приём', { visit: 'repeat' }],
     ['в любое время', { timeAny: true }],
     ['добрый вечер, нужен педиатр', {}],
@@ -70,7 +71,7 @@ describe('Условия записи из текста', () => {
     ['только не в понедельник', { excludeWeekdays: [1] }],
     ['кроме пятницы и субботы', { excludeWeekdays: [5, 6], suppressWeekend: true }],
     ['гинеколог, желательно женщина', { preferGender: 'female' }],
-    ['запишите на 17:30', { timeExact: '17:30' }],
+    ['запишите на 17:30', { timeExact: '17:30', bookingIntent: true }],
     ['около 18:00', { timeAround: '18:00' }],
     ['лор в субботу 16 октября', { date: { kind: 'date', month: 10, dayOfMonth: 16, expectWeekday: 6 } }],
     ['педиатр бесплатно по ОМС', { unsupported: ['oms'] }],
@@ -84,9 +85,29 @@ describe('Условия записи из текста', () => {
     ['уролог после работы', { afterWork: true }],
     ['в пн или ср', { date: { kind: 'any_of', options: [{ kind: 'weekday', weekday: 1 }, { kind: 'weekday', weekday: 3 }] } }],
     ['через 2 дня', { date: { kind: 'in_days', days: 2 } }],
-    ['через 2 часа', {}],
+    // «Через 2 часа» — не время «2:00», а «не раньше, чем через 2 часа от сейчас».
+    ['через 2 часа', { afterHours: 2 }],
     ['в районе Горок', { originHint: 'place', nearPlace: true }],
-    ['в будни', { workdays: true }],
+    // Сложные речевые обороты.
+    ['не дороже двух с половиной тысяч', { maxPrice: 2500 }],
+    ['бюджет тысяч пять', { maxPrice: 5000 }],
+    ['до полутора тысяч', { maxPrice: 1500 }],
+    ['стаж от десяти лет', { minExperience: 10 }],
+    ['врач с опытом лет 15', { minExperience: 15 }],
+    ['в Приволжском на этой неделе', { date: { kind: 'this_week' }, districts: ['Приволжский'] }],
+    ['кроме Советского', { excludeDistricts: ['Советский'] }],
+    ['не хочу к врачу-женщине', { doctorGender: 'male' }],
+    ['обязательно женщина', { doctorGender: 'female' }],
+    ['а женщина есть?', { doctorGender: 'female' }],
+    ['почистить зубы', { serviceId: 'proc.dentist.hygiene', procedureSpecialty: 'dentist' }],
+    ['пн-ср', { date: { kind: 'any_of', options: [{ kind: 'weekday', weekday: 1 }, { kind: 'weekday', weekday: 2 }, { kind: 'weekday', weekday: 3 }] } }],
+    ['в понедельник на следующей неделе', { date: { kind: 'weekday', weekday: 1, week: 'next' } }],
+    ['в ближайшие 2 часа', { withinHours: 2, nearestIsTime: true }],
+    ['с пандусом и парковкой', { wheelchair: true, parking: true }],
+    ['часов в пять вечера примерно', { timeAround: '17:00' }],
+    ['кардиолог 8 часов вечера', { timeExact: '20:00' }],
+    ['в будни', { workdays: true, suppressWeekend: true }],
+    ['в любой день кроме выходных', { date: null, workdays: true, suppressWeekend: true }],
     // Район — только со словом «район»; «Московский проспект» — улица.
     ['в Вахитовском или Приволжском районе, но не в Советском районе', { districts: ['Вахитовский', 'Приволжский'], excludeDistricts: ['Советский'] }],
     ['кроме Советского района', { excludeDistricts: ['Советский'] }],
@@ -106,7 +127,7 @@ describe('Условия записи из текста', () => {
     // Чего в демо нет — помечается, а не теряется.
     ['вызвать врача на дом', { unsupported: ['home_visit'] }],
     ['онлайн-консультация', { unsupported: ['online'] }],
-    ['запишите онлайн', {}],
+    ['запишите онлайн', { bookingIntent: true }],
     ['лучший лор с отзывами', { unsupported: ['rating'] }],
     // Программа ДМС по названию; «Кама Премиум» — клиника, а не программа.
     ['по программе Demo Premium', { planId: 'demo-premium', dms: true }],
@@ -116,6 +137,90 @@ describe('Условия записи из текста', () => {
     ['рядом с Кремлём', { originHint: 'place' }],
     ['что-нибудь от кашля', {}],
     ['рядом со мной', {}],
+    // Рассказ о себе — не район и не точка: «работаю в центре», «живу на Азино».
+    ['работаю в центре', {}],
+    ['живу на Азино', {}],
+    ['живу на Азино, нужен лор поближе', { originHint: 'home' }],
+    ['я сейчас на Азино, нужен лор', { originHint: 'place', nearPlace: true }],
+    // Неделя у дня недели: «следующий понедельник», «эта пятница».
+    ['в следующую среду', { date: { kind: 'weekday', weekday: 3, week: 'next' } }],
+    ['в эту пятницу', { date: { kind: 'weekday', weekday: 5, week: 'this' } }],
+    ['в ближайший вторник', { date: { kind: 'weekday', weekday: 2 }, nearestIsTime: true }],
+    ['на пятницу или следующий понедельник', { date: { kind: 'any_of', options: [{ kind: 'weekday', weekday: 5 }, { kind: 'weekday', weekday: 1, week: 'next' }] } }],
+    // Несуществующее число — дата, которую подбор назовёт несуществующей, а не пропуск условия.
+    ['32 октября', { date: { kind: 'date', month: 10, dayOfMonth: 32 } }],
+    // «Через час» — от текущего времени; «час езды» — не о времени приёма.
+    ['не раньше чем через час', { afterHours: 1 }],
+    ['через полчаса', { afterHours: 0.5 }],
+    ['через пару часов', { afterHours: 2 }],
+    // Возраст врача в демо не указан; возраст пациента — не о враче.
+    ['хирурга, которому больше 50 лет', { unsupported: ['doctor_age'] }],
+    ['чтобы врач был постарше', { unsupported: ['doctor_age'] }],
+    ['молодого гинеколога', { unsupported: ['doctor_age'] }],
+    ['педиатра ребёнку, которому 5 лет', {}],
+    ['маме 67 лет', {}],
+    ['анонимно', { unsupported: ['anonymous'] }],
+    // «Стаж побольше» — пожелание (опытные первыми), а не условие.
+    ['у кого стаж побольше', { preferExperience: true }],
+    ['самого опытного кардиолога', { preferExperience: true }],
+    // Согласие на замену заранее: условия «по ОМС» больше нет — ищем платно.
+    ['по ОМС, а если нельзя — то платно', { dms: false, fallbacks: ['oms'] }],
+    ['на дом, а если нет — приеду сам', { fallbacks: ['home_visit'], consentInPerson: true }],
+    // Раунд 6: сон и отрицание части суток — «после», а не «до».
+    ['только не утром — я до 11 сплю', { spokenAfter: '12:00', busyUntil: true }],
+    ['сплю до 9', { spokenAfter: '09:00', busyUntil: true }],
+    ['только не вечером', { spokenBefore: '17:00' }],
+    // Пол с запасным вариантом — пожелание, а не «к мужчине».
+    ['к женщине, но если женщин нет — можно и к мужчине', { preferGender: 'female' }],
+    ['лучше женщина, но можно и мужчина', { preferGender: 'female' }],
+    // Цена: «тысячи до четырёх» — не «до 16:00»; точка и запятая после суммы — конец фразы.
+    ['тысячи до четырёх', { maxPrice: 4000 }],
+    ['До 2500.', { maxPrice: 2500 }],
+    ['до 2500, в любой день', { date: null, maxPrice: 2500 }],
+    // «Вечером, но не позже восьми» — 20:00.
+    ['вечером, но не позже восьми', { spokenBefore: '20:00' }],
+    ['на 9 утра, а если нет — то хотя бы до 11', { preferTime: '09:00' }],
+    ['не старше 40 лет', { unsupported: ['doctor_age'] }],
+    ['ребёнку не старше 10 лет', {}],
+    ['только не к молодым врачам', { unsupported: ['doctor_age'] }],
+    ['со стажем от 20', { minExperience: 20 }],
+    ['лучше со стажем от 20', { preferMinExperience: 20 }],
+    // Несколько окон времени через «или».
+    ['с 10 до 12 или после 18', { timeWindows: [{ from: '10:00', to: '12:00' }, { from: '18:00', to: null }] }],
+    ['в 18:00 или в 19:00', { timeWindows: [{ from: '18:00', to: '18:01' }, { from: '19:00', to: '19:01' }] }],
+    ['до 8 утра или после 15:00', { timeWindows: [{ from: null, to: '08:00' }, { from: '15:00', to: null }] }],
+    // Даты: опечатка, именительный падеж, диапазоны, ближайшие дни, исключения, запасной день.
+    ['на после завтра', { date: { kind: 'after_tomorrow' } }],
+    ['день — четверг', { date: { kind: 'weekday', weekday: 4 } }],
+    ['с 15 по 17 октября', { date: { kind: 'range', from: { month: 10, dayOfMonth: 15, shift: 0 }, to: { month: 10, dayOfMonth: 17, shift: 0 } } }],
+    ['до 20 октября', { date: { kind: 'range', from: null, to: { month: 10, dayOfMonth: 20, shift: -1 } } }],
+    ['в ближайшие 3 дня', { date: { kind: 'next_days', days: 3 }, nearestIsTime: true }],
+    ['в любой день этой недели', { date: { kind: 'this_week' } }],
+    ['только не завтра', { excludeDays: [{ kind: 'tomorrow' }] }],
+    ['в пятницу 16 октября, если нельзя — то в субботу 17-го', { date: { kind: 'any_of', options: [{ kind: 'date', month: 10, dayOfMonth: 16, expectWeekday: 5 }, { kind: 'date', month: null, dayOfMonth: 17, expectWeekday: 6 }] } }],
+    ['поближе к дому', { originHint: 'home' }],
+    ['а в другой клинике?', { clinicAny: true, clinicOther: true }],
+    // Раунд 7: у каждого дня своё окно; «в среду не можем» — исключение.
+    ['в среду не можем — кружок, в четверг после 15:30, а в пятницу только до обеда', {
+      date: { kind: 'any_of', options: [{ kind: 'weekday', weekday: 4, from: '15:30', to: null }, { kind: 'weekday', weekday: 5, from: null, to: '12:00' }] },
+      excludeWeekdays: [3],
+      dayWindows: true,
+      timeOfDay: 'morning',
+    }],
+    ['в пт после 19 или в сб до 12', { date: { kind: 'any_of', options: [{ kind: 'weekday', weekday: 5, from: '19:00', to: null }, { kind: 'weekday', weekday: 6, from: null, to: '12:00' }] }, dayWindows: true }],
+    ['в эту субботу или в следующую', { date: { kind: 'any_of', options: [{ kind: 'weekday', weekday: 6, week: 'this' }, { kind: 'weekday', weekday: 6, week: 'next' }] } }],
+    ['во вторник или в среду на следующей неделе', { date: { kind: 'any_of', options: [{ kind: 'weekday', weekday: 2, week: 'next' }, { kind: 'weekday', weekday: 3, week: 'next' }] } }],
+    ['в 12:00 в четверг, или в 12:30', { date: { kind: 'weekday', weekday: 4 }, timeWindows: [{ from: '12:00', to: '12:01' }, { from: '12:30', to: '12:31' }] }],
+    ['в районе 14:00', { timeAround: '14:00' }],
+    ['ближайший по времени', { nearestIsTime: true }],
+    ['нужно два слота подряд', { unsupported: ['multi_patient'] }],
+    ['нужна справка для бассейна', { unsupported: ['certificate'] }],
+    ['в Советском районе, но если там нет никого — можно Приволжский', { districts: ['Советский', 'Приволжский'], preferDistricts: ['Советский'] }],
+    ['в Московском районе, а если там нет — то любой район', { preferDistricts: ['Московский'], districtAny: true }],
+    ['а на Ново-Савиновском филиале?', { districts: ['Ново-Савиновский'] }],
+    ['лучше по ДМС', { preferDms: true, dms: false }],
+    ['у меня Demo Basic, но если что я готов заплатить', { planId: 'demo-basic', preferDms: true, dms: false }],
+    ['хирург, но не детский, а взрослый', { adult: true }],
   ];
   for (const [text, expected] of cases) {
     it(`«${text}»`, () => {
@@ -139,6 +244,81 @@ describe('Условия записи из текста', () => {
     assert.equal(merged.evening, false);
     assert.equal(merged.timeFrom, null);
     assert.equal(merged.timeTo, '12:00');
+  });
+
+  it('сложные обороты в слиянии: «работаю до шести, поэтому после 19», «если на 18:30 нет — после 18», «по ДМС, а если никого — платно»', () => {
+    const merge = (text) => mergeBookingTurns([{ booking: extractBookingConstraints(text), constraints: extractConstraints(text) }]);
+    const work = merge('работаю до шести, поэтому после 19');
+    assert.equal(work.timeFrom, '19:00');
+    assert.equal(work.timeTo, null);
+    const busy = merge('я работаю до 18');
+    assert.equal(busy.timeFrom, '18:00');
+    assert.equal(busy.timeTo, null);
+    const fallback = merge('на 18:30, если нет — то после 18');
+    assert.equal(fallback.timeFrom, '18:00');
+    assert.equal(fallback.preferTime, '18:30');
+    const dms = merge('по ДМС, а если по ДМС никого — платно, но не дороже 2000');
+    assert.equal(dms.dms, false);
+    assert.equal(dms.preferDms, true);
+    assert.equal(dms.maxPrice, 2000);
+    // «Утром» — только для запасного дня: сегодня — в любое время, завтра — до 12:00.
+    const day = merge('сегодня, а если сегодня никого, то завтра утром');
+    assert.deepEqual(day.date, { kind: 'any_of', options: [{ kind: 'today' }, { kind: 'tomorrow', from: null, to: '12:00' }] });
+    assert.equal(day.timeTo, null);
+    // «Ближайший час» — о времени, не о расстоянии.
+    assert.equal(merge('невролог в ближайший час').nearest, false);
+    assert.equal(merge('обязательно не дальше 15 минут').maxTravelMinutes, 15);
+  });
+
+  it('сложные обороты раунда 5: рассказ о себе, ДМС с потолком для платного, согласие следующей репликой', () => {
+    const merge = (texts) => mergeBookingTurns(texts.map((text) => ({ booking: extractBookingConstraints(text), constraints: extractConstraints(text) })));
+    const story = merge(['Работаю в центре до 18:00, живу на Азино. Можно к лору вечером, по страховке Demo Standard, а если не входит — то не дороже 2000']);
+    assert.deepEqual(story.districts, []);
+    assert.equal(story.originHint, null);
+    assert.equal(story.nearest, false);
+    assert.equal(story.timeFrom, '18:00');
+    assert.equal(story.timeTo, null);
+    assert.equal(story.preferDms, true);
+    assert.equal(story.maxPrice, 2000);
+    assert.equal(story.planId, 'demo-standard');
+    const oms = merge(['лор по ОМС', 'ладно, давайте платно']);
+    assert.deepEqual(oms.unsupported, []);
+    assert.deepEqual(oms.fallbacks, ['oms']);
+    assert.equal(oms.dms, false);
+    const stillOms = merge(['лор по ОМС', 'а завтра?']);
+    assert.deepEqual(stillOms.unsupported, ['oms']);
+    const home = merge(['терапевт на дом', 'хорошо, приеду сам']);
+    assert.deepEqual(home.unsupported, []);
+    assert.deepEqual(home.fallbacks, ['home_visit']);
+    // «Через час» снимается новым днём.
+    assert.equal(merge(['терапевт через час']).afterHours, 1);
+    assert.equal(merge(['терапевт через час', 'а лучше завтра']).afterHours, null);
+  });
+
+  it('раунд 6: окна времени и даты не путаются с часами; «в субботу 17-го» — не «только выходные»', () => {
+    const merge = (texts) => mergeBookingTurns(texts.map((text) => ({ booking: extractBookingConstraints(text), constraints: extractConstraints(text) })));
+    const windows = merge(['гинеколог с 10 до 12 или после 18']);
+    assert.equal(windows.timeFrom, null);
+    assert.equal(windows.timeTo, null);
+    assert.equal(windows.timeWindows.length, 2);
+    assert.equal(merge(['гинеколог с 10 до 12 или после 18', 'лучше после 17']).timeWindows, null);
+    const until = merge(['дерматолог до 20 октября']);
+    assert.equal(until.timeTo, null);
+    assert.equal(until.date.kind, 'range');
+    const range = merge(['кардиолог с 15 по 17 октября']);
+    assert.equal(range.timeFrom, null);
+    const fallback = merge(['хирург в пятницу 16 октября, если нельзя в пятницу, то в субботу 17-го']);
+    assert.equal(fallback.weekend, false);
+    const sleep = merge(['невролог завтра, только не утром — я до 11 сплю']);
+    assert.equal(sleep.timeFrom, '12:00');
+    assert.equal(sleep.timeTo, null);
+    const price = merge(['стоматолог, не позже 19:00, тысячи до четырёх']);
+    assert.equal(price.timeTo, '19:00');
+    assert.equal(price.maxPrice, 4000);
+    assert.equal(merge(['уролог завтра или в четверг, лучше вечером, но не позже восьми']).timeTo, '20:00');
+    assert.deepEqual(merge(['уролог, только не завтра', 'в любой день']).excludeDays, []);
+    assert.equal(extractConstraints('до 20 октября').availableBefore, undefined);
+    assert.equal(extractConstraints('в радиусе 15 минут на такси').maxTravelMinutes, 15);
   });
 
   it('слияние: будни и выходные сменяют друг друга; район, пол, стаж держатся до отмены', () => {

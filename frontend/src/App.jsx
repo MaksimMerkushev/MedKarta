@@ -3235,7 +3235,7 @@ export default function App() {
     const commonClasses = isPopup
       ? 'mt-3 w-full text-sm font-medium py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition-all'
       : variant === 'compact'
-        ? 'w-full bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white text-xs font-semibold px-2.5 py-1.5 rounded-lg inline-flex items-center justify-center gap-1.5 transition-all border border-blue-200 dark:bg-blue-900 dark:text-blue-300 dark:border-blue-800 dark:hover:bg-blue-700 dark:hover:text-blue-100'
+        ? 'h-full min-h-8 min-w-9 bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white text-xs font-semibold px-2.5 py-1.5 rounded-lg inline-flex items-center justify-center gap-1.5 transition-all border border-blue-200 dark:bg-blue-900 dark:text-blue-300 dark:border-blue-800 dark:hover:bg-blue-700 dark:hover:text-blue-100'
         : 'w-full flex-1 bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white font-medium px-5 py-2.5 rounded-xl inline-flex items-center justify-center gap-2.5 transition-all border border-blue-200 dark:bg-blue-900 dark:text-blue-300 dark:border-blue-800 dark:hover:bg-blue-700 dark:hover:text-blue-100';
     const iconSize = isPopup ? 16 : variant === 'compact' ? 13 : 18;
 
@@ -3244,10 +3244,12 @@ export default function App() {
       : `${commonClasses} bg-red-50 text-red-600 hover:bg-red-600 hover:text-white border-red-200 dark:bg-red-900 dark:text-red-300 dark:hover:bg-red-700 dark:hover:text-red-100 dark:border-red-800`;
 
     const compact = variant === 'compact';
+    // В краткой карточке подпись видна, только если хватает ширины (контейнер карточки ≥ 21rem).
+    const compactLabel = (text) => <span className="hidden @min-[21rem]:inline">{text}</span>;
     if (isTarget) {
       return (
-        <button type="button" onClick={() => removeFromRoute(doc.id)} className={redClasses} aria-label={compact ? 'Убрать из маршрута' : undefined}>
-          <XCircle size={iconSize} /> {isPopup ? 'Убрать' : compact ? 'Убрать' : 'Убрать из маршрута'}
+        <button type="button" onClick={() => removeFromRoute(doc.id)} className={redClasses} aria-label={compact ? 'Убрать из маршрута' : undefined} title={compact ? 'Убрать из маршрута' : undefined}>
+          <XCircle size={iconSize} className="shrink-0" /> {isPopup ? 'Убрать' : compact ? compactLabel('Убрать') : 'Убрать из маршрута'}
         </button>
       );
     }
@@ -3258,8 +3260,9 @@ export default function App() {
         onClick={() => handleRouteClick(doc)}
         className={isPopup ? `${commonClasses} bg-blue-50 text-blue-600 border border-blue-200 dark:bg-blue-900 dark:text-blue-300 dark:border-blue-800` : commonClasses}
         aria-label={compact ? 'Добавить в маршрут' : undefined}
+        title={compact ? 'Добавить в маршрут' : undefined}
       >
-        <Navigation size={iconSize} /> {isPopup ? 'Показать путь' : compact ? 'В маршрут' : 'Добавить в маршрут'}
+        <Navigation size={iconSize} className="shrink-0" /> {isPopup ? 'Показать путь' : compact ? compactLabel('В маршрут') : 'Добавить в маршрут'}
       </button>
     );
   };
@@ -3283,7 +3286,7 @@ export default function App() {
     return (
       <div
         key={doc.id}
-        className={`card-fade-in rounded-2xl border bg-white p-3 shadow-sm transition-all dark:bg-slate-800 dark:text-white ${isTarget ? 'border-blue-400 ring-2 ring-blue-100 dark:border-blue-500 dark:ring-blue-900' : isDoctorCard ? 'border-blue-100 hover:shadow-md dark:border-blue-900' : 'border-emerald-100 hover:shadow-md dark:border-emerald-900'}`}
+        className={`card-fade-in @container rounded-2xl border bg-white p-3 shadow-sm transition-all dark:bg-slate-800 dark:text-white ${isTarget ? 'border-blue-400 ring-2 ring-blue-100 dark:border-blue-500 dark:ring-blue-900' : isDoctorCard ? 'border-blue-100 hover:shadow-md dark:border-blue-900' : 'border-emerald-100 hover:shadow-md dark:border-emerald-900'}`}
         data-testid="place-card"
       >
         <div className="flex items-start gap-2">
@@ -3334,26 +3337,30 @@ export default function App() {
           )}
         </div>
 
-        <div className="mt-2.5 flex flex-wrap gap-1.5">
+        {/*
+          Кнопки — одной строкой при любой ширине панели: на узкой (планшет)
+          у «В маршрут» остаётся значок, подпись — в aria-label и подсказке.
+        */}
+        <div className="mt-2.5 flex items-stretch gap-1.5">
           <button
             type="button"
             onClick={openDetails}
-            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-300 hover:text-blue-700 dark:border-slate-600 dark:text-slate-200"
+            className="inline-flex min-w-0 flex-1 items-center justify-center gap-1 rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-300 hover:text-blue-700 dark:border-slate-600 dark:text-slate-200"
             data-testid="place-card-details"
           >
-            {doc.demo && isDoctorCard && demoState.booking ? 'Расписание' : 'Подробнее'}
+            <span className="truncate">{doc.demo && isDoctorCard && demoState.booking ? 'Расписание' : 'Подробнее'}</span>
           </button>
           {doc.demo && isDoctorCard && demoState.booking && doc.doctorId && (
             <button
               type="button"
               onClick={() => openBookingForDoc(doc)}
-              className="inline-flex items-center gap-1 rounded-lg bg-violet-600 px-2.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-violet-700"
+              className="inline-flex min-w-0 flex-1 items-center justify-center gap-1 rounded-lg bg-violet-600 px-2 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-violet-700"
               data-testid="card-book-button"
             >
-              <CalendarCheck size={13} aria-hidden="true" /> Записаться
+              <CalendarCheck size={13} className="shrink-0" aria-hidden="true" /> <span className="truncate">Записаться</span>
             </button>
           )}
-          <div className="ml-auto">{renderRouteButton(doc, 'compact')}</div>
+          <div className="shrink-0">{renderRouteButton(doc, 'compact')}</div>
         </div>
       </div>
     );
@@ -3812,16 +3819,21 @@ export default function App() {
                 <div className="h-1.5 w-14 rounded-full bg-slate-300 dark:bg-slate-600" />
               </div>
             )}
-            <header className="shrink-0 px-4 pb-3 pt-4">
+            {/*
+              Шапка подстраивается под ширину панели (контейнерные запросы,
+              SearchFilters.css): на узкой панели (планшет, 340 px) значок и
+              кнопки компактнее, и название не наезжает на кнопки.
+            */}
+            <header className="sidebar-header shrink-0 px-4 pb-3 pt-4">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2">
-                  <MapPin size={24} className="shrink-0 text-blue-600 dark:text-blue-400" aria-hidden="true" />
-                  <div>
-                    <h1 className="text-[23px] font-extrabold leading-none tracking-tight text-blue-600 dark:text-blue-400">МедКарта</h1>
+                  <MapPin size={24} className="sidebar-title-pin shrink-0 text-blue-600 dark:text-blue-400" aria-hidden="true" />
+                  <div className="min-w-0">
+                    <h1 className="sidebar-title truncate text-[23px] font-extrabold leading-none tracking-tight text-blue-600 dark:text-blue-400">МедКарта</h1>
                     <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Казань</p>
                   </div>
                 </div>
-                <div className="flex items-center gap-1">
+                <div className="sidebar-header-icons flex shrink-0 items-center gap-1">
                   {(account.user || account.features.available) && (
                     <button
                       type="button"

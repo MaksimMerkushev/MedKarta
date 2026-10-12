@@ -186,6 +186,11 @@ const RULES = [
  * токены в правила не попадают, иначе «Ближайший травмпункт» считался
  * описанием травмы и не уходил планировщику.
  */
+const PHRASE_RULES = [
+  { id: 'gyneco_phrase', specialty: 'gynecologist', pattern: /(?<!\p{L})(?:по\s+)?женск\p{L}*\s+(?:дел|част|проблем|болезн)\p{L}*/u },
+  { id: 'uro_phrase', specialty: 'urologist', pattern: /(?<!\p{L})(?:по\s+)?мужск\p{L}*\s+(?:дел|част|проблем|болезн)\p{L}*/u },
+];
+
 const NOT_A_COMPLAINT = /^(?:травмпункт|травм[ао]толог|эколог|экономи|экобез|рака[тк]|раков|ракурс|вичуг|спидометр)/u;
 
 /** Указатели на то, что речь идёт о ребёнке. */
@@ -317,6 +322,18 @@ export const classifySymptoms = (text) => {
       const contribution = rule.weight * hits * (position === 0 ? 1 : 0.5);
       scores.set(specialty, (scores.get(specialty) || 0) + contribution);
     });
+  }
+
+  /*
+   * Разговорные описания профиля, которых нет в словах-жалобах: «к врачу по
+   * женским делам», «по мужской части». Слово «женский» само по себе
+   * («врач женского пола», «женский врач» — может быть и о поле врача)
+   * профилем не считается — только с «делам/части/проблемам».
+   */
+  for (const rule of PHRASE_RULES) {
+    if (!rule.pattern.test(normalized)) continue;
+    matchedRules.push(rule.id);
+    scores.set(rule.specialty, (scores.get(rule.specialty) || 0) + 3);
   }
 
   const isChild = CHILD_NORMALIZED.some((stem) => matchesStem(tokenStems, stem));

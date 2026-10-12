@@ -16,7 +16,7 @@
 
 import { describeRequest, LOCALITIES, normalizeSearchRequest, UNSUPPORTED_CONDITIONS } from '../../shared/demoSearch.js';
 import { SPECIALTY_CANON } from '../../shared/specialties.js';
-import { addDays, moscowDay } from './time.js';
+import { addDays, moscowDay, moscowParts } from './time.js';
 
 const BOOKING_ACTIONS = new Set(['FIND_DOCTOR', 'GET_AVAILABLE_SLOTS']);
 // «ЛОР в клинике Ясень»: модель может ответить поиском клиники, а запись — к врачу в ней.
@@ -24,9 +24,19 @@ const CLINIC_ACTIONS = new Set(['FIND_CLINIC']);
 
 export { bookingModeFromEnv } from './flags.js';
 
-/** «15 октября» без года → ближайшая такая дата не раньше сегодняшней. */
+/** «15 октября» без года → ближайшая такая дата не раньше сегодняшней; «17-го» без месяца — ближайшее 17-е. */
 const resolveCalendarDate = ({ month, dayOfMonth }, today) => {
-  const [year] = today.split('-').map(Number);
+  const [year, currentMonth] = today.split('-').map(Number);
+  if (month === null || month === undefined) {
+    if (dayOfMonth > 31) return null;
+    for (let step = 0; step < 3; step += 1) {
+      const candidateMonth = ((currentMonth - 1 + step) % 12) + 1;
+      const candidateYear = year + Math.floor((currentMonth - 1 + step) / 12);
+      const day = resolveCalendarDate({ month: candidateMonth, dayOfMonth }, `${candidateYear}-${String(candidateMonth).padStart(2, '0')}-01`);
+      if (day && day >= today) return day;
+    }
+    return null;
+  }
   for (const candidateYear of [year, year + 1]) {
     const day = `${candidateYear}-${String(month).padStart(2, '0')}-${String(dayOfMonth).padStart(2, '0')}`;
     const check = new Date(`${day}T12:00:00Z`);
@@ -40,9 +50,15 @@ const hasBookingCue = (booking) =>
   Boolean(booking.date || booking.timeFrom || booking.timeTo || booking.evening || booking.maxPrice || booking.dms || booking.city || booking.serviceId
     || booking.workdays || booking.minExperience || booking.doctorGender || booking.preferGender || booking.doctorIds?.length || booking.unsupported?.length
     || booking.excludeDoctorIds?.length || booking.excludeBranchIds?.length || booking.excludeWeekdays?.length || booking.districts?.length
-    || booking.excludeDistricts?.length || booking.planId);
+    || booking.excludeDistricts?.length || booking.planId || booking.withinHours || booking.wheelchair || booking.parking || booking.preferDms || booking.preferTime
+    || booking.afterHours || booking.preferExperience || booking.fallbacks?.length || booking.bookingIntent);
 
 const resolveDate = (date, today) => {
+  // Своё окно у дня в перечислении («в четверг после 15:30») переносится как есть.
+  if ((date.from || date.to) && date.kind !== 'range') {
+    const { from, to, ...rest } = date;
+    return { ...resolveDate(rest, today), from: from || null, to: to || null };
+  }
   if (date.kind === 'date') {
     const day = resolveCalendarDate(date, today);
     const expect = date.expectWeekday ? { expectWeekday: date.expectWeekday } : {};
@@ -51,6 +67,21 @@ const resolveDate = (date, today) => {
   }
   if (date.kind === 'in_days') return { kind: 'date', day: addDays(today, date.days) };
   if (date.kind === 'any_of') return { kind: 'any_of', options: date.options.map((option) => resolveDate(option, today)) };
+  if (date.kind === 'next_days') return { kind: 'range', from: today, to: addDays(today, date.days - 1) };
+  if (date.kind === 'range') {
+    // Границы диапазона: «до 20 октября» — по 19-е, «после 15-го» — с 16-го.
+    const bound = (ref) => {
+      if (!ref) return { day: null };
+      const day = resolveCalendarDate(ref, today);
+      return day ? { day: addDays(day, ref.shift || 0) } : { invalid: ref };
+    };
+    const from = bound(date.from);
+    const to = bound(date.to);
+    const invalid = from.invalid || to.invalid;
+    if (invalid) return { kind: 'invalid', month: invalid.month, dayOfMonth: invalid.dayOfMonth };
+    // «До 20 октября» — с сегодняшнего; конец раньше начала («с 17 по 15») — поменять местами нельзя, значит вопрос.
+    return { kind: 'range', from: from.day && from.day > today ? from.day : date.from ? from.day : today, to: to.day };
+  }
   return date;
 };
 
@@ -101,12 +132,30 @@ export const buildBookingRequest = ({ booking, execution, now, index = null }) =
   const fromPlace = singleDoctorRoute && Boolean(booking.originHint);
   // «Кардиолог в Ситидок или Разумед»: выбор клиники, а не маршрут через обе.
   const clinicChoice = singleDoctorRoute && booking.clinicChoice;
-  if (!BOOKING_ACTIONS.has(action) && !clarifying && !procedure && !atClinic && !fromPlace && !clinicChoice) return null;
+  // «Невролог или терапевт»: планировщик мог построить маршрут через обоих — это выбор одного.
+  const specialtyChoiceRoute = action === 'BUILD_ROUTE' && booking.specialtyChoice && booking.specialties.length > 1 && booking.specialties.length <= 3;
+  /*
+   * «Лор, но не в Айболите и не в Мать и дитя», «терапевт, только не к
+   * Морозову»: планировщик видит названия и строит маршрут через них, а
+   * это исключения из одной записи.
+   */
+  const exclusionRoute = action === 'BUILD_ROUTE' && booking.specialties.length === 1
+    && (booking.excludeBranchIds.length > 0 || booking.excludeDoctorIds.length > 0);
+  /*
+   * «Записаться в Кузляр к окулисту …»: человек просит запись к одному
+   * врачу, а планировщик увидел клинику и врача и построил маршрут.
+   */
+  const intentRoute = singleDoctorRoute && Boolean(booking.bookingIntent);
+  const routeAsBooking = fromPlace || clinicChoice || specialtyChoiceRoute || exclusionRoute || intentRoute;
+  if (!BOOKING_ACTIONS.has(action) && !clarifying && !procedure && !atClinic && !routeAsBooking) return null;
 
-  // Несколько профилей в одной реплике — это маршрут по нескольким врачам, не одна запись.
-  if (booking.specialties.length > 1) return null;
+  // Несколько профилей через «и» — маршрут по нескольким врачам; через «или» — выбор для одной записи.
+  const choice = booking.specialtyChoice && booking.specialties.length > 1 && booking.specialties.length <= 3;
+  if (booking.specialties.length > 1 && !choice) return null;
   // Названный врач не из демо-набора: записи к нему нет, подменять его другим нельзя.
   if (booking.foreignDoctor) return null;
+  // Последним назван профиль, которого нет («нет, лучше косметолог»): записи нет — ответит pipeline.
+  if (booking.unknownSpecialty && booking.specialties.length === 0 && booking.doctorIds.length === 0) return null;
 
   /*
    * Врачи — только из разбора текста (все однофамильцы подходящей формы,
@@ -115,11 +164,40 @@ export const buildBookingRequest = ({ booking, execution, now, index = null }) =
    */
   const doctorIds = booking.doctorIds;
 
-  const specialty = booking.specialties[0] || null;
+  const specialty = choice ? null : booking.specialties[0] || null;
   const today = moscowDay(now);
+  /* «В ближайший час / 2 часа»: сегодня, от текущего времени (по Москве). */
+  let windowFrom = booking.timeFrom;
+  let windowTo = booking.timeTo;
+  let date = booking.date || { kind: 'any' };
+  const { time } = moscowParts(now);
+  const nowMinutes = Number(time.slice(0, 2)) * 60 + Number(time.slice(3));
+  const clock = (value) => `${String(Math.floor(Math.min(value, 1439) / 60)).padStart(2, '0')}:${String(Math.min(value, 1439) % 60).padStart(2, '0')}`;
+  if (booking.withinHours) {
+    date = { kind: 'today' };
+    windowFrom = clock(nowMinutes);
+    windowTo = clock(nowMinutes + booking.withinHours * 60);
+  }
+  /*
+   * «Не раньше чем через час», «через пару часов» — сегодня, начиная с
+   * текущего времени плюс столько часов. С другим днём («завтра») это
+   * время не сравнить — тогда оно не применяется.
+   */
+  if (booking.afterHours && !booking.withinHours && (date.kind === 'any' || date.kind === 'today')) {
+    date = { kind: 'today' };
+    const from = clock(Math.ceil((nowMinutes + booking.afterHours * 60) / 5) * 5);
+    if (!windowFrom || windowFrom < from) windowFrom = from;
+  }
+
+  /* «Только не завтра», «кроме 15 октября» — конкретные даты. */
+  const excludeDates = (booking.excludeDays || [])
+    .map((value) => resolveDate(value, today))
+    .flatMap((value) => (value.kind === 'date' ? [value.day]
+      : value.kind === 'today' ? [today] : value.kind === 'tomorrow' ? [addDays(today, 1)] : value.kind === 'after_tomorrow' ? [addDays(today, 2)] : []));
 
   const { request: normalized } = normalizeSearchRequest({
     specialty,
+    specialtyAny: choice ? booking.specialties : [],
     doctorIds,
     excludeDoctorIds: booking.excludeDoctorIds,
     branchIds: booking.branchIds,
@@ -127,22 +205,31 @@ export const buildBookingRequest = ({ booking, execution, now, index = null }) =
     excludeWeekdays: booking.excludeWeekdays,
     preferGender: booking.preferGender,
     districts: booking.districts,
+    preferDistricts: booking.preferDistricts,
     excludeDistricts: booking.excludeDistricts,
     doctorGender: booking.doctorGender,
     minExperience: booking.minExperience,
+    preferMinExperience: booking.preferMinExperience,
+    preferExperience: booking.preferExperience,
+    excludeDates,
+    timeWindows: booking.timeWindows,
     unsupported: booking.unsupported,
+    fallbacks: booking.fallbacks,
     serviceId: booking.serviceId || null,
     visit: booking.visit || 'first',
     // Педиатр — всегда детский приём, даже если ребёнок не упомянут.
-    patient: booking.child || specialty === 'pediatrician' ? 'child' : 'adult',
-    date: resolveDate(booking.date || { kind: 'any' }, today),
-    timeFrom: booking.timeFrom,
-    timeTo: booking.timeTo,
+    patient: booking.child || specialty === 'pediatrician' || (choice && booking.specialties.every((key) => key === 'pediatrician')) ? 'child' : 'adult',
+    date: resolveDate(date, today),
+    timeFrom: windowFrom,
+    timeTo: windowTo,
+    preferTime: booking.preferTime,
+    wheelchair: booking.wheelchair,
+    parking: booking.parking,
     evening: booking.evening,
     weekend: booking.weekend,
     workdays: booking.workdays,
     maxPrice: booking.maxPrice,
-    dms: { required: booking.dms === true, planId: booking.planId || null },
+    dms: { required: booking.dms === true && !booking.preferDms, planId: booking.planId || null, prefer: Boolean(booking.preferDms) },
     travel: {
       maxMinutes: booking.maxTravelMinutes,
       mode: booking.travelMode || execution.travelMode || 'driving',
@@ -156,7 +243,7 @@ export const buildBookingRequest = ({ booking, execution, now, index = null }) =
     ...refLabels(index, normalized),
     planName: index?.plans.get(normalized.dms.planId)?.name || null,
     // Маршрут «ЛОР → дом» или «Ситидок → Разумед», который составил планировщик, — не то, о чём просили.
-    dropRoute: fromPlace || clinicChoice,
+    dropRoute: routeAsBooking,
     // Исключённую клинику или врача фильтр карты выразить не может — фильтр по ним снимается.
     dropPlaceFilter: normalized.excludeBranchIds.length > 0 || normalized.excludeDoctorIds.length > 0,
   };
@@ -175,7 +262,7 @@ export const bookingReplyText = ({ request, booking, ...labels }) => {
     // Город вне покрытия: не обещаем «подбор ниже» — сразу говорим как есть.
     parts.push(`Понял запрос: ${summary.join(', ')}.`);
     parts.push(`${locality.name} — вне покрытия: демо-клиники и карта дорог МедКарты есть только по Казани. Искать в Казани вместо этого — только если скажете.`);
-  } else if (!request.specialty && request.doctorIds.length === 0) {
+  } else if (!request.specialty && request.specialtyAny.length === 0 && request.doctorIds.length === 0) {
     parts.push('Подберу врача и свободное время. Подскажите, какой специалист нужен?');
     if (summary.length > 0) parts.push(`Условия, которые я учту: ${summary.join(', ')}.`);
   } else if (blockingNote(request)) {

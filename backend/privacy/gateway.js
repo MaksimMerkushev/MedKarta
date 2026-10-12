@@ -27,7 +27,7 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { findTrigger, ruStem } from './normalize.js';
+import { findTrigger, isNegatedBefore, ruStem } from './normalize.js';
 import { detectEntities, detectObfuscation, ENTITY_KIND, isKinshipWord } from './detectors.js';
 import { classifySymptoms } from './symptoms.js';
 import { looksLikeSurname } from './morphology.js';
@@ -43,6 +43,7 @@ import { FAIL_CLOSED_REASON, GATEWAY_DECISION, mintSanitizedPlannerRequest } fro
 import { SPECIALTY_CANON } from './catalog.js';
 import { extractBookingConstraints, mergeBookingTurns } from './bookingConstraints.js';
 import { demoRefsOf } from './demoRefs.js';
+import { findUnknownSpecialties } from './unknownSpecialties.js';
 import {
   checkClosedVocabulary,
   findKnownPlaces,
@@ -52,6 +53,42 @@ import {
 } from './vocabulary.js';
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{12,64}$/;
+
+/*
+ * Самоисправление в одной реплике: «хочу к эндокринологу. не, к
+ * гинекологу», «ЛОР, хотя нет, давайте терапевта», «к лору, а лучше к
+ * неврологу» — первый профиль снят, а не второй врач в маршруте.
+ */
+const CORRECTION_GAP = /^[\s.,!;:…—–-]*(?:(?:ой|ну|а|хотя|или|точнее|вернее)[\s,]*)?(?:не|нет|неа|точнее|вернее|то\s+есть|лучше|передумал\p{L}*)(?:[\s,.!—–-]*(?:нет|лучше|давай(?:те)?|вс[её][-\s]?таки|наверное|пожалуй|скорее))*[\s,.!—–-]*(?:(?:к|ко|на\s+при[её]м\s+к|записаться\s+к|запишите\s+к|нужен|нужна|надо|нужно)\s+)?$/iu;
+
+/**
+ * Профили реплики с учётом самоисправлений и профилей, которых нет в
+ * справочнике («мануальный терапевт» — не «терапевт»).
+ * Снятые совпадения помечаются negated: их не видят ни запись, ни планировщик.
+ */
+const correctSpecialtyMentions = (content, specialtyHits) => {
+  const lower = content.toLowerCase();
+  const unknown = findUnknownSpecialties(content).filter((item) => !isNegatedBefore(lower, item.start));
+  const hits = specialtyHits.map((hit) => (
+    !hit.negated && unknown.some((item) => item.start < hit.end && hit.start < item.end) ? { ...hit, negated: true, unknownOverlap: true } : hit
+  ));
+  const mentions = [
+    ...hits.map((hit, position) => ({ kind: 'known', position, start: hit.start, end: hit.end })).filter((item) => !hits[item.position].negated),
+    ...unknown.map((item) => ({ kind: 'unknown', key: item.key, start: item.start, end: item.end })),
+  ].sort((left, right) => left.start - right.start);
+  const dropped = new Set();
+  for (let position = 1; position < mentions.length; position += 1) {
+    if (CORRECTION_GAP.test(lower.slice(mentions[position - 1].end, mentions[position].start))) dropped.add(mentions[position - 1]);
+  }
+  const corrected = hits.map((hit, position) => (
+    mentions.some((item) => item.kind === 'known' && item.position === position && dropped.has(item)) ? { ...hit, negated: true, corrected: true } : hit
+  ));
+  return {
+    specialtyHits: corrected,
+    specialties: [...new Set(corrected.filter((hit) => !hit.negated).sort((left, right) => left.start - right.start).map((hit) => hit.key))],
+    unknownSpecialties: [...new Set(mentions.filter((item) => item.kind === 'unknown' && !dropped.has(item)).map((item) => item.key))],
+  };
+};
 
 const yieldToEventLoop = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -73,7 +110,9 @@ export const extractConstraints = (text) => {
    * Время. Обе границы обязаны быть «словом целиком» и не частью более
    * длинного числа: без хвостового (?![\d.:-]) строка «СНИЛС 123-456-789 01»
    * давала availableAfter=12:00 — предлог «с» находился в конце слова
-   * «снилс», а «12» откусывалось от номера документа.
+   * «снилс», а «12» откусывалось от номера документа. Точка после числа —
+   * конец предложения («после 16. Ясень или Береста»), а не дата, если за
+   * ней не цифра («после 16.10» — не время).
    */
   /*
    * «До 20 минут от дома» — это время в пути, а не «приём до 20:00»:
@@ -84,9 +123,11 @@ export const extractConstraints = (text) => {
    * число, за которым идут ещё три цифры, тысячи или рубли, временем не считается.
    */
   // «Не раньше 17:00» — это «после», а «не позже 17:00» — «до»: отрицание меняет сторону.
-  const TIME_AFTER = /(?<![\p{L}\p{N}])(?:после|(?<!не\s)позже|начиная\s+с|с|не\s+раньше|не\s+ранее)\s+(\d{1,2})(?::(\d{2}))?(?![\d.:-])(?!\s*(?:мин|час|тыс|руб|₽|р\.|т\.?\s?р|к(?!\p{L})|\d{3}(?!\d)|дн[еяй]|сут|недел|лет|год|раз))/u;
+  // «До 20 октября», «с 15 по 17 октября», «после 15-го» — даты, а не часы.
+  const NOT_A_DATE = '(?!\\s*(?:-?го(?!\\p{L})|-?е(?!\\p{L})|числа|январ|феврал|март|апрел|ма[яй]|июн|июл|август|сентябр|октябр|ноябр|декабр))(?!\\s*(?:по|до|[-–—])\\s*\\d{1,2}\\s*(?:-?го\\s+)?(?:январ|феврал|март|апрел|ма[яй]|июн|июл|август|сентябр|октябр|ноябр|декабр))';
+  const TIME_AFTER = new RegExp(`(?<![\\p{L}\\p{N}])(?:после|(?<!не\\s)позже|начиная\\s+с|с|не\\s+раньше|не\\s+ранее)\\s+(\\d{1,2})(?::(\\d{2}))?(?![\\d:-])(?!\\.\\d)(?!\\s*(?:мин|час|тыс|руб|₽|р\\.|т\\.?\\s?р|к(?!\\p{L})|\\d{3}(?!\\d)|дн[еяй]|сут|недел|лет|год|раз))${NOT_A_DATE}`, 'u');
   // «До 2 дней», «до 5 лет» — не время приёма.
-  const TIME_BEFORE = /(?<![\p{L}\p{N}])(?:до|(?<!не\s)раньше|(?<!не\s)ранее|не\s+позже|не\s+позднее)\s+(\d{1,2})(?::(\d{2}))?(?![\d.:-])(?!\s*(?:мин|час|тыс|руб|₽|р\.|т\.?\s?р|к(?!\p{L})|\d{3}(?!\d)|дней|сут|недел|лет|год|раз))/u;
+  const TIME_BEFORE = new RegExp(`(?<![\\p{L}\\p{N}])(?:до|(?<!не\\s)раньше|(?<!не\\s)ранее|не\\s+позже|не\\s+позднее)\\s+(\\d{1,2})(?::(\\d{2}))?(?![\\d:-])(?!\\.\\d)(?!\\s*(?:мин|час|тыс|руб|₽|р\\.|т\\.?\\s?р|к(?!\\p{L})|\\d{3}(?!\\d)|дней|сут|недел|лет|год|раз))${NOT_A_DATE}`, 'u');
 
   const after = lower.match(TIME_AFTER);
   if (after) {
@@ -185,8 +226,8 @@ export const extractConstraints = (text) => {
  * Голое «через 20 минут» — это не потолок дороги, поэтому число без
  * признака ограничения засчитывается только рядом со словами о дороге.
  */
-const TRAVEL_LIMIT_WORDS = '(?:максимум|не\\s+дольше|не\\s+больше|не\\s+более|не\\s+далее|в\\s+пределах|до|за)';
-const TRAVEL_CONTEXT = '(?:от\\s+(?:дома|работы|меня|офиса)|езды|ехать|пути|в\\s+пути|дороги|пешком|ходьбы|на\\s+машине|на\\s+велосипеде)';
+const TRAVEL_LIMIT_WORDS = '(?:максимум|не\\s+дольше|не\\s+дальше|не\\s+больше(?:\\s+чем)?|не\\s+более|не\\s+далее|не\\s+длиннее|меньше\\s+чем|в\\s+пределах|в\\s+радиусе|до|за)';
+const TRAVEL_CONTEXT = '(?:от\\s+(?:дома|работы|меня|офиса)|езды|ехать|пути|в\\s+пути|дороги|пешком|ходьбы|на\\s+машине|на\\s+такси|на\\s+авто(?!бус)\\p{L}*|на\\s+велосипеде)';
 const TRAVEL_PATTERNS = [
   new RegExp(`${TRAVEL_LIMIT_WORDS}\\s+(\\d{1,3})\\s*мин\\p{L}*`, 'u'),
   new RegExp(`(?<![\\p{L}\\p{N}])(\\d{1,3})\\s*мин\\p{L}*\\s+${TRAVEL_CONTEXT}`, 'u'),
@@ -327,16 +368,21 @@ export const createPrivacyGateway = ({
           : entity,
       );
     }
+    const mentions = correctSpecialtyMentions(content, resolved.specialtyHits.map((hit) => ({
+      ...hit,
+      start: scan.map[hit.start],
+      end: scan.map[Math.min(hit.end, scan.map.length - 1)],
+    })));
+    // Профиль, который назван только как часть другого («мануальный терапевт»), из списка снимается.
+    const specialties = resolved.specialties.filter((key) => mentions.specialties.includes(key)
+      || !resolved.specialtyHits.some((hit) => hit.key === key));
     return {
       incomplete: Boolean(resolved.incomplete),
       entities,
       streets,
-      specialties: resolved.specialties,
-      specialtyHits: resolved.specialtyHits.map((hit) => ({
-        ...hit,
-        start: scan.map[hit.start],
-        end: scan.map[Math.min(hit.end, scan.map.length - 1)],
-      })),
+      specialties,
+      specialtyHits: mentions.specialtyHits,
+      unknownSpecialties: mentions.unknownSpecialties,
       districts: resolved.districts,
     };
   };
@@ -533,19 +579,48 @@ export const createPrivacyGateway = ({
      * последней реплики, где он назван: «ЛОР» → «а лучше дерматолог» —
      * это смена врача, а не два врача сразу.
      */
-    const lastSpecialties = [...perTurnSpecialties].reverse().find((keys) => keys.length > 0) || [];
+    /*
+     * «Дерматолог» → «нет, лучше косметолог»: последним назван профиль,
+     * которого в справочнике нет. Прежний профиль тогда не остаётся молча —
+     * запись к нему не подбирается, а ответ честно говорит «такого врача нет».
+     */
+    const lastSpecialtyIndex = perTurnSpecialties.findLastIndex((keys) => keys.length > 0);
+    const lastUnknownIndex = analyses.findLastIndex((analysis) => analysis.unknownSpecialties.length > 0);
+    const unknownWins = lastUnknownIndex >= 0 && lastUnknownIndex >= lastSpecialtyIndex;
+    const unknownOnly = unknownWins && analyses[lastUnknownIndex].specialties.length === 0;
+    const lastSpecialties = unknownOnly ? [] : perTurnSpecialties[lastSpecialtyIndex] || [];
     const mergedBooking = mergeBookingTurns(userTexts.map((text, index) => ({
       booking: { ...extractBookingConstraints(text), ...demoRefsOf(analyses[index]) },
       constraints: turnConstraints[index],
     })));
     // «Подбор очков» без слова «офтальмолог»: профиль однозначно задан процедурой.
-    const bookingSpecialties = lastSpecialties.length > 0
+    const bookingSpecialties = lastSpecialties.length > 0 || unknownOnly
       ? lastSpecialties
       : mergedBooking.procedureSpecialty ? [mergedBooking.procedureSpecialty] : [];
+    /*
+     * «Невролог или терапевт» — выбор из двух профилей для одной записи, а
+     * не маршрут по двум врачам («ЛОР и стоматолог»). Определяется по
+     * последней реплике с профилями: между ними только «или»/«либо».
+     */
+    const lastSpecialtyTurn = [...analyses].reverse().find((analysis) => analysis.specialties.length > 0);
+    const choiceHits = (lastSpecialtyTurn?.specialtyHits || []).filter((hit) => !hit.negated).sort((left, right) => left.start - right.start);
+    /*
+     * «Лор, гинеколог или уролог — кто угодно из них»: перечисление через
+     * запятую с «или» в конце — тоже выбор. Через «и» — маршрут по врачам.
+     */
+    const choiceGaps = choiceHits.slice(1).map((hit, position) => lastSpecialtyTurn.message.content.slice(choiceHits[position].end, hit.start));
+    const anyOfThem = /(?<!\p{L})(?:кто\s+угодно|кто-нибудь|кто-то|любой|любого|любому|неважно\s+кто|не\s+важно\s+кто|без\s+разницы\s+(?:кто|к\s+кому))(?:\s+из\s+(?:них|этих|трёх|трех|двух))?(?!\p{L})/iu
+      .test(lastSpecialtyTurn?.message.content.slice(choiceHits[choiceHits.length - 1]?.end ?? 0) || '');
+    const specialtyChoice = choiceHits.length > 1 && new Set(choiceHits.map((hit) => hit.key)).size > 1
+      && choiceGaps.every((gap) => /^\s*,?\s*(?:(?:или|либо)\s+)?(?:к\s+|ко\s+)?$/iu.test(gap))
+      && (/(?:или|либо)\s+(?:к\s+|ко\s+)?$/iu.test(choiceGaps[choiceGaps.length - 1] || '') || anyOfThem);
     const booking = {
       ...mergedBooking,
+      specialtyChoice,
       specialties: bookingSpecialties.filter((key) => key in SPECIALTY_CANON),
-      child: Boolean(classification.isChild),
+      unknownSpecialty: unknownWins ? analyses[lastUnknownIndex].unknownSpecialties[0] : null,
+      // «Не детский, а взрослый» — слово «детский» не делает приём детским.
+      child: Boolean(classification.isChild) && !mergedBooking.adult,
       medicalText: Boolean(classification.hasMedicalText),
     };
     const signals = {};

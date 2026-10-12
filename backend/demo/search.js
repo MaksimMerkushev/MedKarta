@@ -24,7 +24,7 @@
  */
 
 import { ACCESS_LABELS, coverageFor } from '../../shared/dms.js';
-import { describeRequest, EVENING_FROM, LOCALITIES, normalizeSearchRequest, UNSUPPORTED_CONDITIONS } from '../../shared/demoSearch.js';
+import { describeRequest, EVENING_FROM, LOCALITIES, normalizeSearchRequest, UNSUPPORTED_CONDITIONS, withoutDayWindow } from '../../shared/demoSearch.js';
 import { addDays, minutesOf, moscowDay, weekdayOf } from './time.js';
 import { branchLabelsOf } from './chatBridge.js';
 import { SLOT_WINDOW_DAYS } from './generator.js';
@@ -39,6 +39,7 @@ const STAGE_LABELS = Object.freeze({
   clinic: 'принимают в названной клинике',
   district: 'принимают в нужном районе',
   gender: 'врач нужного пола',
+  access: 'доступная среда / парковка',
   experience: 'со стажем не меньше указанного',
   service: 'оказывают нужную услугу',
   price: 'укладываются в цену',
@@ -55,6 +56,7 @@ const BLOCKING_TEXT = Object.freeze({
   clinic: 'в названной клинике нет демо-записи к такому врачу',
   district: 'в нужном районе таких врачей нет',
   gender: 'среди подходящих врачей нет врача нужного пола',
+  access: 'нет филиала, где точно есть доступная среда или парковка (у реальных клиник это не указано — не обещаю)',
   experience: 'ни у кого из подходящих врачей нет такого стажа',
   service: 'нужную услугу эти врачи не оказывают',
   price: 'все варианты дороже указанной цены',
@@ -69,6 +71,10 @@ const UNSUPPORTED_RELAX = Object.freeze({
   online: 'Очный приём в клинике вместо онлайн-консультации',
   rating: 'Без учёта отзывов и рейтинга',
   oms: 'Платный приём (или по ДМС) в частной клинике',
+  doctor_age: 'Без учёта возраста врача',
+  anonymous: 'Обычная (не анонимная) демо-запись',
+  multi_patient: 'Подобрать одну запись (вторую — отдельным поиском)',
+  certificate: 'Обычный приём врача (справку уточните в клинике)',
 });
 
 const RELAX_LABELS = Object.freeze({
@@ -76,6 +82,7 @@ const RELAX_LABELS = Object.freeze({
   clinic: 'в других клиниках',
   district: 'в любом районе Казани',
   gender: 'врач любого пола',
+  access: 'без требования к доступной среде и парковке',
   experience: 'без требования к стажу',
   time: 'без ограничения по времени приёма',
   date: 'в любой день ближайших двух недель',
@@ -95,7 +102,12 @@ export const resolveDays = (request, today, windowSize = SLOT_WINDOW_DAYS) => {
   if (date.kind === 'today') days = [today];
   else if (date.kind === 'tomorrow') days = [addDays(today, 1)];
   else if (date.kind === 'after_tomorrow') days = [addDays(today, 2)];
-  else if (date.kind === 'weekday') days = [window.find((day) => weekdayOf(day) === date.weekday)].filter(Boolean);
+  else if (date.kind === 'weekday') {
+    // Неделя: эта — до воскресенья включительно, следующая — с ближайшего понедельника.
+    const weekDays = date.week === 'this' ? window.slice(0, 8 - weekdayOf(today))
+      : date.week === 'next' ? window.slice(8 - weekdayOf(today), 15 - weekdayOf(today)) : window;
+    days = [weekDays.find((day) => weekdayOf(day) === date.weekday)].filter(Boolean);
+  }
   else if (date.kind === 'date') days = window.includes(date.day) ? [date.day] : [];
   else if (date.kind === 'this_week') days = window.slice(0, 8 - weekdayOf(today));
   else if (date.kind === 'next_week') days = window.slice(8 - weekdayOf(today), 15 - weekdayOf(today));
@@ -103,10 +115,14 @@ export const resolveDays = (request, today, windowSize = SLOT_WINDOW_DAYS) => {
     // «Во вторник или среду», «сегодня или завтра»: каждый вариант — ближайший такой день.
     const chosen = new Set(date.options.flatMap((option) => resolveDays({ date: option }, today, windowSize)));
     days = window.filter((day) => chosen.has(day));
+  } else if (date.kind === 'range') {
+    // «С 15 по 17 октября», «до 20 октября»: границы включительно.
+    days = window.filter((day) => (!date.from || day >= date.from) && (!date.to || day <= date.to));
   } else days = window;
   if (request.weekend || date.kind === 'weekend') days = days.filter((day) => weekdayOf(day) >= 6);
   if (request.workdays) days = days.filter((day) => weekdayOf(day) <= 5);
   if (request.excludeWeekdays?.length) days = days.filter((day) => !request.excludeWeekdays.includes(weekdayOf(day)));
+  if (request.excludeDates?.length) days = days.filter((day) => !request.excludeDates.includes(day));
   return days;
 };
 
@@ -117,6 +133,12 @@ const timeWindow = (request) => {
   const to = request.timeTo ? minutesOf(request.timeTo) : 24 * 60;
   return [from, to];
 };
+
+/** Все окна времени: одно — или несколько через «или» («с 10 до 12 или после 18»). */
+const timeWindows = (request) => (request.timeWindows?.length
+  ? request.timeWindows.map((item) => [item.from ? minutesOf(item.from) : 0, item.to ? minutesOf(item.to) : 24 * 60])
+  : [timeWindow(request)]);
+const inWindows = (windows, start) => windows.some(([from, to]) => start >= from && start < to);
 
 const serviceFor = (doctor, visit, serviceId = null) => {
   if (serviceId) return doctor.serviceIds.includes(serviceId) ? [serviceId] : [];
@@ -179,7 +201,7 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
    * оба условия сразу.
    */
   const doctorPairs = (request) => index.catalog.doctors
-    .filter((doctor) => (!request.specialty || doctor.specialtyKey === request.specialty))
+    .filter((doctor) => (request.specialty ? doctor.specialtyKey === request.specialty : request.specialtyAny.length === 0 || request.specialtyAny.includes(doctor.specialtyKey)))
     .flatMap((doctor) => doctor.branchIds.map((branchId) => ({ doctor, branchId })));
 
   /*
@@ -210,6 +232,13 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
       }));
     }
     if (request.doctorGender) candidates = stage('gender', candidates.filter(({ doctor }) => doctor.gender === request.doctorGender));
+    /* Доступная среда и парковка: только там, где это указано; у реальных клиник неизвестно — не проходят. */
+    if (request.wheelchair || request.parking) {
+      candidates = stage('access', candidates.filter(({ branchId }) => {
+        const features = index.branches.get(branchId).branch.features || {};
+        return (!request.wheelchair || features.wheelchair === true) && (!request.parking || features.parking === true);
+      }));
+    }
     if (request.minExperience) candidates = stage('experience', candidates.filter(({ doctor }) => doctor.experienceYears >= request.minExperience));
     candidates = stage('service', candidates
       .map((item) => ({ ...item, serviceIds: serviceFor(item.doctor, request.visit, request.serviceId) }))
@@ -219,18 +248,20 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
     candidates = candidates.map((item) => ({
       ...item,
       prices: Object.fromEntries(item.serviceIds.map((serviceId) => [serviceId, index.priceOf(item.branchId, serviceId)])),
+      coverage: Object.fromEntries(item.serviceIds.map((serviceId) => [serviceId, coverageOf(index, request.dms.planId, { doctor: item.doctor, branchId: item.branchId, serviceId, patient: request.patient, today })])),
     }));
     if (request.maxPrice) {
+      // «По ДМС, а если не входит — не дороже 2000»: потолок — только для платного приёма.
+      const coveredPasses = request.dms.prefer && Boolean(request.dms.planId);
       candidates = candidates
-        .map((item) => ({ ...item, serviceIds: item.serviceIds.filter((serviceId) => item.prices[serviceId] !== null && item.prices[serviceId] <= request.maxPrice) }))
+        .map((item) => ({
+          ...item,
+          serviceIds: item.serviceIds.filter((serviceId) => (coveredPasses && item.coverage[serviceId].status === 'covered')
+            || (item.prices[serviceId] !== null && item.prices[serviceId] <= request.maxPrice)),
+        }))
         .filter((item) => item.serviceIds.length > 0);
     }
     candidates = stage('price', candidates);
-
-    candidates = candidates.map((item) => ({
-      ...item,
-      coverage: Object.fromEntries(item.serviceIds.map((serviceId) => [serviceId, coverageOf(index, request.dms.planId, { doctor: item.doctor, branchId: item.branchId, serviceId, patient: request.patient, today })])),
-    }));
     if (request.dms.required) {
       candidates = candidates
         .map((item) => ({ ...item, serviceIds: item.serviceIds.filter((serviceId) => item.coverage[serviceId].status === 'covered') }))
@@ -283,7 +314,17 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
 
     /* Свободные слоты — из хранилища, в нужные дни и часы, не в прошлом. */
     const days = resolveDays(request, today);
-    const [fromMinutes, toMinutes] = timeWindow(request);
+    // «В четверг после 15:30, а в пятницу до обеда»: у дня своё окно вместо общего.
+    const dayWindows = new Map();
+    if (request.date.kind === 'any_of') {
+      for (const option of request.date.options) {
+        if (!option.from && !option.to) continue;
+        for (const day of resolveDays({ date: option }, today)) {
+          dayWindows.set(day, [...(dayWindows.get(day) || []), [option.from ? minutesOf(option.from) : 0, option.to ? minutesOf(option.to) : 24 * 60]]);
+        }
+      }
+    }
+    const windows = timeWindows(request);
     let free = new Map();
     if (candidates.length > 0 && days.length > 0) {
       free = store.freeSlots({
@@ -298,7 +339,7 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
       .map((item) => {
         const slots = (free.get(`${item.doctor.id}|${item.branchId}`) || []).filter((slot) => {
           const start = minutesOf(slot.start);
-          return daySet.has(slot.day) && start >= fromMinutes && start < toMinutes && item.serviceIds.includes(slot.serviceId) && slot.bookable;
+          return daySet.has(slot.day) && inWindows(dayWindows.get(slot.day) || windows, start) && item.serviceIds.includes(slot.serviceId) && slot.bookable;
         });
         return { ...item, slots };
       })
@@ -348,10 +389,39 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
   };
 
   const sortCandidates = (list, request) => [...list].sort((left, right) => {
+    // «По ДМС, а если никого — платно»: покрытые программой — первыми.
+    if (request.dms.prefer && request.dms.planId) {
+      const covered = (item) => Number(item.coverage[item.slots[0].serviceId]?.status === 'covered');
+      const byCoverage = covered(right) - covered(left);
+      if (byCoverage !== 0) return byCoverage;
+    }
+    // «Желательно в 18:30»: у кого есть ровно это время — первыми.
+    if (request.preferTime) {
+      const hasTime = (item) => Number(item.slots.some((slot) => slot.start === request.preferTime));
+      const byTime = hasTime(right) - hasTime(left);
+      if (byTime !== 0) return byTime;
+    }
+    // «В Советском, а если там никого — Приволжский»: названный первым район — первым.
+    if (request.preferDistricts.length > 0) {
+      const preferred = (item) => Number(request.preferDistricts.includes(index.branches.get(item.branchId).branch.district));
+      const byDistrict = preferred(right) - preferred(left);
+      if (byDistrict !== 0) return byDistrict;
+    }
     // «Желательно женщина»: такие врачи первыми, остальные остаются в списке.
     if (request.preferGender) {
       const byGender = Number(right.doctor.gender === request.preferGender) - Number(left.doctor.gender === request.preferGender);
       if (byGender !== 0) return byGender;
+    }
+    // «Лучше со стажем от 20»: у кого такой стаж — первыми.
+    if (request.preferMinExperience) {
+      const meets = (item) => Number(item.doctor.experienceYears >= request.preferMinExperience);
+      const byThreshold = meets(right) - meets(left);
+      if (byThreshold !== 0) return byThreshold;
+    }
+    // «У кого стаж побольше»: опытные первыми.
+    if (request.preferExperience) {
+      const byExperience = right.doctor.experienceYears - left.doctor.experienceYears;
+      if (byExperience !== 0) return byExperience;
     }
     if (request.travel.nearest) {
       const byTravel = (left.travel?.minutes ?? Infinity) - (right.travel?.minutes ?? Infinity);
@@ -383,7 +453,7 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
     if (errors.length > 0) {
       return { ...base, status: 'needs', needs: ['clarify'], invalid: errors, message: 'Часть условий не удалось разобрать — уточните, пожалуйста, запрос.' };
     }
-    if (!request.specialty && request.doctorIds.length === 0) {
+    if (!request.specialty && request.specialtyAny.length === 0 && request.doctorIds.length === 0) {
       return { ...base, status: 'needs', needs: ['specialty'], message: 'Уточните, к какому специалисту нужно записаться.' };
     }
     if (request.city && !LOCALITIES[request.city].covered) {
@@ -484,13 +554,13 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
       };
     }
     const [windowFrom, windowTo] = timeWindow(request);
-    if (windowFrom >= windowTo) {
+    if (!request.timeWindows.length && windowFrom >= windowTo) {
       return {
         ...base,
         status: 'needs',
         needs: ['time_conflict'],
         message: `«${request.evening && !request.timeFrom ? 'вечером' : `после ${request.timeFrom || EVENING_FROM}`}» и «до ${request.timeTo}» вместе не оставляют ни минуты. Уточните часы — выбирать за вас не буду.`,
-        relax: [{ key: 'time', label: RELAX_LABELS.time, patch: { timeFrom: null, timeTo: null, evening: false } }],
+        relax: [{ key: 'time', label: RELAX_LABELS.time, patch: { timeFrom: null, timeTo: null, timeWindows: [], evening: false } }],
       };
     }
 
@@ -543,10 +613,17 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
     if (request.branchIds.length > 0) await tryRelax('clinic', { branchIds: [] });
     if (request.districts.length > 0 || request.excludeDistricts.length > 0) await tryRelax('district', { districts: [], excludeDistricts: [] });
     if (request.doctorGender) await tryRelax('gender', { doctorGender: null });
+    if (request.wheelchair || request.parking) await tryRelax('access', { wheelchair: false, parking: false });
     if (request.minExperience) await tryRelax('experience', { minExperience: null });
-    if (request.timeFrom || request.timeTo || request.evening) await tryRelax('time', { timeFrom: null, timeTo: null, evening: false });
-    if (request.date.kind !== 'any' || request.weekend || request.workdays || request.excludeWeekdays.length > 0) {
-      await tryRelax('date', { date: { kind: 'any' }, weekend: false, workdays: false, excludeWeekdays: [] });
+    const dayWindowed = request.date.kind === 'any_of' && request.date.options.some((option) => option.from || option.to);
+    if (request.timeFrom || request.timeTo || request.evening || request.timeWindows.length > 0 || dayWindowed) {
+      await tryRelax('time', {
+        timeFrom: null, timeTo: null, timeWindows: [], evening: false,
+        ...(dayWindowed ? { date: { ...request.date, options: request.date.options.map(withoutDayWindow) } } : {}),
+      });
+    }
+    if (request.date.kind !== 'any' || request.weekend || request.workdays || request.excludeWeekdays.length > 0 || request.excludeDates.length > 0) {
+      await tryRelax('date', { date: { kind: 'any' }, weekend: false, workdays: false, excludeWeekdays: [], excludeDates: [] });
     }
     if (request.maxPrice) await tryRelax('price', { maxPrice: null });
     if (request.dms.required) await tryRelax('dms', { dms: { required: false, planId: request.dms.planId } });
@@ -557,6 +634,22 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
      * от 20 лет»): предлагаем снять сразу те, что мешают, — и называем их все.
      * Это тоже только предложение: без нажатия ничего не меняется.
      */
+    /*
+     * Сначала — по два условия («другой день и другое время»): это меньше,
+     * чем снимать всё сразу. Предлагаем не больше двух таких пар.
+     */
+    if (relax.length === 0 && tried.length > 2) {
+      for (let first = 0; first < tried.length && relax.length < 2; first += 1) {
+        for (let second = first + 1; second < tried.length && relax.length < 2; second += 1) {
+          const pair = [tried[first], tried[second]];
+          const patch = Object.assign({}, ...pair.map((item) => item.patch));
+          const attempt = await run(normalizeSearchRequest({ ...request, ...patch }).request, { at, today, travelCache });
+          if (attempt.candidates.length > 0) {
+            relax.push({ key: 'combined', label: `Снять два условия: ${pair.map((item) => RELAX_LABELS[item.key]).join(' и ')}`, count: attempt.candidates.length, patch });
+          }
+        }
+      }
+    }
     if (relax.length === 0 && tried.length > 1) {
       const patch = Object.assign({}, ...tried.map((item) => item.patch));
       const relaxed = normalizeSearchRequest({ ...request, ...patch }).request;
