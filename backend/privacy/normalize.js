@@ -372,7 +372,8 @@ export const comparisonKeys = (value, stemmer) => {
  * пользователь отвергал. Окно назад небольшое: «не» через пол-предложения
  * к триггеру уже не относится.
  */
-const NEGATION_TAIL = /(?:^|[^\p{L}])(?:не|нет|без|кроме|никаких|никакой|исключая)\s+(?:\p{L}+\s+){0,2}$/iu;
+// «Без ДМС и стаж от 10 лет»: союз «и/а/но/или» заканчивает отрицание — «стаж» уже не под «без».
+const NEGATION_TAIL = /(?:^|[^\p{L}])(?:не|нет|без|кроме|никаких|никакой|исключая)\s+(?:(?!(?:и|а|но|или|либо)\s)\p{L}+\s+){0,2}$/iu;
 
 export const isNegatedBefore = (text, index, window = 28) =>
   NEGATION_TAIL.test(String(text || '').slice(Math.max(0, index - window), index));
