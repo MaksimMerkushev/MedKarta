@@ -27,7 +27,7 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { findTrigger, isNegatedBefore, ruStem } from './normalize.js';
+import { findTrigger, fixCommonTypos, isNegatedBefore, rewriteNegatedTimeBounds, ruStem } from './normalize.js';
 import { detectEntities, detectObfuscation, ENTITY_KIND, isKinshipWord } from './detectors.js';
 import { classifySymptoms } from './symptoms.js';
 import { looksLikeSurname } from './morphology.js';
@@ -41,8 +41,8 @@ import {
 import { decideGatewayPolicy, POLICY, POLICY_VERSION } from './policies.js';
 import { FAIL_CLOSED_REASON, GATEWAY_DECISION, mintSanitizedPlannerRequest } from './models.js';
 import { SPECIALTY_CANON } from './catalog.js';
-import { combineTimeReadings, extractBookingConstraints, mergeBookingTurns } from './bookingConstraints.js';
-import { branchesOnStreet, demoRefsOf } from './demoRefs.js';
+import { combineTimeReadings, extractBookingConstraints, extractReplySignals, mergeBookingTurns } from './bookingConstraints.js';
+import { branchesOnStreet, demoRefsOf, doctorsByFirstName } from './demoRefs.js';
 import { findUnknownSpecialties } from './unknownSpecialties.js';
 import {
   checkClosedVocabulary,
@@ -57,11 +57,20 @@ const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{12,64}$/;
 /* Приём для взрослого, сказанный словами: «для меня», «а теперь маме», «мне самому». */
 const ADULT_PATIENT = /(?<!\p{L})(?:для\s+(?:меня|себя|мужа|жены|мамы|папы|бабушки|дедушки|супруг\p{L}*|взросл\p{L}*)|мне\s+сам(?:ому|ой)|а\s+(?:теперь\s+)?(?:мне|маме|папе|мужу|жене|бабушке|дедушке)|взросл\p{L}*\s+(?:при[её]м|врач\p{L}*|пациент\p{L}*))(?!\p{L})/u;
 
+/* Темы, с которыми навигатор не помогает: погода, курсы валют, анекдоты, «как дела». */
+const OFF_TOPIC = /(?<!\p{L})(?:погод\p{L}*|анекдот\p{L}*|пошути\p{L}*|шутк\p{L}*|курс\p{L}*\s+(?:доллар|евро|валют|рубл)\p{L}*|новост(?:и|ей|ям|ях)|гороскоп\p{L}*|футбол\p{L}*|хоккей\p{L}*|фильм\p{L}*|сериал\p{L}*|рецепт\p{L}*\s+(?:блюд|пирог|торт|салат|супа|борщ)\p{L}*|как\s+(?:у\s+тебя\s+)?дела|кто\s+ты|ты\s+кто|сколько\s+тебе\s+лет|расскажи\s+(?:сказку|стих)\p{L}*|напиши\s+(?:стих|песн|сочинени|код)\p{L}*)(?!\p{L})/u;
+
+/* «Сначала к терапевту, потом к стоматологу» — порядок визитов, то есть маршрут. */
+const SEQUENCE_WORDS = /(?<!\p{L})(?:сначала|потом|затем|после\s+(?:этого|него|неё|нее)|а\s+после)(?!\p{L})/u;
+/* «И ещё к стоматологу», «а потом к лору» — ещё один врач; «а лучше к дерматологу» — замена. */
+const ADDITIVE_WORDS = /(?<!\p{L})(?:ещ[её]|также|потом|затем|плюс|заодно|кроме\s+того|а\s+после)(?!\p{L})/u;
+const REPLACE_WORDS = /(?<!\p{L})(?:лучше|вместо|теперь|передумал\p{L}*|хотя\s+нет|точнее|вернее|не\s+(?:к|нужен|нужна|надо))(?!\p{L})/u;
+
 /* Сколько последних реплик пользователя держит контекст диалога. */
 const MAX_CONTEXT_TURNS = 20;
 
 /* «Давай заново», «новый запрос», «забудь всё, что я писал» — начало нового запроса. */
-const CONTEXT_RESET = /(?<!\p{L})(?:начн[её]м\s+(?:с\s+)?(?:начала|заново|сначала)|(?:давай(?:те)?|можно)\s+(?:с\s+начала|сначала|заново|по-новому)|новый\s+(?:запрос|поиск|вопрос)|забудь(?:те)?\s+(?:вс[её]|предыдущ\p{L}*|прошл\p{L}*|что\s+я\s+(?:писал|говорил|просил)\p{L}*)|сброс(?:ь|ьте|ить)?\s+(?:вс[её]|услови\p{L}*|фильтр\p{L}*|контекст)|другой\s+(?:вопрос|запрос)|с\s+чистого\s+листа)(?!\p{L})/u;
+const CONTEXT_RESET = /^[\s,.!]*(?:забудь(?:те)?|заново|сначала|с\s+начала|по\s+новой|начн[её]м\s+сначала|сброс|сбрось(?:те)?|отбой)[\s,.!]*$|(?<!\p{L})(?:начн[её]м\s+(?:с\s+)?(?:начала|заново|сначала)|(?:давай(?:те)?|можно)\s+(?:с\s+начала|сначала|заново|по-новому)|новый\s+(?:запрос|поиск|вопрос)|забудь(?:те)?\s+(?:вс[её]|предыдущ\p{L}*|прошл\p{L}*|что\s+я\s+(?:писал|говорил|просил)\p{L}*)|сброс(?:ь|ьте|ить)?\s+(?:вс[её]|услови\p{L}*|фильтр\p{L}*|контекст)|другой\s+(?:вопрос|запрос)|с\s+чистого\s+листа)(?!\p{L})/u;
 
 /*
  * Самоисправление в одной реплике: «хочу к эндокринологу. не, к
@@ -112,7 +121,8 @@ export const normalizeSessionId = (value) =>
  */
 export const extractConstraints = (text) => {
   // «Добрый вечер» — приветствие, а не «принимает вечером».
-  const lower = String(text || '').toLowerCase().replace(/(?<!\p{L})добр\p{L}*\s+(?:вечер|утр|ден|дн|ноч)\p{L}*/gu, ' ');
+  // «Нет, не после 18, а до 12» — отрицаемая граница снимается (normalize.js).
+  const lower = rewriteNegatedTimeBounds(fixCommonTypos(String(text || '').toLowerCase().replace(/(?<!\p{L})добр\p{L}*\s+(?:вечер|утр|ден|дн|ноч)\p{L}*/gu, ' ')));
   const constraints = {};
 
   /*
@@ -486,7 +496,24 @@ export const createPrivacyGateway = ({
      * реплики тогда не участвуют ни в условиях, ни в плане.
      */
     const resetAt = userMessages.findLastIndex((message) => CONTEXT_RESET.test(String(message.content || '').toLowerCase()));
-    const messages = (resetAt > 0 ? userMessages.slice(resetAt) : userMessages).slice(-MAX_CONTEXT_TURNS);
+    const recent = (resetAt > 0 ? userMessages.slice(resetAt) : userMessages).slice(-MAX_CONTEXT_TURNS);
+    /*
+     * Вопрос не по теме посреди записи («какая погода в субботу?») —
+     * не условие: его «в субботу» не должно менять день приёма. Такая
+     * реплика в разбор не идёт, ответ на неё — «это не ко мне», а прежний
+     * запрос остаётся как был.
+     */
+    const isOffTopic = (message) => {
+      const text = String(message.content || '');
+      if (!OFF_TOPIC.test(text.toLowerCase())) return false;
+      if (detectEntities(text).spans.length > 0) return false;
+      if (classifier(text).hasMedicalText) return false;
+      return analyzeTurn(text).specialties.length === 0;
+    };
+    const offTopicFlags = recent.map(isOffTopic);
+    const onTopic = recent.filter((_, index) => !offTopicFlags[index]);
+    const lastOffTopic = offTopicFlags[offTopicFlags.length - 1] === true;
+    const messages = onTopic.length > 0 ? onTopic : recent;
     const counters = new Map();
     const placeholders = [];
     const trusted = new Map();
@@ -525,6 +552,7 @@ export const createPrivacyGateway = ({
     let perTurnSpecialties = [];
     let perTurnChild = [];
     let perTurnTied = [];
+    let perTurnVariants = [];
     try {
       /*
        * Между репликами — уступка циклу событий. Разбор синхронный, и
@@ -577,6 +605,24 @@ export const createPrivacyGateway = ({
       });
       perTurnChild = perTurn.map((item) => Boolean(item.isChild));
       perTurnTied = perTurn.map((item) => item.tied || null);
+      perTurnVariants = perTurn.map((item) => item.specialties || []);
+      /*
+       * «Болит голова и живот» → «к кому записаться: гастроэнтеролог или
+       * невролог?» → «к первому» / «не знаю». Выбор из названных в вопросе
+       * профилей; «не знаю» — терапевт, которого ассистент предложил на
+       * случай сомнений. Раньше такой ответ повторял тот же вопрос.
+       */
+      for (let index = 1; index < analyses.length; index += 1) {
+        if (perTurnSpecialties[index].length > 0) continue;
+        const reply = extractReplySignals(analyses[index].message.content);
+        if (!reply.ordinal && !reply.unsure) continue;
+        const asked = perTurnSpecialties.slice(0, index).findLastIndex((keys) => keys.length > 0);
+        const tied = asked >= 0 && analyses[asked].specialties.length === 0 ? perTurnTied[asked] : null;
+        if (!Array.isArray(tied) || tied.length !== 2) continue;
+        const chosen = reply.unsure ? 'therapist' : tied[reply.ordinal - 1];
+        perTurnSpecialties[index] = [chosen];
+        analyses[index] = { ...analyses[index], specialties: [chosen], defaultedSpecialty: Boolean(reply.unsure) };
+      }
       const lastTurn = perTurn[perTurn.length - 1] || classifier('');
       /*
        * Красные флаги проверяются и по тексту БЕЗ маскировки. Маскировка
@@ -618,6 +664,38 @@ export const createPrivacyGateway = ({
     const turnConstraints = userTexts.map((text) => extractConstraints(text));
     const constraints = Object.assign({}, ...turnConstraints);
 
+    const signals = {};
+    for (const turnSignals of userTexts.map((text) => extractIntentSignals(text))) {
+      for (const [name, active] of Object.entries(turnSignals)) signals[name] = Boolean(signals[name] || active);
+    }
+    // Маршрут просили словами («маршрут», «как добраться», «сначала… потом») — иначе разговор о записи.
+    const routeIntent = Boolean(signals.route);
+    const sequence = userTexts.some((text) => SEQUENCE_WORDS.test(String(text).toLowerCase()));
+    /*
+     * Профили, о которых разговор сейчас. Поздняя реплика с профилем
+     * заменяет прежние («ЛОР» → «а лучше дерматолог», «педиатр для сына» →
+     * «а теперь мне к терапевту»), а в разговоре о маршруте добавляет
+     * следующую остановку («маршрут к терапевту» → «и ещё к стоматологу»).
+     */
+    const routeStops = [];
+    let previousSpecialties = [];
+    let currentSpecialties = [];
+    for (let index = 0; index < analyses.length; index += 1) {
+      if (perTurnSpecialties[index].length === 0) continue;
+      const named = analyses[index].specialties;
+      const own = named.length > 0 ? named : perTurnVariants[index];
+      const text = String(userTexts[index]).toLowerCase();
+      const additive = named.length > 0 && ADDITIVE_WORDS.test(text) && !REPLACE_WORDS.test(text) && currentSpecialties.length > 0;
+      previousSpecialties = additive ? currentSpecialties : [];
+      if (additive && (routeIntent || sequence)) {
+        routeStops.push(...currentSpecialties.filter((key) => !own.includes(key) && !routeStops.includes(key)));
+        currentSpecialties = [...new Set([...currentSpecialties, ...own])];
+      } else {
+        currentSpecialties = own;
+        routeStops.length = 0;
+      }
+    }
+
     /*
      * Условия записи (день, цена, город, «без ДМС»…) — отдельно от
      * ограничений для модели: наружу они не уходят ни в каком виде, их
@@ -635,7 +713,7 @@ export const createPrivacyGateway = ({
     const unknownWins = lastUnknownIndex >= 0 && lastUnknownIndex >= lastSpecialtyIndex;
     const unknownOnly = unknownWins && analyses[lastUnknownIndex].specialties.length === 0;
     const lastSpecialties = unknownOnly ? [] : perTurnSpecialties[lastSpecialtyIndex] || [];
-    const turnBookings = userTexts.map((text, index) => ({ ...extractBookingConstraints(text), ...demoRefsOf(analyses[index]) }));
+    const turnBookings = userTexts.map((text, index) => ({ ...extractBookingConstraints(text), ...demoRefsOf(analyses[index]), reply: extractReplySignals(text) }));
     /*
      * «В Разумед на Пушкина» → «а на Ленинградской?»: улица без названия
      * клиники — другой филиал той же клиники (слово улицы справочник клиник
@@ -648,6 +726,17 @@ export const createPrivacyGateway = ({
       const onStreet = branchesOnStreet(earlier.clinicBranches, userTexts[index]);
       if (onStreet.length > 0 && onStreet.length < earlier.clinicBranches.length) turnBookings[index] = { ...turnBookings[index], branchIds: onStreet };
     }
+    /*
+     * «К Ефимова» → «нашёл двоих, уточните» → «Тимуру»: имя без фамилии
+     * выбирает одного из однофамильцев, названных раньше.
+     */
+    for (let index = 1; index < turnBookings.length; index += 1) {
+      if (turnBookings[index].doctorIds?.length || turnBookings[index].excludeDoctorIds?.length) continue;
+      const earlier = turnBookings.slice(0, index).reverse().find((item) => item.doctorIds?.length);
+      if (!earlier || earlier.doctorIds.length < 2) continue;
+      const named = doctorsByFirstName(earlier.doctorIds, userTexts[index]);
+      if (named.length > 0 && named.length < earlier.doctorIds.length) turnBookings[index] = { ...turnBookings[index], doctorIds: named };
+    }
     const mergedBooking = mergeBookingTurns(turnBookings.map((booking, index) => ({ booking, constraints: turnConstraints[index] })));
     // «Подбор очков» без слова «офтальмолог»: профиль однозначно задан процедурой.
     /*
@@ -658,9 +747,11 @@ export const createPrivacyGateway = ({
     const lastDoctorIndex = turnBookings.findLastIndex((item) => item.doctorIds?.length > 0);
     const doctorAfterSpecialty = lastDoctorIndex >= 0 && lastDoctorIndex > lastSpecialtyIndex;
     const bookingSpecialties = doctorAfterSpecialty ? []
-      : lastSpecialties.length > 0 || unknownOnly
-        ? lastSpecialties
-        : mergedBooking.procedureSpecialty ? [mergedBooking.procedureSpecialty] : [];
+      // Маршрут из нескольких реплик — несколько врачей, а не запись к одному.
+      : routeStops.length > 0 ? currentSpecialties
+        : lastSpecialties.length > 0 || unknownOnly
+          ? lastSpecialties
+          : mergedBooking.procedureSpecialty ? [mergedBooking.procedureSpecialty] : [];
     /*
      * «Невролог или терапевт» — выбор из двух профилей для одной записи, а
      * не маршрут по двум врачам («ЛОР и стоматолог»). Определяется по
@@ -685,6 +776,10 @@ export const createPrivacyGateway = ({
       unknownSpecialty: unknownWins ? analyses[lastUnknownIndex].unknownSpecialties[0] : null,
       // Профиль назван словами («ЛОР»), а не выведен из жалобы — по нему можно искать без уточнений.
       explicitSpecialty: lastSpecialtyIndex >= 0 && analyses[lastSpecialtyIndex].specialties.length > 0,
+      // «Не знаю» на вопрос «к кому записаться?» — терапевт, которого ассистент предложил сам.
+      specialtyDefaulted: lastSpecialtyIndex >= 0 && Boolean(analyses[lastSpecialtyIndex].defaultedSpecialty),
+      // Признаки ответа последней реплики («не знаю», «да») — для текста ответа.
+      lastReply: turnBookings[turnBookings.length - 1]?.reply || {},
       // Жалоба указывает на два разных профиля поровну — ассистент спросит, к кому.
       specialtyQuestion: lastSpecialtyIndex >= 0 && analyses[lastSpecialtyIndex].specialties.length === 0 && !doctorAfterSpecialty
         ? perTurnTied[lastSpecialtyIndex] : null,
@@ -700,11 +795,11 @@ export const createPrivacyGateway = ({
         return lastSaid === 'child';
       })(),
       medicalText: Boolean(classification.hasMedicalText),
+      routeIntent,
+      sequence,
+      // «ЛОР завтра» → «и ещё мне нужен кардиолог»: прежний подбор остаётся в прошлом ответе.
+      previousSpecialties: routeStops.length > 0 ? [] : previousSpecialties.filter((key) => !bookingSpecialties.includes(key)),
     };
-    const signals = {};
-    for (const turnSignals of userTexts.map((text) => extractIntentSignals(text))) {
-      for (const [name, active] of Object.entries(turnSignals)) signals[name] = Boolean(signals[name] || active);
-    }
 
     const catalogSpecialties = new Set();
     const catalogDistricts = new Set();
@@ -803,7 +898,16 @@ export const createPrivacyGateway = ({
      * её сохранить. Восстанавливаем по позициям в уже отредактированном
      * тексте: работать с исходным здесь было бы незачем и небезопасно.
      */
-    const outline = buildOutline(lastRedacted, placeholders, locationTokens, analyses);
+    const lastOutline = buildOutline(lastRedacted, placeholders, locationTokens, analyses);
+    // Остановки из прежних реплик маршрута — впереди: «маршрут к терапевту» → «и ещё к стоматологу».
+    const lastText = String(userTexts[userTexts.length - 1] || '').toLowerCase();
+    const continuesRoute = (routeIntent || sequence) && (routeStops.length > 0 || (ADDITIVE_WORDS.test(lastText) && !REPLACE_WORDS.test(lastText)));
+    const outline = [
+      ...(continuesRoute ? currentSpecialties : [])
+        .filter((key) => !lastOutline.some((item) => item.kind === 'SPECIALTY' && item.specialty === key))
+        .map((specialty) => ({ kind: 'SPECIALTY', specialty })),
+      ...lastOutline,
+    ];
     const allEntities = analyses.flatMap((analysis) => analysis.entities);
     const streetWords = new Set(
       analyses.flatMap((analysis) => analysis.streets.flatMap((street) => street.split(/\s+/u))),
@@ -825,11 +929,17 @@ export const createPrivacyGateway = ({
       .replace(/@[A-Z][A-Z0-9_]*/g, (token) => (contentTokens.has(token) ? 'xxxxxxxx' : ''))
       .trim().length;
 
+    /*
+     * Профили для модели и локального плана — те, о которых разговор сейчас.
+     * Раньше это были профили всех реплик: после «педиатр для сына» → «а
+     * теперь мне к терапевту» модель видела «pediatrician, therapist» и
+     * строила маршрут через обоих.
+     */
+    const currentKnown = unknownOnly || doctorAfterSpecialty ? [] : currentSpecialties;
     const specialties = [
-      ...new Set([
-        ...catalogSpecialties,
-        ...(classification.specialties || []),
-      ]),
+      ...new Set(lastSpecialtyIndex >= 0 || unknownOnly || doctorAfterSpecialty
+        ? currentKnown
+        : [...catalogSpecialties, ...(classification.specialties || [])]),
     ].filter((key) => key in SPECIALTY_CANON);
 
     /*
@@ -886,6 +996,9 @@ export const createPrivacyGateway = ({
     const context = {
       sessionId: session,
       requestId,
+      // Последняя реплика — не по теме: ответ «это не ко мне», условия — из прежних реплик.
+      offTopic: lastOffTopic,
+      offTopicOnly: lastOffTopic && onTopic.length === 0,
       trusted,
       placeholders,
       locationTokens,
@@ -941,7 +1054,7 @@ export const createPrivacyGateway = ({
               tokens: issuedTokens,
               constraints,
               signals,
-              isChild: classification.isChild,
+              isChild: booking.child,
               places,
               outline,
               defaultProfile: classification.hasMedicalText,
@@ -961,7 +1074,7 @@ export const createPrivacyGateway = ({
         specialties,
         districts: context.districts,
         constraints,
-        isChild: Boolean(classification.isChild),
+        isChild: Boolean(booking.child),
         medicalTextWithheld: Boolean(classification.hasMedicalText),
         textWithheld: !vocabulary.ok && !classification.hasMedicalText,
       },

@@ -53,14 +53,26 @@ export class AiError extends Error {
  * истории они занимали: раньше из 12 сообщений реплик пользователя было
  * только 6, и седьмая уже «не помнила» первую.
  */
-const packMessages = (chatMessages) =>
-  (Array.isArray(chatMessages) ? chatMessages : [])
+/*
+ * Тело запроса ограничено (LIMITS.MAX_BODY_BYTES), а кириллица — два байта
+ * на символ: двадцать длинных реплик не помещались, сервер отвечал 413 — и
+ * так на каждую следующую реплику, пока чат не начнут заново. Самые старые
+ * реплики отбрасываются, пока история не уложится; последняя остаётся всегда.
+ */
+const HISTORY_BUDGET_BYTES = LIMITS.MAX_BODY_BYTES - 2048;
+const byteLength = (text) => new TextEncoder().encode(text).length;
+
+export const packMessages = (chatMessages) => {
+  const turns = (Array.isArray(chatMessages) ? chatMessages : [])
     .filter((message) => message && message.role === 'user' && typeof message.content === 'string')
     .slice(-LIMITS.MAX_USER_TURNS)
     .map((message) => ({
       role: 'user',
       content: message.content.slice(0, LIMITS.MAX_MESSAGE_CHARS),
     }));
+  while (turns.length > 1 && byteLength(JSON.stringify(turns)) > HISTORY_BUDGET_BYTES) turns.shift();
+  return turns;
+};
 
 export const analyzeSymptoms = async (chatMessages, { signal } = {}) => {
   const messages = packMessages(chatMessages);

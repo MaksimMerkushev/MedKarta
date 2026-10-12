@@ -36,6 +36,8 @@ const GENDER = [['врач-женщина', ['female', null]], ['чтобы вр
 const DISTRICT = [['в Вахитовском районе', [['Вахитовский'], []]], ['не в Советском районе', [[], ['Советский']]], ['в Приволжском или Советском районе', [['Приволжский', 'Советский'], []]], ['', [[], []]]];
 const EXPERIENCE = [['стаж от 10 лет', 10], ['с опытом не меньше 20 лет', 20], ['', null]];
 const JOIN = [', ', ' и ', '; ', ', а ещё '];
+/* Реплики, которые не меняют условий: благодарность, вопрос о найденном, вопрос не по теме. */
+const NOISE = ['спасибо', 'понятно', 'а сколько стоит?', 'а где это?', 'какая погода?', 'как записаться?', 'ок', 'расскажи анекдот'];
 const LEAD = ['', 'а ', 'и ', 'ещё ', 'да, и ', 'кстати, '];
 
 /** Воспроизводимый генератор: одно и то же зерно — те же запросы. */
@@ -82,15 +84,18 @@ const run = async (turns) => {
 };
 
 describe('Генеративная проверка разбора: ни одно условие не теряется и не забывается', () => {
-  for (const mode of ['одной фразой', 'диалогом — условие на реплику']) {
+  for (const mode of ['одной фразой', 'диалогом — условие на реплику', 'диалогом с посторонними репликами']) {
     it(`${mode}: 60 случайных сочетаний`, async () => {
-      const { random, pick } = generator(mode === 'одной фразой' ? 7 : 9);
+      const { random, pick } = generator({ 'одной фразой': 7, 'диалогом — условие на реплику': 9 }[mode] || 11);
       for (let count = 0; count < 60; count += 1) {
         const parts = [pick(SPEC), pick(DATE), pick(TIME), pick(PRICE), pick(DMS), pick(GENDER), pick(DISTRICT), pick(EXPERIENCE)];
         const phrases = parts.slice(1).map((part) => part[0]).filter(Boolean).sort(() => random() - 0.5);
         const turns = mode === 'одной фразой'
           ? [[parts[0][0], ...phrases].reduce((text, phrase, position) => (position === 0 ? phrase : text + pick(JOIN) + phrase), '')]
-          : [parts[0][0], ...phrases.map((phrase) => pick(LEAD) + phrase)];
+          : mode === 'диалогом — условие на реплику'
+            ? [parts[0][0], ...phrases.map((phrase) => pick(LEAD) + phrase)]
+            // Между условиями — «спасибо», «а где это?», «какая погода?»: контекст не теряется и не меняется.
+            : [parts[0][0], ...phrases.flatMap((phrase) => [pick(LEAD) + phrase, ...(random() < 0.6 ? [pick(NOISE)] : [])])].slice(0, 20);
         const action = await run(turns);
         assert.ok(action.booking, `${turns.join(' → ')}: нет подбора — ${action.replyText}`);
         expectMatches(action.booking.request, parts.map((part) => part[1]), turns.join(' → '));

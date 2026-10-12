@@ -48,7 +48,8 @@ const surnameFits = (doctorId, words, grammaticalCase = null) => {
  */
 const firstNameFits = (doctorId, words) => {
   const first = doctorId.slice(DEMO_DOCTOR.length).split('-')[1] || '';
-  const stem = first.length > 4 ? first.slice(0, -1) : first;
+  // «Марии» — «marii», а id — «mariya»: падежное окончание срезается вместе с последней буквой основы.
+  const stem = first.length > 5 ? first.slice(0, -2) : first.length > 4 ? first.slice(0, -1) : first;
   return stem.length >= 3 && words.some((word) => word.startsWith(stem));
 };
 
@@ -158,4 +159,17 @@ export const branchesOnStreet = (clinicBranches, content) => {
   const words = String(content || '').toLowerCase().replace(/ё/g, 'е').split(/[^\p{L}-]+/u).filter(Boolean).map(slug);
   const clinicIds = [...new Set(clinicBranches.map((id) => id.replace(/-[a-z0-9]+$/, '')))];
   return clinicBranches.filter((id) => branchFits(id, clinicIds, words));
+};
+
+/**
+ * «К Ефимова» → «Тимуру»: однофамильцы, названные раньше, у которых имя
+ * совпадает со словом реплики.
+ *
+ * @param {string[]} doctorIds демо-врачи, названные раньше
+ * @param {string} content реплика
+ * @returns {string[]} врачи с этим именем (или пусто)
+ */
+export const doctorsByFirstName = (doctorIds, content) => {
+  const words = String(content || '').toLowerCase().replace(/ё/g, 'е').split(/[^\p{L}-]+/u).filter(Boolean).map(slug);
+  return doctorIds.filter((id) => id.startsWith(DEMO_DOCTOR) && firstNameFits(id, words));
 };

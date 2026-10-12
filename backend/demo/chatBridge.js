@@ -157,7 +157,16 @@ export const buildBookingRequest = ({ booking, execution, now, index = null }) =
    * врачу, а планировщик увидел клинику и врача и построил маршрут.
    */
   const intentRoute = singleDoctorRoute && Boolean(booking.bookingIntent);
-  const routeAsBooking = fromPlace || clinicChoice || specialtyChoiceRoute || exclusionRoute || intentRoute;
+  /*
+   * Разговор о записи к одному врачу, а планировщик (модель) построил
+   * маршрут: по профилям из прежних реплик («болит голова и живот» → «к
+   * неврологу»), по клинике и профилю («в Айболит на Максимова к лору»).
+   * Если маршрута не просили («маршрут», «как добраться», «сначала… потом»),
+   * это запись к одному врачу.
+   */
+  const unaskedRoute = action === 'BUILD_ROUTE' && booking.specialties.length === 1 && booking.doctorIds.length === 0
+    && !booking.routeIntent && !booking.sequence;
+  const routeAsBooking = fromPlace || clinicChoice || specialtyChoiceRoute || exclusionRoute || intentRoute || unaskedRoute;
   if (!BOOKING_ACTIONS.has(action) && !clarifying && !procedure && !atClinic && !routeAsBooking) return null;
 
   // Несколько профилей через «и» — маршрут по нескольким врачам; через «или» — выбор для одной записи.
@@ -174,14 +183,26 @@ export const buildBookingRequest = ({ booking, execution, now, index = null }) =
   const askSpecialty = Array.isArray(booking.specialtyQuestion) && booking.specialtyQuestion.length === 2;
   if (askSpecialty) booking = { ...booking, specialties: [] };
 
+  const specialty = choice ? null : booking.specialties[0] || null;
   /*
    * Врачи — только из разбора текста (все однофамильцы подходящей формы,
    * «но не Ефимов» — исключение), а не из выбора модели: модель могла
    * поставить в план и врача, которого пользователь исключил.
+   *
+   * Однофамильцы и названный потом профиль или пол: «к Ефимова» → «к лору»
+   * — это Ефимов-ЛОР. Подбор отсёк бы и так, но ответ называл обоих и
+   * просил уточнить то, что уже уточнено.
    */
-  const doctorIds = booking.doctorIds;
-
-  const specialty = choice ? null : booking.specialties[0] || null;
+  let doctorIds = booking.doctorIds;
+  if (index && doctorIds.length > 1) {
+    const fits = doctorIds.filter((id) => {
+      const doctor = index.doctors.get(id);
+      return doctor && (!specialty || doctor.specialtyKey === specialty)
+        && (!choice || booking.specialties.includes(doctor.specialtyKey))
+        && (!booking.doctorGender || doctor.gender === booking.doctorGender);
+    });
+    if (fits.length > 0) doctorIds = fits;
+  }
   const today = moscowDay(now);
   /* «В ближайший час / 2 часа»: сегодня, от текущего времени (по Москве). */
   let windowFrom = booking.timeFrom;
@@ -221,6 +242,11 @@ export const buildBookingRequest = ({ booking, execution, now, index = null }) =
     const todayWeekday = weekdayOfDay(today);
     if (!(date.weekday > todayWeekday)) date = { kind: 'weekday', weekday: date.weekday, week: 'next' };
   }
+  /*
+   * «В понедельник», сказанное в понедельник: сегодня или через неделю?
+   * Раньше молча выбирался сегодняшний день — часто уже без свободного времени.
+   */
+  if (date.kind === 'weekday' && !date.week && date.weekday === weekdayOfDay(today)) date = { kind: 'weekday', weekday: date.weekday, week: 'next', askWeek: true };
 
   const { request: normalized } = normalizeSearchRequest({
     specialty,
@@ -270,6 +296,7 @@ export const buildBookingRequest = ({ booking, execution, now, index = null }) =
   });
   return {
     request: normalized,
+    today,
     ...refLabels(index, normalized),
     planName: index?.plans.get(normalized.dms.planId)?.name || null,
     // Маршрут «ЛОР → дом» или «Ситидок → Разумед», который составил планировщик, — не то, о чём просили.
@@ -284,9 +311,13 @@ export const summarizeBooking = ({ request, doctorLabels = [], branchLabels = []
   describeRequest(request, { specialtyLabel: (key) => SPECIALTY_CANON[key] || key, doctorLabels, branchLabels, excludedDoctorLabels, excludedBranchLabels, planName });
 
 /** Текст ассистента для режима записи: что понято и что будет проверено. */
-export const bookingReplyText = ({ request, booking, ...labels }) => {
+export const bookingReplyText = ({ request, booking, today = null, ...labels }) => {
   const parts = [];
   const summary = summarizeBooking({ request, ...labels });
+  // «Не знаю» на «к кому записаться?» — терапевт, которого ассистент предложил сам.
+  if (booking?.specialtyDefaulted && request.specialty === 'therapist') {
+    parts.push('Тогда начнём с терапевта: он посмотрит всё вместе и при необходимости направит к узкому специалисту.');
+  }
   const locality = request.city ? LOCALITIES[request.city] : null;
   if (locality && !locality.covered) {
     // Город вне покрытия: не обещаем «подбор ниже» — сразу говорим как есть.
@@ -297,15 +328,21 @@ export const bookingReplyText = ({ request, booking, ...labels }) => {
     parts.push(`По описанию подходят разные врачи — ${first.toLowerCase()} или ${second.toLowerCase()}. К кому записаться? Если не уверены, можно начать с терапевта: он посмотрит всё вместе. Гадать за вас не буду.`);
     if (summary.length > 0) parts.push(`Условия, которые я учту: ${summary.join(', ')}.`);
   } else if (!request.specialty && request.specialtyAny.length === 0 && request.doctorIds.length === 0) {
-    parts.push('Подберу врача и свободное время. Подскажите, какой специалист нужен?');
+    parts.push(booking?.lastReply?.unsure
+      ? 'Если не знаете, к какому врачу, опишите, что беспокоит, — подскажу профиль. Или начните с терапевта: напишите «к терапевту».'
+      : 'Подберу врача и свободное время. Подскажите, какой специалист нужен?');
     if (summary.length > 0) parts.push(`Условия, которые я учту: ${summary.join(', ')}.`);
-  } else if (blockingNote(request)) {
+  } else if (blockingNote(request, today)) {
     // Условие, которое не проверить, или противоречие: не обещаем «подбор ниже» — говорим, что мешает.
     parts.push(`Понял запрос: ${summary.join(', ').replace(/\.$/u, '')}.`);
-    parts.push(blockingNote(request));
+    parts.push(blockingNote(request, today));
   } else {
     parts.push(`Ищу свободное время: ${summary.join(', ').replace(/\.$/u, '')}.`);
     parts.push('Показываю только варианты, которые подходят под все условия, — подбор ниже. Условия без вашего согласия не ослабляю.');
+    // Программа ДМС не названа: подбор спросит её (если она не выбрана в интерфейсе), ответить можно и словами.
+    if (request.dms.required && !request.dms.planId) {
+      parts.push('Если программа ДМС ещё не выбрана, напишите её название — Basic, Standard или Premium — или выберите ниже: без программы нельзя утверждать, что приём покрывается страховкой.');
+    }
   }
   // Однофамильцы («к Ефимову(ой)»): показываем всех и спрашиваем, к кому именно.
   if (booking?.pickOption) {
@@ -319,6 +356,11 @@ export const bookingReplyText = ({ request, booking, ...labels }) => {
   const namesakes = [...bySurname.values()].find((group) => group.length > 1);
   if (namesakes) {
     parts.push(`Нашёл нескольких врачей с такой фамилией: ${namesakes.join('; ')}. Показываю всех — если нужен один, уточните имя или профиль.`);
+  }
+  // «ЛОР завтра» → «и ещё мне нужен кардиолог»: подбор к ЛОРу не пропал — он в прошлом ответе.
+  const previous = (booking?.previousSpecialties || []).filter((key) => key !== request.specialty && SPECIALTY_CANON[key]);
+  if (previous.length > 0) {
+    parts.push(`Подбор к врачу «${previous.map((key) => SPECIALTY_CANON[key]).join('», «')}» остался в прошлом ответе выше — можно записаться к обоим по очереди.`);
   }
   if (booking?.medicalText && request.specialty) {
     parts.push('Профиль врача подобран по описанию — это не диагноз.');
@@ -334,8 +376,10 @@ const weekdayOfDay = (day) => {
   return value === 0 ? 7 : value;
 };
 
+const NEXT_WEEKDAY = ['', 'в следующий понедельник', 'в следующий вторник', 'в следующую среду', 'в следующий четверг', 'в следующую пятницу', 'в следующую субботу', 'в следующее воскресенье'];
+
 /** Что мешает подбору ещё до поиска: условие, которого в демо нет, или противоречие. */
-const blockingNote = (request) => {
+const blockingNote = (request, today = null) => {
   if (request.unsupported.length > 0) {
     const names = request.unsupported.map((key) => UNSUPPORTED_CONDITIONS[key]).join(', ');
     return `${names[0].toUpperCase()}${names.slice(1)} — этого в демо нет, проверить не могу. Ниже — что могу предложить вместо, и только с вашего согласия.`;
@@ -344,6 +388,9 @@ const blockingNote = (request) => {
   if (request.timeChoice?.length === 2) {
     const [morning, evening] = request.timeChoice.map(describeTimeWindow);
     return `Уточните, пожалуйста: ${morning} (утра) или ${evening} (вечера)? Ответьте «утра» или «вечера» — или нажмите кнопку ниже. Выбирать за вас не буду.`;
+  }
+  if (request.date.kind === 'weekday' && request.date.askWeek && today && weekdayOfDay(today) === request.date.weekday) {
+    return `Уточните, пожалуйста: сегодня или ${NEXT_WEEKDAY[request.date.weekday]}, через неделю? Ответьте «сегодня» или «через неделю» — или нажмите кнопку ниже.`;
   }
   if (request.date.kind === 'weekday' && request.date.askWeek) {
     return 'Уточните, пожалуйста: ближайший такой день (на этой неделе) или через неделю? Ответьте «ближайшую» или «через неделю» — или нажмите кнопку ниже.';

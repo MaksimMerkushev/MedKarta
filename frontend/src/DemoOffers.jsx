@@ -168,6 +168,7 @@ export default function DemoOffers({
   onBook,
   onFocus,
   onRequestOrigin,
+  onAnswer = null,
 }) {
   const sectionRef = useRef(null);
   const [patch, setPatch] = useState({});
@@ -201,16 +202,33 @@ export default function DemoOffers({
     if (autoScroll && state.status === 'ready') sectionRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
   }, [autoScroll, state.status]);
 
+  // Ответ на вопрос подбора: в чат (и в историю диалога), а без чата — только в этом блоке.
+  const answer = (text, patchValue) => (onAnswer ? onAnswer(text) : setPatch((current) => ({ ...current, ...patchValue })));
+
   useEffect(() => {
     // Точку переставили после вопроса «откуда поедете» — это подтверждённое место отправления.
     if (awaitingPoint !== null && originSignature !== awaitingPoint && effectiveOrigin) {
       setAwaitingPoint(null);
-      setPatch((current) => ({ ...current, originConfirmed: true }));
+      // Точка поставлена в ответ на вопрос — это ответ и для истории диалога.
+      answer('считай от моей точки на карте', { originConfirmed: true });
     }
+    // answer — новая функция на каждый рендер; условие выше срабатывает один раз.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [awaitingPoint, originSignature, effectiveOrigin]);
 
   const result = state.result;
-  const accept = (item) => setPatch((current) => ({ ...current, ...item.patch, ...(item.patch?.travel ? { travel: { ...(current.travel || {}), ...item.patch.travel } } : {}) }));
+  /*
+   * Согласие кнопкой — та же реплика, что и словами («в любой день»,
+   * «вечера»): она уходит в чат и остаётся в истории диалога. Без чата
+   * (или пока ассистент отвечает) — уступка только в этом блоке.
+   */
+  const accept = (item) => {
+    if (onAnswer && item.say) {
+      onAnswer(item.say);
+      return;
+    }
+    setPatch((current) => ({ ...current, ...item.patch, ...(item.patch?.travel ? { travel: { ...(current.travel || {}), ...item.patch.travel } } : {}) }));
+  };
   const applied = result?.applied?.length ? result.applied : booking.summary;
 
   return (
@@ -266,7 +284,7 @@ export default function DemoOffers({
             {result.status === 'needs' && result.needs?.includes('specialty') && (
               <div className="mt-1 flex flex-wrap gap-1 px-1">
                 {SPECIALTY_CHOICES.map(([key, label]) => (
-                  <button key={key} type="button" onClick={() => setPatch((current) => ({ ...current, specialty: key }))} className="rounded-lg border border-violet-200 px-2 py-0.5 text-[11.5px] font-medium text-violet-700 hover:bg-violet-50 dark:border-violet-700 dark:text-violet-200 dark:hover:bg-slate-700">
+                  <button key={key} type="button" onClick={() => answer(label, { specialty: key })} className="rounded-lg border border-violet-200 px-2 py-0.5 text-[11.5px] font-medium text-violet-700 hover:bg-violet-50 dark:border-violet-700 dark:text-violet-200 dark:hover:bg-slate-700">
                     {label}
                   </button>
                 ))}
@@ -295,7 +313,7 @@ export default function DemoOffers({
                 <button type="button" onClick={() => onRequestOrigin?.()} className="inline-flex items-center gap-1 rounded-lg bg-violet-600 px-2.5 py-1 text-[11.5px] font-semibold text-white hover:bg-violet-700">
                   <LocateFixed size={12} aria-hidden="true" /> Указать точку на карте
                 </button>
-                <RelaxButtons relax={[{ key: 'travel', label: 'Искать без учёта времени в пути', patch: { travel: { maxMinutes: null, nearest: false } } }]} onRelax={accept} />
+                <RelaxButtons relax={[{ key: 'travel', label: 'Искать без учёта времени в пути', say: 'неважно сколько ехать', patch: { travel: { maxMinutes: null, nearest: false } } }]} onRelax={accept} />
               </div>
             )}
 
@@ -303,7 +321,7 @@ export default function DemoOffers({
               <div className="mt-1 px-1" data-testid="demo-origin-place">
                 <div className="flex flex-wrap gap-1">
                   {effectiveOrigin && (
-                    <button type="button" onClick={() => setPatch((current) => ({ ...current, originConfirmed: true }))} className="inline-flex items-center gap-1 rounded-lg border border-violet-200 px-2.5 py-1 text-[11.5px] font-semibold text-violet-700 hover:bg-violet-50 dark:border-violet-700 dark:text-violet-200 dark:hover:bg-slate-700" data-testid="demo-origin-here">
+                    <button type="button" onClick={() => answer('я сейчас там', { originConfirmed: true })} className="inline-flex items-center gap-1 rounded-lg border border-violet-200 px-2.5 py-1 text-[11.5px] font-semibold text-violet-700 hover:bg-violet-50 dark:border-violet-700 dark:text-violet-200 dark:hover:bg-slate-700" data-testid="demo-origin-here">
                       <MapPin size={12} aria-hidden="true" /> Я сейчас там — считать от моей точки
                     </button>
                   )}

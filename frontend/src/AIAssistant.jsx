@@ -135,13 +135,19 @@ export default function AIAssistant({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [isOpen, handleClose]);
 
-  const handleSend = useCallback(async () => {
-    const userText = inputValue.trim().slice(0, LIMITS.MAX_MESSAGE_CHARS);
+  /*
+   * Реплика пользователя — набранная или ответ кнопкой под подбором
+   * («вечера», «в любой день»). Кнопка тоже пишет в историю: иначе выбор
+   * жил только в одном блоке подбора, и следующая реплика («а в пятницу?»)
+   * снова спрашивала «утра или вечера?» или возвращала снятое условие.
+   */
+  const sendText = useCallback(async (text, { fromInput = false } = {}) => {
+    const userText = String(text || '').trim().slice(0, LIMITS.MAX_MESSAGE_CHARS);
     if (!userText || isLoading) {
       return;
     }
 
-    setInputValue('');
+    if (fromInput) setInputValue('');
     const nextMessages = [...messages, { id: bumpId(nextIdRef), role: 'user', content: userText }];
     setMessages(nextMessages);
     setIsLoading(true);
@@ -169,7 +175,9 @@ export default function AIAssistant({
         setIsLoading(false);
       }
     }
-  }, [inputValue, isLoading, messages, onApplyTriage]);
+  }, [isLoading, messages, onApplyTriage]);
+
+  const handleSend = useCallback(() => sendText(inputValue, { fromInput: true }), [sendText, inputValue]);
 
   if (!isOpen) {
     return null;
@@ -205,6 +213,7 @@ export default function AIAssistant({
               onBook={onBookOption}
               onFocus={(option) => onFocusPick?.({ lat: option.clinic.lat, lng: option.clinic.lng })}
               onRequestOrigin={onRequestOrigin}
+              onAnswer={isLoading ? null : sendText}
             />
           )}
           {msg.role === 'assistant' && !bookings?.[msg.id] && picks?.[msg.id] && (

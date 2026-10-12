@@ -39,6 +39,12 @@ import { publicClinicsHidden } from './demo/flags.js';
 import { logger as defaultLogger } from './observability/safeLogger.js';
 import { metrics as defaultMetrics } from './observability/metrics.js';
 
+/* Вопросы о найденном варианте посреди записи. */
+const QUESTION_PRICE = /(?<!\p{L})(?:сколько\s+(?:это\s+)?(?:стоит|стоить|будет\s+стоить)|какая\s+цена|почём|почем|стоимость|цена\s+при[её]ма)(?!\p{L})/u;
+const QUESTION_WHERE = /(?<!\p{L})(?:где\s+(?:это|находится|она|он|клиника|принимает)|какой\s+адрес|адрес\s+клиники)(?!\p{L})/u;
+const QUESTION_HOW = /(?<!\p{L})(?:как\s+(?:мне\s+)?(?:записаться|оформить)|что\s+дальше|а\s+дальше\s+что|что\s+нажать)(?!\p{L})/u;
+const DOCTOR_WORDS = /(?<!\p{L})(?:врач\p{L}*|доктор\p{L}*|специалист\p{L}*|запис\p{L}*|запиш\p{L}*)(?!\p{L})/u;
+
 /**
  * @param {object} deps все зависимости инъектируются: это то, что позволяет
  *   тестам подставить фикстуру справочника и фальшивый планировщик, не трогая
@@ -304,7 +310,34 @@ export const createPipeline = ({
        */
       const lastUserText = [...(messages || [])].reverse().find((message) => message?.role === 'user')?.content || '';
       const closing = String(lastUserText).toLowerCase().trim();
-      if (THANKS_ONLY.test(closing)) {
+
+      /*
+       * Вопрос не по теме посреди записи: честное «это не ко мне», а прежний
+       * запрос — как был (его условия gateway собрал без этой реплики).
+       */
+      if (gate.context.offTopic) {
+        // Не по теме с самого начала — и подбора нет: условий не было.
+        if (gate.context.offTopicOnly) {
+          delete action.booking;
+          action.buildRoute = false;
+          action.targetStops = [];
+        }
+        const kept = action.booking?.summary?.length ? ` Прежний запрос помню: ${action.booking.summary.join(', ')} — можно продолжать.` : '';
+        action.replyText = `С этим не подскажу: я помогаю найти врача, записаться и построить маршрут по Казани.${kept}`;
+      } else if (action.booking) {
+        /* Вопросы о найденном: цена, адрес, как записаться — ответ про подбор ниже, а не повтор «ищу». */
+        const answers = [
+          [QUESTION_PRICE, 'Цена приёма указана в каждом варианте ниже. Ограничить можно словами — например, «до 3000 ₽».'],
+          [QUESTION_WHERE, 'Адрес — в карточке варианта: «На карте» покажет клинику, «В маршрут» построит путь.'],
+          [QUESTION_HOW, 'Выберите время в варианте ниже и нажмите «Записаться» — запись подтверждаете вы.'],
+        ].filter(([pattern]) => pattern.test(closing)).map(([, text]) => text);
+        if (answers.length > 0) action.replyText = `${answers.join(' ')} ${action.replyText}`;
+      } else if (execution.action === 'CLARIFY' && (!gate.reason || gate.reason === 'nothing_to_plan') && !(gate.context.specialties || []).length && DOCTOR_WORDS.test(closing)) {
+        // «Хочу к врачу» без профиля — вопрос, а не общая справка.
+        action.replyText = 'К какому врачу записать? Назовите специалиста — например, «к терапевту», — или опишите, что беспокоит: подскажу профиль. Диагнозов не ставлю.';
+      }
+      // «Ок» в ответ на «искать без этого?» — согласие, а не прощание: ответ — новый подбор.
+      if (THANKS_ONLY.test(closing) && !gate.context.booking?.answered) {
         action.replyText = `${/спасиб|спс|благодар|thanks/u.test(closing) ? 'Пожалуйста!' : 'Хорошо.'} Если нужно что-то поменять — день, время, цену или врача, — просто напишите: прежние условия я помню.`;
       }
 

@@ -91,6 +91,27 @@ const RELAX_LABELS = Object.freeze({
   travel: 'без ограничения по времени в пути',
 });
 
+/*
+ * Та же уступка словами — её кнопка отправляет в чат как реплику
+ * пользователя. Так выбор попадает в историю диалога, и следующая реплика
+ * («а в пятницу?») не возвращает снятое условие. Каждую фразу понимает
+ * разбор текста (tests/dialog-context.test.js сверяет её с patch).
+ */
+const RELAX_SAY = Object.freeze({
+  doctor: 'к любому врачу этого профиля',
+  clinic: 'в любой клинике',
+  district: 'район не важен',
+  gender: 'пол врача не важен',
+  access: 'доступная среда и парковка не обязательны',
+  experience: 'стаж не важен',
+  time: 'в любое время',
+  date: 'в любой день',
+  price: 'цена не важна',
+  dms: 'можно и платно',
+  travel: 'неважно сколько ехать',
+});
+
+const WEEKDAY_ACCUSATIVE = ['', 'понедельник', 'вторник', 'среду', 'четверг', 'пятницу', 'субботу', 'воскресенье'];
 const WEEKDAY_NAMES = ['', 'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота', 'воскресенье'];
 const MONTHS_GENITIVE = ['', 'января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
 
@@ -468,7 +489,7 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
         status: 'out_of_coverage',
         city: request.city,
         message: `${name} — вне покрытия МедКарты: демо-клиники и карта дорог есть только по Казани. Подменять ваш город Казанью без согласия не буду.`,
-        relax: [{ key: 'city', label: 'Искать в Казани', patch: { city: 'kazan' } }],
+        relax: [{ key: 'city', label: 'Искать в Казани', say: 'искать в Казани', patch: { city: 'kazan' } }],
       };
     }
     if (request.dms.required && !request.dms.planId) {
@@ -508,6 +529,7 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
           key: 'unsupported',
           label: request.unsupported.map((key) => UNSUPPORTED_RELAX[key]).join('; '),
           ...(attempt && attempt.candidates.length > 0 ? { count: attempt.candidates.length } : {}),
+          say: 'согласен',
           patch: { unsupported: [] },
         }],
         message: `Подходящих вариантов нет: ${names.join(', ')} — этого в демо-наборе нет, и проверить такое условие я не могу. Делать вид, что учёл его, не буду.`,
@@ -520,7 +542,7 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
         needs: ['origin_place'],
         originHint: request.originHint,
         message: 'Точку отправления вы назвали словами — по названию я её не определяю, а подставлять текущее местоположение без вашего подтверждения не буду. Поставьте точку на карте или подтвердите, что вы сейчас там.',
-        relax: [{ key: 'origin', label: 'Искать без учёта местоположения', patch: { originHint: null, origin: null, travel: { ...request.travel, maxMinutes: null, nearest: false } } }],
+        relax: [{ key: 'origin', label: 'Искать без учёта местоположения', say: RELAX_SAY.travel, patch: { originHint: null, origin: null, travel: { ...request.travel, maxMinutes: null, nearest: false } } }],
       };
     }
     if ((request.travel.maxMinutes || request.travel.nearest) && !request.origin) {
@@ -540,7 +562,7 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
         status: 'needs',
         needs: ['date_invalid'],
         message: `${label} — такой даты в календаре нет. Уточните день — подставлять соседний за вас не буду.`,
-        relax: [{ key: 'date', label: RELAX_LABELS.date, patch: { date: { kind: 'any' } } }],
+        relax: [{ key: 'date', label: RELAX_LABELS.date, say: RELAX_SAY.date, patch: { date: { kind: 'any' } } }],
       };
     }
     // День, который даёт сама дата (без фильтра «выходные»): с ним сверяется названный день недели.
@@ -553,8 +575,8 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
         needs: ['date_conflict'],
         message: `${day.split('-').reverse().join('.')} — ${WEEKDAY_NAMES[weekdayOf(day)]}, а не ${WEEKDAY_NAMES[request.date.expectWeekday]}. Уточните день — выбирать за вас не буду.`,
         relax: [
-          { key: 'date_exact', label: `${day.split('-').reverse().join('.')} (${WEEKDAY_NAMES[weekdayOf(day)]})`, patch: { date: { kind: 'date', day } } },
-          { key: 'date_weekday', label: `Ближайший: ${WEEKDAY_NAMES[request.date.expectWeekday]}`, patch: { date: { kind: 'weekday', weekday: request.date.expectWeekday } } },
+          { key: 'date_exact', label: `${day.split('-').reverse().join('.')} (${WEEKDAY_NAMES[weekdayOf(day)]})`, say: `${Number(day.slice(8))} ${MONTHS_GENITIVE[Number(day.slice(5, 7))]}`, patch: { date: { kind: 'date', day } } },
+          { key: 'date_weekday', label: `Ближайший: ${WEEKDAY_NAMES[request.date.expectWeekday]}`, say: `в ${WEEKDAY_ACCUSATIVE[request.date.expectWeekday]}`, patch: { date: { kind: 'weekday', weekday: request.date.expectWeekday } } },
         ],
       };
     }
@@ -569,6 +591,7 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
         relax: request.timeChoice.map((item, position) => ({
           key: position === 0 ? 'time_morning' : 'time_evening',
           label: `${describeTimeWindow(item)} (${position === 0 ? 'утра' : 'вечера'})`,
+          say: position === 0 ? 'утра' : 'вечера',
           patch: { timeFrom: item.from, timeTo: item.to, timeChoice: [], evening: false },
         })),
       };
@@ -577,16 +600,17 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
     if (request.date.kind === 'weekday' && request.date.askWeek) {
       const thisDay = resolveDays({ date: { kind: 'weekday', weekday: request.date.weekday, week: 'this' } }, today)[0];
       const nextDay = resolveDays({ date: { kind: 'weekday', weekday: request.date.weekday, week: 'next' } }, today)[0];
-      if (thisDay && nextDay && thisDay > today) {
-        const label = (day) => `${WEEKDAY_NAMES[request.date.weekday]}, ${day.split('-').reverse().slice(0, 2).join('.')}`;
+      // Тот же день недели, что сегодня («в понедельник» в понедельник): сегодня или через неделю.
+      if (thisDay && nextDay && thisDay >= today) {
+        const label = (day) => `${day === today ? 'сегодня' : WEEKDAY_NAMES[request.date.weekday]}, ${day.split('-').reverse().slice(0, 2).join('.')}`;
         return {
           ...base,
           status: 'needs',
           needs: ['date_choice'],
           message: `Уточните день: ${label(thisDay)} (ближайшая) или ${label(nextDay)} (через неделю)? Выбирать за вас не буду.`,
           relax: [
-            { key: 'week_this', label: `${label(thisDay)} — ближайшая`, patch: { date: { kind: 'weekday', weekday: request.date.weekday, week: 'this' } } },
-            { key: 'week_next', label: `${label(nextDay)} — через неделю`, patch: { date: { kind: 'weekday', weekday: request.date.weekday, week: 'next' } } },
+            { key: 'week_this', label: `${label(thisDay)} — ближайшая`, say: thisDay === today ? 'сегодня' : 'ближайшую', patch: { date: { kind: 'weekday', weekday: request.date.weekday, week: 'this' } } },
+            { key: 'week_next', label: `${label(nextDay)} — через неделю`, say: 'через неделю', patch: { date: { kind: 'weekday', weekday: request.date.weekday, week: 'next' } } },
           ],
         };
       }
@@ -598,7 +622,7 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
         status: 'needs',
         needs: ['time_conflict'],
         message: `«${request.evening && !request.timeFrom ? 'вечером' : `после ${request.timeFrom || EVENING_FROM}`}» и «до ${request.timeTo}» вместе не оставляют ни минуты. Уточните часы — выбирать за вас не буду.`,
-        relax: [{ key: 'time', label: RELAX_LABELS.time, patch: { timeFrom: null, timeTo: null, timeWindows: [], evening: false } }],
+        relax: [{ key: 'time', label: RELAX_LABELS.time, say: RELAX_SAY.time, patch: { timeFrom: null, timeTo: null, timeWindows: [], evening: false } }],
       };
     }
 
@@ -610,7 +634,7 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
     const notices = [];
     if (result.travelState === 'routing_unavailable') {
       if (travelRequired) {
-        return { ...base, status: 'unavailable', reason: 'routing_unavailable', funnel: result.funnel, message: 'Сейчас не могу рассчитать время в пути по дорогам, а оценку по прямой выдавать за время в пути не буду. Попробуйте позже или уберите ограничение по времени в пути.', relax: [{ key: 'travel', label: RELAX_LABELS.travel, patch: withoutOrigin }] };
+        return { ...base, status: 'unavailable', reason: 'routing_unavailable', funnel: result.funnel, message: 'Сейчас не могу рассчитать время в пути по дорогам, а оценку по прямой выдавать за время в пути не буду. Попробуйте позже или уберите ограничение по времени в пути.', relax: [{ key: 'travel', label: RELAX_LABELS.travel, say: RELAX_SAY.travel, patch: withoutOrigin }] };
       }
       notices.push('travel_unavailable');
     }
@@ -621,7 +645,7 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
         reason: 'origin_off_network',
         funnel: result.funnel,
         message: 'Ваша точка отправления вне карты дорог МедКарты: демо-клиники и дороги есть только по Казани и ближайшим пригородам. Время в пути посчитать не могу — поставьте точку в Казани на карте или ищите без учёта местоположения.',
-        relax: [{ key: 'origin', label: 'Искать без учёта местоположения', patch: withoutOrigin }],
+        relax: [{ key: 'origin', label: 'Искать без учёта местоположения', say: RELAX_SAY.travel, patch: withoutOrigin }],
       };
     }
 
@@ -645,7 +669,7 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
       tried.push({ key, patch });
       const relaxed = normalizeSearchRequest({ ...request, ...patch }).request;
       const attempt = await run(relaxed, { at, today, travelCache });
-      if (attempt.candidates.length > 0) relax.push({ key, label: RELAX_LABELS[key], count: attempt.candidates.length, patch });
+      if (attempt.candidates.length > 0) relax.push({ key, label: RELAX_LABELS[key], say: RELAX_SAY[key], count: attempt.candidates.length, patch });
     };
     if (request.doctorIds.length > 0 && request.specialty) await tryRelax('doctor', { doctorIds: [], doctorId: null });
     if (request.branchIds.length > 0) await tryRelax('clinic', { branchIds: [] });
@@ -683,7 +707,7 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
           const patch = Object.assign({}, ...pair.map((item) => item.patch));
           const attempt = await run(normalizeSearchRequest({ ...request, ...patch }).request, { at, today, travelCache });
           if (attempt.candidates.length > 0) {
-            relax.push({ key: 'combined', label: `Снять два условия: ${pair.map((item) => RELAX_LABELS[item.key]).join(' и ')}`, count: attempt.candidates.length, patch });
+            relax.push({ key: 'combined', label: `Снять два условия: ${pair.map((item) => RELAX_LABELS[item.key]).join(' и ')}`, say: pair.map((item) => RELAX_SAY[item.key]).join(', '), count: attempt.candidates.length, patch });
           }
         }
       }
@@ -693,7 +717,7 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
       const relaxed = normalizeSearchRequest({ ...request, ...patch }).request;
       const attempt = await run(relaxed, { at, today, travelCache });
       if (attempt.candidates.length > 0) {
-        relax.push({ key: 'combined', label: `Снять сразу: ${tried.map((item) => RELAX_LABELS[item.key]).join('; ')}`, count: attempt.candidates.length, patch });
+        relax.push({ key: 'combined', label: `Снять сразу: ${tried.map((item) => RELAX_LABELS[item.key]).join('; ')}`, say: tried.map((item) => RELAX_SAY[item.key]).join(', '), count: attempt.candidates.length, patch });
       }
     }
 
