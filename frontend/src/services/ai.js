@@ -47,15 +47,18 @@ export class AiError extends Error {
 }
 
 /**
- * История, уходящая на сервер: только последние сообщения и обрезанный текст.
- * Это ограничивает и стоимость запроса, и объём, который можно закинуть в модель.
+ * История, уходящая на сервер: реплики пользователя (до MAX_USER_TURNS
+ * последних) с обрезанным текстом. Ответы ассистента сервер всё равно не
+ * учитывает (их нельзя проверить, см. privacy/gateway.js), а место в
+ * истории они занимали: раньше из 12 сообщений реплик пользователя было
+ * только 6, и седьмая уже «не помнила» первую.
  */
 const packMessages = (chatMessages) =>
   (Array.isArray(chatMessages) ? chatMessages : [])
-    .filter((message) => message && typeof message.content === 'string')
-    .slice(-LIMITS.MAX_MESSAGES)
+    .filter((message) => message && message.role === 'user' && typeof message.content === 'string')
+    .slice(-LIMITS.MAX_USER_TURNS)
     .map((message) => ({
-      role: message.role === 'user' ? 'user' : 'assistant',
+      role: 'user',
       content: message.content.slice(0, LIMITS.MAX_MESSAGE_CHARS),
     }));
 

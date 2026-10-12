@@ -24,7 +24,7 @@
  */
 
 import { ACCESS_LABELS, coverageFor } from '../../shared/dms.js';
-import { describeRequest, EVENING_FROM, LOCALITIES, normalizeSearchRequest, UNSUPPORTED_CONDITIONS, withoutDayWindow } from '../../shared/demoSearch.js';
+import { describeRequest, describeTimeWindow, EVENING_FROM, LOCALITIES, normalizeSearchRequest, UNSUPPORTED_CONDITIONS, withoutDayWindow } from '../../shared/demoSearch.js';
 import { addDays, minutesOf, moscowDay, weekdayOf } from './time.js';
 import { branchLabelsOf } from './chatBridge.js';
 import { SLOT_WINDOW_DAYS } from './generator.js';
@@ -251,8 +251,8 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
       coverage: Object.fromEntries(item.serviceIds.map((serviceId) => [serviceId, coverageOf(index, request.dms.planId, { doctor: item.doctor, branchId: item.branchId, serviceId, patient: request.patient, today })])),
     }));
     if (request.maxPrice) {
-      // «По ДМС, а если не входит — не дороже 2000»: потолок — только для платного приёма.
-      const coveredPasses = request.dms.prefer && Boolean(request.dms.planId);
+      // «По ДМС, а если не входит — не дороже 2000»: потолок — только для платного приёма (по ДМС пациент не платит).
+      const coveredPasses = (request.dms.prefer || request.dms.required) && Boolean(request.dms.planId);
       candidates = candidates
         .map((item) => ({
           ...item,
@@ -427,6 +427,11 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
       const byTravel = (left.travel?.minutes ?? Infinity) - (right.travel?.minutes ?? Infinity);
       if (byTravel !== 0) return byTravel;
     }
+    // «Подешевле» без суммы: дешёвые первыми.
+    if (request.preferCheap) {
+      const byPrice = (left.prices[left.slots[0].serviceId] ?? 0) - (right.prices[right.slots[0].serviceId] ?? 0);
+      if (byPrice !== 0) return byPrice;
+    }
     const bySlot = Date.parse(left.slots[0].startAt) - Date.parse(right.slots[0].startAt);
     if (bySlot !== 0) return bySlot;
     const byTravel = (left.travel?.minutes ?? Infinity) - (right.travel?.minutes ?? Infinity);
@@ -552,6 +557,39 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
           { key: 'date_weekday', label: `Ближайший: ${WEEKDAY_NAMES[request.date.expectWeekday]}`, patch: { date: { kind: 'weekday', weekday: request.date.expectWeekday } } },
         ],
       };
+    }
+    /* «После 7» без «утра/вечера» — вопрос с двумя кнопками, а не выбор за пользователя. */
+    if (request.timeChoice.length === 2) {
+      const [morning, evening] = request.timeChoice;
+      return {
+        ...base,
+        status: 'needs',
+        needs: ['time_choice'],
+        message: `Уточните время: ${describeTimeWindow(morning)} (утра) или ${describeTimeWindow(evening)} (вечера)? Выбирать за вас не буду.`,
+        relax: request.timeChoice.map((item, position) => ({
+          key: position === 0 ? 'time_morning' : 'time_evening',
+          label: `${describeTimeWindow(item)} (${position === 0 ? 'утра' : 'вечера'})`,
+          patch: { timeFrom: item.from, timeTo: item.to, timeChoice: [], evening: false },
+        })),
+      };
+    }
+    /* «В следующую пятницу», сказанное раньше пятницы: ближайшая или через неделю? */
+    if (request.date.kind === 'weekday' && request.date.askWeek) {
+      const thisDay = resolveDays({ date: { kind: 'weekday', weekday: request.date.weekday, week: 'this' } }, today)[0];
+      const nextDay = resolveDays({ date: { kind: 'weekday', weekday: request.date.weekday, week: 'next' } }, today)[0];
+      if (thisDay && nextDay && thisDay > today) {
+        const label = (day) => `${WEEKDAY_NAMES[request.date.weekday]}, ${day.split('-').reverse().slice(0, 2).join('.')}`;
+        return {
+          ...base,
+          status: 'needs',
+          needs: ['date_choice'],
+          message: `Уточните день: ${label(thisDay)} (ближайшая) или ${label(nextDay)} (через неделю)? Выбирать за вас не буду.`,
+          relax: [
+            { key: 'week_this', label: `${label(thisDay)} — ближайшая`, patch: { date: { kind: 'weekday', weekday: request.date.weekday, week: 'this' } } },
+            { key: 'week_next', label: `${label(nextDay)} — через неделю`, patch: { date: { kind: 'weekday', weekday: request.date.weekday, week: 'next' } } },
+          ],
+        };
+      }
     }
     const [windowFrom, windowTo] = timeWindow(request);
     if (!request.timeWindows.length && windowFrom >= windowTo) {

@@ -14,7 +14,7 @@
  * ослабить «завтра», «после 18:00», «по ДМС» или «до 3000 ₽».
  */
 
-import { describeRequest, LOCALITIES, normalizeSearchRequest, UNSUPPORTED_CONDITIONS } from '../../shared/demoSearch.js';
+import { describeRequest, describeTimeWindow, LOCALITIES, normalizeSearchRequest, UNSUPPORTED_CONDITIONS } from '../../shared/demoSearch.js';
 import { SPECIALTY_CANON } from '../../shared/specialties.js';
 import { addDays, moscowDay, moscowParts } from './time.js';
 
@@ -195,6 +195,16 @@ export const buildBookingRequest = ({ booking, execution, now, index = null }) =
     .flatMap((value) => (value.kind === 'date' ? [value.day]
       : value.kind === 'today' ? [today] : value.kind === 'tomorrow' ? [addDays(today, 1)] : value.kind === 'after_tomorrow' ? [addDays(today, 2)] : []));
 
+  /*
+   * «В следующую пятницу»: вопрос нужен, только если ближайшая пятница ещё
+   * впереди на этой неделе. Сказанное в пятницу или в субботу — это точно
+   * следующая неделя, спрашивать нечего.
+   */
+  if (date.kind === 'weekday' && date.askWeek) {
+    const todayWeekday = weekdayOfDay(today);
+    if (!(date.weekday > todayWeekday)) date = { kind: 'weekday', weekday: date.weekday, week: 'next' };
+  }
+
   const { request: normalized } = normalizeSearchRequest({
     specialty,
     specialtyAny: choice ? booking.specialties : [],
@@ -213,6 +223,7 @@ export const buildBookingRequest = ({ booking, execution, now, index = null }) =
     preferExperience: booking.preferExperience,
     excludeDates,
     timeWindows: booking.timeWindows,
+    timeChoice: booking.pendingTime || [],
     unsupported: booking.unsupported,
     fallbacks: booking.fallbacks,
     serviceId: booking.serviceId || null,
@@ -236,6 +247,8 @@ export const buildBookingRequest = ({ booking, execution, now, index = null }) =
       nearest: booking.nearest,
     },
     originHint: booking.originHint,
+    originConfirmed: Boolean(booking.originConfirmed),
+    preferCheap: Boolean(booking.preferCheap),
     city: booking.city,
   });
   return {
@@ -260,18 +273,31 @@ export const bookingReplyText = ({ request, booking, ...labels }) => {
   const locality = request.city ? LOCALITIES[request.city] : null;
   if (locality && !locality.covered) {
     // Город вне покрытия: не обещаем «подбор ниже» — сразу говорим как есть.
-    parts.push(`Понял запрос: ${summary.join(', ')}.`);
+    parts.push(`Понял запрос: ${summary.join(', ').replace(/\.$/u, '')}.`);
     parts.push(`${locality.name} — вне покрытия: демо-клиники и карта дорог МедКарты есть только по Казани. Искать в Казани вместо этого — только если скажете.`);
   } else if (!request.specialty && request.specialtyAny.length === 0 && request.doctorIds.length === 0) {
     parts.push('Подберу врача и свободное время. Подскажите, какой специалист нужен?');
     if (summary.length > 0) parts.push(`Условия, которые я учту: ${summary.join(', ')}.`);
   } else if (blockingNote(request)) {
     // Условие, которое не проверить, или противоречие: не обещаем «подбор ниже» — говорим, что мешает.
-    parts.push(`Понял запрос: ${summary.join(', ')}.`);
+    parts.push(`Понял запрос: ${summary.join(', ').replace(/\.$/u, '')}.`);
     parts.push(blockingNote(request));
   } else {
-    parts.push(`Ищу свободное время: ${summary.join(', ')}.`);
+    parts.push(`Ищу свободное время: ${summary.join(', ').replace(/\.$/u, '')}.`);
     parts.push('Показываю только варианты, которые подходят под все условия, — подбор ниже. Условия без вашего согласия не ослабляю.');
+  }
+  // Однофамильцы («к Ефимову(ой)»): показываем всех и спрашиваем, к кому именно.
+  if (booking?.pickOption) {
+    parts.push('Записать вас сам по тексту не могу: выберите время в карточке нужного врача и нажмите «Записаться» — запись подтверждаете вы.');
+  }
+  const bySurname = new Map();
+  for (const label of labels.doctorLabels || []) {
+    const stem = label.split(' ')[0].toLowerCase().replace(/(?:а|ой)$/u, '');
+    bySurname.set(stem, [...(bySurname.get(stem) || []), label]);
+  }
+  const namesakes = [...bySurname.values()].find((group) => group.length > 1);
+  if (namesakes) {
+    parts.push(`Нашёл нескольких врачей с такой фамилией: ${namesakes.join('; ')}. Показываю всех — если нужен один, уточните имя или профиль.`);
   }
   if (booking?.medicalText && request.specialty) {
     parts.push('Профиль врача подобран по описанию — это не диагноз.');
@@ -294,11 +320,18 @@ const blockingNote = (request) => {
     return `${names[0].toUpperCase()}${names.slice(1)} — этого в демо нет, проверить не могу. Ниже — что могу предложить вместо, и только с вашего согласия.`;
   }
   if (request.date.kind === 'invalid') return 'Такой даты в календаре нет — уточните день, соседний подставлять не буду.';
+  if (request.timeChoice?.length === 2) {
+    const [morning, evening] = request.timeChoice.map(describeTimeWindow);
+    return `Уточните, пожалуйста: ${morning} (утра) или ${evening} (вечера)? Ответьте «утра» или «вечера» — или нажмите кнопку ниже. Выбирать за вас не буду.`;
+  }
+  if (request.date.kind === 'weekday' && request.date.askWeek) {
+    return 'Уточните, пожалуйста: ближайший такой день (на этой неделе) или через неделю? Ответьте «ближайшую» или «через неделю» — или нажмите кнопку ниже.';
+  }
   if (request.date.kind === 'date' && request.date.expectWeekday && weekdayOfDay(request.date.day) !== request.date.expectWeekday) {
     return 'Дата и день недели не совпадают — уточните, какой день имели в виду; выбирать за вас не буду.';
   }
   if (request.timeFrom && request.timeTo && request.timeFrom >= request.timeTo) return 'Условия по часам не оставляют ни минуты — уточните время, выбирать за вас не буду.';
-  if (request.originHint) return 'Точку отправления вы назвали словами — по названию я её не определяю: поставьте её на карте или подтвердите, что вы сейчас там.';
+  if (request.originHint && !request.originConfirmed) return 'Точку отправления вы назвали словами — по названию я её не определяю: поставьте её на карте или подтвердите, что вы сейчас там.';
   return null;
 };
 

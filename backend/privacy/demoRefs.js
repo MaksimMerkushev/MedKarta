@@ -87,6 +87,7 @@ export const demoRefsOf = (analysis) => {
   const excludeBranchIds = new Set();
   let foreignDoctor = false;
   let clinicNamed = false;
+  const clinicBranches = new Set();
   let excludedClinicEnd = -1;
   for (const entity of [...(analysis.entities || [])].sort((left, right) => left.start - right.start)) {
     if (!Array.isArray(entity.ids) || entity.ids.length === 0) continue;
@@ -120,6 +121,7 @@ export const demoRefsOf = (analysis) => {
         continue;
       }
       clinicNamed = true;
+      demoBranches.forEach((id) => clinicBranches.add(id));
       const onStreet = demoBranches.filter((id) => branchFits(id, clinicIds, messageWords));
       (onStreet.length > 0 ? onStreet : demoBranches).forEach((id) => branchIds.add(id));
     }
@@ -139,5 +141,21 @@ export const demoRefsOf = (analysis) => {
   if (foreignDoctor && doctorIds.size === 0) refs.foreignDoctor = true;
   // Клиника названа, но демо-записи в ней нет — подбор так и скажет, а не подменит.
   if (clinicNamed) refs.branchIds = branchIds.size > 0 ? [...branchIds] : [NO_DEMO_BRANCH];
+  // Все филиалы названной клиники — чтобы «а на Ленинградской?» следующей репликой сменило филиал.
+  if (clinicBranches.size > 0) refs.clinicBranches = [...clinicBranches];
   return refs;
+};
+
+/**
+ * «А на Ленинградской?» после «в Разумед на Пушкина»: улица без названия
+ * клиники выбирает филиал той клиники, что названа раньше.
+ *
+ * @param {string[]} clinicBranches все демо-филиалы названной раньше клиники
+ * @param {string} content реплика
+ * @returns {string[]} филиалы на названной улице (или пусто)
+ */
+export const branchesOnStreet = (clinicBranches, content) => {
+  const words = String(content || '').toLowerCase().replace(/ё/g, 'е').split(/[^\p{L}-]+/u).filter(Boolean).map(slug);
+  const clinicIds = [...new Set(clinicBranches.map((id) => id.replace(/-[a-z0-9]+$/, '')))];
+  return clinicBranches.filter((id) => branchFits(id, clinicIds, words));
 };

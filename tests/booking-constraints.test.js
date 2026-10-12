@@ -143,7 +143,8 @@ describe('Условия записи из текста', () => {
     ['живу на Азино, нужен лор поближе', { originHint: 'home' }],
     ['я сейчас на Азино, нужен лор', { originHint: 'place', nearPlace: true }],
     // Неделя у дня недели: «следующий понедельник», «эта пятница».
-    ['в следующую среду', { date: { kind: 'weekday', weekday: 3, week: 'next' } }],
+    // «В следующую среду» — какая из двух сред, подбор уточнит (askWeek), если ближайшая ещё впереди.
+    ['в следующую среду', { date: { kind: 'weekday', weekday: 3, week: 'next', askWeek: true } }],
     ['в эту пятницу', { date: { kind: 'weekday', weekday: 5, week: 'this' } }],
     ['в ближайший вторник', { date: { kind: 'weekday', weekday: 2 }, nearestIsTime: true }],
     ['на пятницу или следующий понедельник', { date: { kind: 'any_of', options: [{ kind: 'weekday', weekday: 5 }, { kind: 'weekday', weekday: 1, week: 'next' }] } }],
@@ -219,7 +220,7 @@ describe('Условия записи из текста', () => {
     ['в Московском районе, а если там нет — то любой район', { preferDistricts: ['Московский'], districtAny: true }],
     ['а на Ново-Савиновском филиале?', { districts: ['Ново-Савиновский'] }],
     ['лучше по ДМС', { preferDms: true, dms: false }],
-    ['у меня Demo Basic, но если что я готов заплатить', { planId: 'demo-basic', preferDms: true, dms: false }],
+    ['у меня Demo Basic, но если что я готов заплатить', { planId: 'demo-basic', preferDms: true, dms: false, allowPaid: true }],
     ['хирург, но не детский, а взрослый', { adult: true }],
   ];
   for (const [text, expected] of cases) {
@@ -319,6 +320,68 @@ describe('Условия записи из текста', () => {
     assert.deepEqual(merge(['уролог, только не завтра', 'в любой день']).excludeDays, []);
     assert.equal(extractConstraints('до 20 октября').availableBefore, undefined);
     assert.equal(extractConstraints('в радиусе 15 минут на такси').maxTravelMinutes, 15);
+  });
+
+  it('уточнения: «после 7» — вопрос «утра или вечера?», ответ следующей репликой выбирает прочтение', () => {
+    assert.deepEqual(extractConstraints('после 7').timeAmbiguity, [{ from: '07:00', to: null }, { from: '19:00', to: null }]);
+    assert.equal(extractConstraints('после 7').availableAfter, undefined);
+    assert.equal(extractConstraints('после 5').availableAfter, '17:00');
+    assert.equal(extractConstraints('до 2').availableBefore, '14:00');
+    assert.deepEqual([extractConstraints('с 8 до 10').availableAfter, extractConstraints('с 8 до 10').availableBefore], ['08:00', '10:00']);
+    assert.deepEqual([extractConstraints('с 5 до 7').availableAfter, extractConstraints('с 5 до 7').availableBefore], ['17:00', '19:00']);
+    assert.equal(extractConstraints('после 7 вечером').availableAfter, '19:00');
+    assert.deepEqual(extractBookingConstraints('после семи').timeAmbiguity, [{ from: '07:00', to: null }, { from: '19:00', to: null }]);
+    const merge = (texts) => mergeBookingTurns(texts.map((text) => ({ booking: extractBookingConstraints(text), constraints: extractConstraints(text) })));
+    const asked = merge(['терапевт после 7']);
+    assert.equal(asked.pendingTime.length, 2);
+    assert.equal(asked.timeFrom, null);
+    const evening = merge(['терапевт после 7', 'вечера']);
+    assert.equal(evening.timeFrom, '19:00');
+    assert.equal(evening.pendingTime, null);
+    const morning = merge(['терапевт после 7', 'утром']);
+    assert.equal(morning.timeFrom, '07:00');
+    assert.equal(morning.timeTo, null);
+    const replaced = merge(['терапевт после 7', 'нет, после 18']);
+    assert.equal(replaced.timeFrom, '18:00');
+    assert.equal(replaced.pendingTime, null);
+    const week = merge(['кардиолог в следующую пятницу', 'ближайшую']);
+    assert.deepEqual(week.date, { kind: 'weekday', weekday: 5, week: 'this' });
+    assert.equal(week.nearest, false);
+    assert.deepEqual(merge(['кардиолог в следующую пятницу', 'через неделю']).date, { kind: 'weekday', weekday: 5, week: 'next' });
+  });
+
+  it('контекст: согласия и ответы следующей репликой — пол, возраст врача, ДМС, программа, точка', () => {
+    const merge = (texts) => mergeBookingTurns(texts.map((text) => ({ booking: extractBookingConstraints(text), constraints: extractConstraints(text) })));
+    const gender = merge(['гинеколог, только женщина', 'да, можно и к мужчине']);
+    assert.equal(gender.doctorGender, null);
+    assert.equal(gender.preferGender, 'female');
+    assert.deepEqual(merge(['хирург, которому больше 50 лет', 'возраст не важен']).unsupported, []);
+    const paid = merge(['терапевт по ДМС', 'можно и платно']);
+    assert.equal(paid.preferDms, true);
+    assert.equal(paid.dms, false);
+    assert.equal(merge(['терапевт по ДМС', 'премиум']).planId, 'demo-premium');
+    assert.equal(merge(['лор рядом с домом', 'я сейчас дома']).originConfirmed, true);
+    assert.equal(merge(['кардиолог', 'а подешевле?']).preferCheap, true);
+    assert.equal(merge(['кардиолог', 'запиши меня к первому']).pickOption, true);
+    assert.equal(merge(['кардиолог', 'запиши меня к первому', 'а в четверг?']).pickOption, false);
+    assert.deepEqual(merge(['стаж от 10 лет', 'стаж не важен']).minExperience, null);
+  });
+
+  it('контекст раунда 9: неделя переходит на день, «или …» добавляет вариант, «выходные тоже» — к будням', () => {
+    const merge = (texts) => mergeBookingTurns(texts.map((text) => ({ booking: extractBookingConstraints(text), constraints: extractConstraints(text) })));
+    assert.deepEqual(merge(['кардиолог на следующей неделе', 'а можно в эту?', 'хорошо, тогда в четверг']).date, { kind: 'weekday', weekday: 4, week: 'this' });
+    assert.deepEqual(merge(['лор в четверг', 'или в пятницу?']).date, { kind: 'any_of', options: [{ kind: 'weekday', weekday: 4 }, { kind: 'weekday', weekday: 5 }] });
+    assert.deepEqual(merge(['лор на 13:30', 'или на 14:00']).timeWindows, [{ from: '13:30', to: '13:31' }, { from: '14:00', to: '14:01' }]);
+    const weekend = merge(['невролог, я работаю до 19', 'и в выходные тоже можно']);
+    assert.equal(weekend.date.kind, 'any_of');
+    assert.deepEqual(weekend.date.options.map((option) => [option.weekday, option.from || null]), [[1, '19:00'], [2, '19:00'], [3, '19:00'], [4, '19:00'], [5, '19:00'], [6, null], [7, null]]);
+    assert.equal(weekend.weekend, false);
+    assert.equal(weekend.timeFrom, null);
+    assert.equal(merge(['дерматолог, дерматоскопия', 'а просто консультация?']).serviceId, null);
+    assert.equal(merge(['уролог', 'мужчина']).doctorGender, 'male');
+    assert.equal(merge(['уролог', 'стаж не важен', 'а вот мужчина обязательно']).doctorGender, 'male');
+    assert.deepEqual(extractBookingConstraints('около 8').timeAmbiguity, [{ from: '07:30', to: '08:31' }, { from: '19:30', to: '20:31' }]);
+    assert.equal(extractBookingConstraints('около шести').timeAround, '18:00');
   });
 
   it('слияние: будни и выходные сменяют друг друга; район, пол, стаж держатся до отмены', () => {

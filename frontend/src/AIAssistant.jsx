@@ -3,7 +3,7 @@
  * Этот код является интеллектуальной собственностью автора.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Bot, X, Send, Loader2 } from 'lucide-react';
+import { Bot, X, Send, Loader2, RotateCcw } from 'lucide-react';
 import { analyzeSymptoms } from './services/ai';
 import { LIMITS } from '@shared/contract.js';
 import TopPicks from './TopPicks';
@@ -90,6 +90,20 @@ export default function AIAssistant({
   // Закрытие окна не должно оставлять висящий запрос и обновлять состояние
   // размонтированного диалога.
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  /*
+   * Ассистент держит контекст всей переписки: «а завтра?» дополняет прошлый
+   * запрос. Начать с чистого листа — этой кнопкой (или словами «давай
+   * заново»): прежние условия больше не учитываются.
+   */
+  const handleRestart = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setIsLoading(false);
+    setInputValue('');
+    setMessages([GREETING]);
+    inputRef.current?.focus();
+  }, []);
 
   const handleClose = useCallback(() => {
     abortRef.current?.abort();
@@ -241,14 +255,28 @@ export default function AIAssistant({
               </div>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={handleClose}
-            aria-label="Закрыть помощника"
-            className="flex h-10 w-10 items-center justify-center rounded-full text-slate-400 transition-colors active:bg-slate-100 dark:active:bg-slate-700"
-          >
-            <X size={22} aria-hidden="true" />
-          </button>
+          <div className="flex items-center gap-1">
+            {messages.length > 1 && (
+              <button
+                type="button"
+                onClick={handleRestart}
+                aria-label="Начать новый разговор"
+                title="Новый разговор: прежние условия не учитываются"
+                className="flex h-10 w-10 items-center justify-center rounded-full text-slate-400 transition-colors active:bg-slate-100 dark:active:bg-slate-700"
+                data-testid="ai-restart"
+              >
+                <RotateCcw size={19} aria-hidden="true" />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleClose}
+              aria-label="Закрыть помощника"
+              className="flex h-10 w-10 items-center justify-center rounded-full text-slate-400 transition-colors active:bg-slate-100 dark:active:bg-slate-700"
+            >
+              <X size={22} aria-hidden="true" />
+            </button>
+          </div>
         </div>
 
         <div
@@ -323,14 +351,28 @@ export default function AIAssistant({
             </div>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={handleClose}
-          aria-label="Закрыть помощника"
-          className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700"
-        >
-          <X size={18} aria-hidden="true" />
-        </button>
+        <div className="flex items-center gap-0.5">
+          {messages.length > 1 && (
+            <button
+              type="button"
+              onClick={handleRestart}
+              aria-label="Начать новый разговор"
+              title="Новый разговор: прежние условия не учитываются"
+              className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100 hover:text-violet-600 dark:hover:bg-slate-700"
+              data-testid="ai-restart"
+            >
+              <RotateCcw size={16} aria-hidden="true" />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handleClose}
+            aria-label="Закрыть помощника"
+            className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700"
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
+        </div>
       </div>
 
       {/* В режиме записи под ответом — карточки со временем приёма: окно выше. */}

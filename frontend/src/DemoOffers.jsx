@@ -316,9 +316,15 @@ export default function DemoOffers({
               </div>
             )}
 
-            {result.status === 'needs' && ['date_conflict', 'date_invalid', 'time_conflict'].some((key) => result.needs?.includes(key)) && (
+            {result.status === 'needs' && ['date_conflict', 'date_invalid', 'time_conflict', 'time_choice', 'date_choice'].some((key) => result.needs?.includes(key)) && (
               <div className="px-1" data-testid="demo-conflict">
-                <RelaxButtons relax={result.relax} onRelax={accept} title={result.needs.includes('date_conflict') ? 'Какой день имели в виду?' : result.needs.includes('date_invalid') ? 'Можно искать в любой день — если согласны:' : 'Можно искать без ограничения по часам — если согласны:'} />
+                <RelaxButtons
+                  relax={result.relax}
+                  onRelax={accept}
+                  title={result.needs.includes('date_conflict') || result.needs.includes('date_choice') ? 'Какой день имели в виду?'
+                    : result.needs.includes('time_choice') ? 'Какое время имели в виду? (можно ответить и в чате)'
+                      : result.needs.includes('date_invalid') ? 'Можно искать в любой день — если согласны:' : 'Можно искать без ограничения по часам — если согласны:'}
+                />
               </div>
             )}
 

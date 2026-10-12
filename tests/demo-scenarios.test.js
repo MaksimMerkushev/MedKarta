@@ -927,6 +927,87 @@ describe('Демо-сценарии: своё время у каждого дн�
   });
 });
 
+describe('Демо-сценарии: уточняющие вопросы и контекст диалога', needsSqlite, () => {
+  it('«после 7» — вопрос «утра или вечера?» с двумя кнопками; ответ «вечера» в чате — после 19:00', async () => {
+    const asked = await chat('терапевт после 7');
+    assert.match(asked.replyText, /утра.*вечера/);
+    const question = await run(asked);
+    assert.equal(question.status, 'needs');
+    assert.deepEqual(question.needs, ['time_choice']);
+    assert.deepEqual(question.relax.map((item) => item.patch.timeFrom), ['07:00', '19:00']);
+    const answered = await run(await chat(['терапевт после 7', 'вечера']));
+    assert.equal(answered.request.timeFrom, '19:00');
+    assert.ok(allSlots(answered).length > 0 && allSlots(answered).every((slot) => slot.start >= '19:00'));
+    // Кнопка делает то же, что ответ.
+    const pressed = await run(asked, { patch: question.relax[1].patch });
+    assert.equal(pressed.status, 'ok');
+  });
+
+  it('«в следующую пятницу» (сегодня понедельник) — вопрос «ближайшую или через неделю?»; «ближайшую» — 16.10', async () => {
+    const asked = await run(await chat('кардиолог в следующую пятницу'));
+    assert.deepEqual(asked.needs, ['date_choice']);
+    const nearest = await run(await chat(['кардиолог в следующую пятницу', 'ближайшую']));
+    assert.ok(allSlots(nearest).length > 0 && allSlots(nearest).every((slot) => slot.day === '2026-10-16'));
+    assert.equal(nearest.request.travel.nearest, false);
+    const later = await run(await chat(['кардиолог в следующую пятницу', 'через неделю']));
+    assert.ok(allSlots(later).every((slot) => slot.day === '2026-10-23'));
+    // «Следующий понедельник» в понедельник — однозначно через неделю, вопроса нет.
+    const monday = await run(await chat('кардиолог в следующий понедельник'));
+    assert.notEqual(monday.status, 'needs');
+  });
+
+  it('контекст держится: длинный диалог дополняет запрос, а «давай заново» начинает новый', async () => {
+    const dialog = ['Нужен ЛОР по ДМС Demo Standard', 'для дочки 6 лет', 'лучше на этой неделе', 'после 16', 'не в Советском районе', 'а женщина есть?', 'не дороже 3000', 'и не в Айболите'];
+    const { request } = (await chat(dialog)).booking;
+    assert.equal(request.specialty, 'lor');
+    assert.equal(request.patient, 'child');
+    assert.equal(request.dms.planId, 'demo-standard');
+    assert.equal(request.date.kind, 'this_week');
+    assert.equal(request.timeFrom, '16:00');
+    assert.deepEqual(request.excludeDistricts, ['Советский']);
+    assert.equal(request.doctorGender, 'female');
+    assert.equal(request.maxPrice, 3000);
+    assert.ok(request.excludeBranchIds.length > 0);
+    const fresh = (await chat([...dialog, 'давай заново: кардиолог на завтра'])).booking.request;
+    assert.equal(fresh.specialty, 'cardiologist');
+    assert.equal(fresh.patient, 'adult');
+    assert.equal(fresh.maxPrice, null);
+    assert.equal(fresh.doctorGender, null);
+    assert.deepEqual(fresh.excludeDistricts, []);
+    assert.deepEqual(fresh.date, { kind: 'tomorrow' });
+    // «Педиатр для сына» → «а теперь мне к терапевту» — взрослый приём.
+    assert.equal((await chat(['педиатр для сына в субботу', 'а теперь мне к терапевту'])).booking.request.patient, 'adult');
+  });
+
+  it('контекст: «а на Ленинградской?» — другой филиал; «а Ефимов?» — другой врач без прежнего профиля; «а просто консультация?» — без процедуры', async () => {
+    const street = await chat(['лор', 'в Разумед на Пушкина', 'а на Ленинградской?']);
+    assert.deepEqual(street.booking.request.branchIds, ['demo-real-razumed-leningradskaya']);
+    const doctor = await chat(['невролог Ефимова', 'а Ефимов?']);
+    assert.deepEqual(doctor.booking.request.doctorIds, ['demo-doc-efimov-timur']);
+    assert.equal(doctor.booking.request.specialty, null);
+    assert.equal((await run(doctor)).status, 'ok');
+    const plain = await chat(['дерматолог, дерматоскопия', 'а просто консультация?']);
+    assert.equal(plain.booking.request.specialty, 'dermatologist');
+    assert.equal(plain.booking.request.serviceId, null);
+    const weekend = await run(await chat(['хочу записаться к неврологу', 'вот только я работаю до 19', 'и в выходные тоже можно']));
+    assert.ok(allSlots(weekend).length > 0);
+    for (const slot of allSlots(weekend)) {
+      const weekday = new Date(`${slot.day}T12:00:00Z`).getUTCDay() || 7;
+      assert.ok(weekday >= 6 || slot.start >= '19:00', `${slot.day} ${slot.start}`);
+    }
+  });
+
+  it('однофамильцы — показываю обоих и спрашиваю; «спасибо» — не новый поиск; «запиши к первому» — объясняю, как записаться', async () => {
+    const namesakes = await chat('хочу к Ефимова');
+    if (namesakes.booking?.request.doctorIds.length > 1) assert.match(namesakes.replyText, /нескольких врачей с такой фамилией/);
+    const thanks = await chat(['кардиолог завтра', 'спасибо']);
+    assert.match(thanks.replyText, /^Пожалуйста!/);
+    assert.equal(thanks.booking.request.specialty, 'cardiologist');
+    const pick = await chat(['кардиолог завтра', 'запиши меня к первому']);
+    assert.match(pick.replyText, /нажмите «Записаться»/);
+  });
+});
+
 describe('Демо-сценарии: запись', needsSqlite, () => {
   it('8–11. Запись на 18:30 → BOOKED; повтор отклонён; гонка — одна запись; отмена освобождает', async () => {
     const result = await run(await chat('Нужен ЛОР завтра после 18:00'));

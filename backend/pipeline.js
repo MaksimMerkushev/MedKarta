@@ -29,6 +29,9 @@ import { createRoutingProviderFromEnv } from './executor/routing.js';
 import { buildEmergencyAction, buildUiAction } from './executor/resultBuilder.js';
 import { bookingModeFromEnv, bookingReplyText, buildBookingRequest, summarizeBooking } from './demo/chatBridge.js';
 import { UNKNOWN_SPECIALTIES } from './privacy/unknownSpecialties.js';
+
+/* Реплика целиком — благодарность или «понятно», без нового запроса. */
+const THANKS_ONLY = /^(?:(?:ок|окей|хорошо|понятно|ясно|отлично|супер|класс|ага|угу)[\s,!.)]*)*(?:спасибо|спс|благодарю|thanks|спасибки)(?:\s+(?:большое|огромное|вам|за\s+помощь))*[\s,!.)🙏😊👍]*$|^(?:понятно|ясно|хорошо|ок|окей)[\s,!.]*$/u;
 import { SPECIALTY_CANON } from '../shared/specialties.js';
 import { getDemoCatalog } from './demo/catalog.js';
 import { demoNow } from './demo/time.js';
@@ -293,6 +296,16 @@ export const createPipeline = ({
           action.buildRoute = false;
           action.targetStops = [];
         }
+      }
+
+      /*
+       * «Спасибо», «понятно, спасибо» — не новый запрос: подбор остаётся как
+       * был, а ответ — вежливое завершение, а не повтор «Ищу свободное время».
+       */
+      const lastUserText = [...(messages || [])].reverse().find((message) => message?.role === 'user')?.content || '';
+      const closing = String(lastUserText).toLowerCase().trim();
+      if (THANKS_ONLY.test(closing)) {
+        action.replyText = `${/спасиб|спс|благодар|thanks/u.test(closing) ? 'Пожалуйста!' : 'Хорошо.'} Если нужно что-то поменять — день, время, цену или врача, — просто напишите: прежние условия я помню.`;
       }
 
       metrics.observe('pipeline.latency_ms', Date.now() - started, { plan_source: planSource });

@@ -84,14 +84,21 @@ const DATE_PATTERNS = [
     pattern: new RegExp(`(?<!${WORD})(?:день|дата|когда)\\s*[—–:-]+\\s*${form}(?!${WORD})`, 'u'),
     value: { kind: 'weekday', weekday },
   })),
+  // «А только суббота?», «лучше пятница» — день недели в именительном после частицы.
+  ...[['понедельник', 1], ['вторник', 2], ['среда', 3], ['четверг', 4], ['пятница', 5], ['суббота', 6], ['воскресенье', 7]].map(([form, weekday]) => ({
+    pattern: new RegExp(`(?<!${WORD})(?:только|а|лучше|или|давай(?:те)?|пусть|можно)\\s+${form}(?!${WORD})`, 'u'),
+    value: { kind: 'weekday', weekday },
+    weekday: true,
+  })),
   // «На 17-е», «в 17-го числа» — число без месяца: ближайшее такое.
   {
-    pattern: new RegExp(`(?<!${WORD})(?:на|в|к|до)\\s+(\\d{1,2})(?:-?(?:го|е)(?:\\s+числа)?|\\s+числа)(?!${WORD})`, 'u'),
+    pattern: new RegExp(`(?<!${WORD})(?:(?:на|в|к|до|а|или)\\s+|^\\s*)(\\d{1,2})(?:-?(?:го|е)(?:\\s+числа)?|\\s+числа)(?!${WORD})`, 'u'),
     value: (match) => ({ kind: 'date', month: null, dayOfMonth: Number(match[1]) }),
   },
   ...WEEKDAY_FORMS.map(([form, weekday]) => ({
     pattern: new RegExp(`(?<!${WORD})(?:в|во|на|к|ко)\\s+(?:(?:эт|ближайш|следующ|будущ)\\p{L}*\\s+)?${form}(?!${WORD})`, 'u'),
-    value: (match) => ({ kind: 'weekday', weekday, ...weekOf(match[0]) }),
+    // «В следующую пятницу», сказанное в среду, — это 16-е или 23-е? Подбор спросит (askWeek).
+    value: (match) => ({ kind: 'weekday', weekday, ...weekOf(match[0]), ...(weekOf(match[0]).week === 'next' ? { askWeek: true } : {}) }),
     weekday: true,
   })),
   {
@@ -122,7 +129,7 @@ const DATE_PATTERNS = [
     },
   },
   {
-    pattern: new RegExp(`(?<!${WORD})(?:в\\s+любой\\s+день|день\\s+(?:не\\s+важен|неважен|любой)|когда\\s+угодно|без\\s+разницы\\s+когда|в\\s+ближайш\\p{L}*\\s+(?:дни|время))(?!${WORD})`, 'u'),
+    pattern: new RegExp(`(?<!${WORD})(?:в\\s+любой\\s+день|(?:давай(?:те)?|можно|ладно,?|хорошо,?|пусть)\\s+любой\\s+день|день\\s+(?:не\\s+важен|неважен|любой)|когда\\s+угодно|без\\s+разницы\\s+когда|в\\s+ближайш\\p{L}*\\s+(?:дни|время))(?!${WORD})`, 'u'),
     value: { kind: 'any' },
   },
 ];
@@ -429,7 +436,7 @@ const TIME_KIND = [
 ];
 const NOT_TIME_AFTER = '(?!\\s+(?:тысяч|руб|лет|год|раз|минут|недел|дней|суток|месяц|человек|детей|процент|км|метр|приём|прием|врач|клиник))';
 const SPOKEN_TIME = new RegExp(
-  `(?<!${WORD})(${TIME_KIND.map(([, words]) => words).join('|')})\\s+(\\d{1,2}|${HOUR_WORD})(?::(\\d{2}))?${NOT_TIME_AFTER}(\\s+час(?:а|ов)?)?(?:\\s+(утра|дня|вечера|ночи))?(?!${WORD})`,
+  `(?<!${WORD})(${TIME_KIND.map(([, words]) => words).join('|')})\\s+(\\d{1,2}|${HOUR_WORD})(?::(\\d{2}))?${NOT_TIME_AFTER}(\\s+час(?:а|ов|ам)?)?(?:\\s+(утра|дня|вечера|ночи))?(?!${WORD})`,
   'gu',
 );
 /* «8 часов вечера в пятницу» — без предлога: ровно это время. */
@@ -450,20 +457,39 @@ const spokenTimes = (text) => {
   for (const match of text.matchAll(SPOKEN_TIME)) {
     const [, preposition, hourText, minutes = '00', hoursWord, dayPart] = match;
     const digits = /^\d+$/.test(hourText);
-    // Цифры без части суток — забота gateway; слово без «часов» и части суток — только после «после/до/с».
-    if (digits && !dayPart) continue;
     const kind = TIME_KIND.find(([, words]) => new RegExp(`^${words}$`, 'u').test(preposition.replace(/\s+/gu, ' ')))?.[0];
     if (!kind) continue;
-    if (!digits && !dayPart && !hoursWord && !['after', 'before'].includes(kind)) continue;
+    /*
+     * Цифры без части суток — забота gateway («после 18»). Кроме «в 8 часов»,
+     * «к 7 часам»: такого gateway не читает, а это и утро, и вечер — вопрос.
+     */
+    if (digits && !dayPart && !(((hoursWord && kind === 'exact') || kind === 'around') && Number(hourText) <= 11)) continue;
+    if (!digits && !dayPart && !hoursWord && !['after', 'before', 'around'].includes(kind)) continue;
     let hour = digits ? Number(hourText) : hourFromWord(hourText);
     if (hour === null || hour > 23 || dayPart === 'ночи') continue;
     if ((dayPart === 'вечера' && hour < 12) || (dayPart === 'дня' && hour >= 1 && hour <= 6)) hour += 12;
-    // «После шести» без части суток: в часах приёма это вечер, а не 6 утра; в понятых условиях видно «после 18:00».
-    if (!digits && !dayPart && hour >= 1 && hour <= 7) hour += 12;
-    // «Вечером, но не позже восьми» — восемь вечера: рядом сказано «вечер».
-    else if (!digits && !dayPart && hour >= 8 && hour <= 11 && /(?<!\p{L})(?:вечер|после\s+работы)/u.test(text) && !/(?<!\p{L})(?:утр|с\s+утра)/u.test(text)) hour += 12;
     // «Тысячи до четырёх» — цена, а не время.
     if (/тыс\p{L}*\s+$/u.test(text.slice(Math.max(0, match.index - 10), match.index))) continue;
+    if (!dayPart && (!digits || hoursWord || kind === 'around')) {
+      /*
+       * Час словами без части суток. «После шести» — 18:00 (в 6 утра
+       * клиники закрыты), «вечером, но не позже восьми» — 20:00. А «после
+       * семи», «до девяти», «в восемь часов» — и утро, и вечер: оба
+       * прочтения уходят в вопрос «утра или вечера?», а не выбираются молча.
+       */
+      const evening = /(?<!\p{L})(?:вечер|после\s+работы)/u.test(text);
+      const morning = /(?<!\p{L})(?:утр|с\s+утра)/u.test(text);
+      const clear = kind === 'after' ? hour <= 6 : kind === 'before' ? hour <= 7 : hour <= 6;
+      const doubtful = kind === 'after' ? hour === 7 || hour === 8 : kind === 'before' ? hour === 8 || hour === 9 : hour === 7 || hour === 8;
+      if (evening && hour <= 11) hour += 12;
+      else if (!morning && clear) hour += 12;
+      else if (!morning && doubtful) {
+        if (isNegatedBefore(text, match.index) && !/^не\s/u.test(preposition)) continue;
+        found.doubtful = found.doubtful || {};
+        found.doubtful[kind] = [`${String(hour).padStart(2, '0')}:${minutes}`, `${String(hour + 12).padStart(2, '0')}:${minutes}`];
+        continue;
+      }
+    }
     if (isNegatedBefore(text, match.index) && !/^не\s/u.test(preposition)) continue;
     // «Часов в пять», «в пять примерно» — это «около», а не ровно.
     const approximate = kind === 'exact'
@@ -598,6 +624,28 @@ const perDayWindows = (text, { excludeWeekdays = [], excludeDays = [] } = {}) =>
   const windowed = withWindows.filter((item) => item.window);
   if (windowed.length < 2 || new Set(windowed.map((item) => JSON.stringify(item.window))).size < 2) return null;
   return withWindows.slice(0, 7).map(({ value, window }) => ({ ...value, ...(window ? { from: window.from, to: window.to } : {}) }));
+};
+
+/**
+ * Согласует прочтения границ времени: «с 7 до 9» — утро с утром или вечер с
+ * вечером; «с 8 до 10» — только утро (до 22:00 клиники не работают).
+ * Одно прочтение — {from, to}; два — {ambiguity: [утро, вечер]}.
+ */
+export const combineTimeReadings = (afterReadings, beforeReadings) => {
+  const pairs = [];
+  for (const [afterIndex, from] of afterReadings.entries()) {
+    for (const [beforeIndex, to] of beforeReadings.entries()) {
+      if (afterReadings.length > 1 && beforeReadings.length > 1 && afterIndex !== beforeIndex) continue;
+      if (from && to && from >= to) continue;
+      if ((from && from >= '22:00') || (to && to > '22:00' && from)) continue;
+      pairs.push({ from, to });
+    }
+  }
+  const unique = [...new Map(pairs.map((pair) => [`${pair.from}|${pair.to}`, pair])).values()];
+  if (unique.length === 1) return unique[0];
+  // Противоречие («после 18 до 10») — как сказано: его покажет подбор.
+  if (unique.length === 0) return { from: afterReadings[0] || null, to: beforeReadings[0] || null };
+  return { ambiguity: unique.slice(0, 2) };
 };
 
 export const TIME_OF_DAY = Object.freeze({
@@ -866,7 +914,7 @@ const AFTER_HOURS = new RegExp(
 
 /* «У кого стаж побольше», «самого опытного», «поопытнее» — опытные первыми (не условие). */
 const PREFER_EXPERIENCE = new RegExp(
-  `(?<!${WORD})(?:(?:стаж|опыт)\\p{L}*\\s+(?:побольше|больше(?=\\s*(?:$|[,.;!?)]|(?:и|а|но|у|в|на|неважно|не)(?!\\p{L}))))|(?:с\\s+)?(?:большим|наибольшим|максимальным|самым\\s+большим)\\s+(?:стажем|опытом)|(?:самого|самый|самую|более|по)?\\s*опытн\\p{L}*\\s+${DOCTOR_NOUN}|поопытнее|с\\s+опытом\\s+побольше)`,
+  `(?<!${WORD})(?:(?:стаж|опыт)\\p{L}*\\s+(?:побольше|больше(?=\\s*(?:$|[,.;!?)]|(?:и|а|но|у|в|на|неважно|не)(?!\\p{L}))))|(?:с\\s+)?(?:большим|наибольшим|максимальным|самым\\s+большим)\\s+(?:стажем|опытом)|(?:самого|самый|самую|более|по)?\\s*опытн\\p{L}*\\s+${DOCTOR_NOUN}|поопытнее|с\\s+опытом\\s+побольше|(?:врач\\p{L}*|доктор\\p{L}*)\\s+(?:со\\s+стажем|с\\s+опытом)(?!\\s+(?:от|не|больше|более|свыше|минимум|хотя|лет|\\d)))`,
   'u',
 );
 
@@ -1053,11 +1101,31 @@ export const extractBookingConstraints = (text, { nested = false } = {}) => {
    * а не условие (и уж точно не «к мужчине», как читалось раньше).
    */
   const genderFallback = /(?<!\p{L})(?:если|а\s+если)\s+(?:\p{L}+\s+){0,2}?(?:врач\p{L}*[-\s]+)?(женщин|мужчин)\p{L}*\s+(?:нет|не\s+будет|не\s+найд\p{L}*|никого|не\s+окажется|не\s+принима\p{L}*)/u.exec(lower);
-  const genderAllowed = /(?<!\p{L})(?:но|а|или)\s+можно\s+(?:и\s+)?(?:к\s+)?(?:врач\p{L}*[-\s]+)?(мужчин|женщин)\p{L}*/u.exec(lower);
-  if (genderFallback || (genderAllowed && (result.doctorGender || result.preferGender))) {
-    const preferred = genderFallback ? (genderFallback[1] === 'женщин' ? 'female' : 'male') : (genderAllowed[1] === 'женщин' ? 'male' : 'female');
+  const genderAllowed = /(?<!\p{L})(?:(?:но|а|или|да,?|ладно,?|хорошо,?|ок,?)\s+)?(?:можно|давай(?:те)?|пусть)\s+(?:и\s+)?(?:к\s+)?(?:врач\p{L}*[-\s]+)?(мужчин|женщин)\p{L}*|(?<!\p{L})(мужчин|женщин)\p{L}*\s+тоже\s+(?:можно|подойд\p{L}*|пойд\p{L}*|нормально)/u.exec(lower);
+  if (genderFallback) {
     delete result.doctorGender;
-    result.preferGender = preferred;
+    result.preferGender = genderFallback[1] === 'женщин' ? 'female' : 'male';
+  } else if (genderAllowed) {
+    /*
+     * «Лучше женщина, но можно и мужчина» — пожелание «женщина»; «да, можно и
+     * к мужчине» отдельной репликой — согласие снять прежнее «только женщина».
+     */
+    const allowed = (genderAllowed[1] || genderAllowed[2]) === 'женщин' ? 'female' : 'male';
+    const rest = `${lower.slice(0, genderAllowed.index)} ${lower.slice(genderAllowed.index + genderAllowed[0].length)}`;
+    const other = lastAffirmed(rest, GENDER_PATTERNS) || (/(?<!\p{L})(?:лучше|желательно)[\s,]+(?:чтобы\s+)?(?:был[аи]?\s+)?(женщин|мужчин)/u.exec(rest)?.[1] === 'женщин' ? 'female'
+      : /(?<!\p{L})(?:лучше|желательно)[\s,]+(?:чтобы\s+)?(?:был[аи]?\s+)?мужчин/u.test(rest) ? 'male' : null);
+    delete result.doctorGender;
+    delete result.preferGender;
+    if (other && other !== allowed) result.preferGender = other;
+    else result.genderAlsoOk = allowed;
+  }
+  /*
+   * Короткая реплика в диалоге — «мужчина», «лучше женщину», «а вот мужчина
+   * обязательно»: о враче (пациент о себе так отдельной репликой не пишет).
+   */
+  if (!result.doctorGender && !result.preferGender && !result.genderAlsoOk) {
+    const bare = /^[\s,.!?]*(?:(?:а|и|да|ну|вот|только|нет,?)\s+)*(?:(лучше|желательно|предпочтительно)\s+)?(?:врач\p{L}*[-\s]+)?(?:к\s+)?(мужчин|женщин)\p{L}*(?:\s+(?:обязательно|только|строго|нужн\p{L}*))?[\s,.!?]*$/u.exec(lower);
+    if (bare) result[bare[1] ? 'preferGender' : 'doctorGender'] = bare[2] === 'женщин' ? 'female' : 'male';
   }
   if (/(?<![\p{L}])пол\s+врача\s+(?:не\s+важен|неважен)|(?:неважно|не\s+важно|без\s+разницы)[,\s]+(?:мужчина\s+или\s+женщина|женщина\s+или\s+мужчина)/u.test(lower)) result.genderAny = true;
 
@@ -1130,6 +1198,27 @@ export const extractBookingConstraints = (text, { nested = false } = {}) => {
   const spoken = spokenTimes(lower);
   if (spoken.after) result.spokenAfter = spoken.after;
   if (spoken.before) result.spokenBefore = spoken.before;
+  if (spoken.doubtful) {
+    // «С семи до девяти» — прочтения согласуются; однозначное остаётся условием, двусмысленное — вопросом.
+    const plus = (clock) => plusMinute(clock);
+    const shift = (clock, delta) => {
+      const total = Math.min(Math.max(Number(clock.slice(0, 2)) * 60 + Number(clock.slice(3)) + delta, 0), 1439);
+      return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+    };
+    const combined = spoken.doubtful.exact
+      ? { ambiguity: spoken.doubtful.exact.map((clock) => ({ from: clock, to: plus(clock) })) }
+      : spoken.doubtful.around
+        ? { ambiguity: spoken.doubtful.around.map((clock) => ({ from: shift(clock, -30), to: shift(clock, 31) })) }
+        : combineTimeReadings(spoken.doubtful.after || [result.spokenAfter || null], spoken.doubtful.before || [result.spokenBefore || null]);
+    if (combined.ambiguity) {
+      result.timeAmbiguity = combined.ambiguity;
+      delete result.spokenAfter;
+      delete result.spokenBefore;
+    } else {
+      if (combined.from) result.spokenAfter = combined.from;
+      if (combined.to) result.spokenBefore = combined.to;
+    }
+  }
   if (spoken.exact && !result.timeExact && !result.timeAround) result.timeExact = spoken.exact;
   if (spoken.around && !result.timeAround) {
     result.timeAround = spoken.around;
@@ -1243,6 +1332,8 @@ export const extractBookingConstraints = (text, { nested = false } = {}) => {
       const seen = new Set();
       const unique = options.filter((value) => !seen.has(JSON.stringify(value)) && seen.add(JSON.stringify(value)));
       if (flat(first).length > 0 && flat(second).length > 0 && unique.length > 1) result.date = { kind: 'any_of', options: unique.slice(0, 7) };
+      // «А если сегодня никого — то завтра» отдельной репликой: запасной день к прежнему.
+      else if (flat(first).length === 0 && flat(second).length > 0) result.dateFallback = true;
     }
   }
   /* «В четверг после 15:30, а в пятницу до обеда» — у каждого дня своё окно. */
@@ -1304,7 +1395,53 @@ export const extractBookingConstraints = (text, { nested = false } = {}) => {
   if (findTrigger(lower, 'повторн') === 'affirmed') result.visit = 'repeat';
   else if (findTrigger(lower, 'первичн', 'перв\\p{L}*\\s+при[её]м') === 'affirmed') result.visit = 'first';
 
-  if (/(?<![\p{L}])(?:в\s+любое\s+время|время\s+(?:не\s+важно|неважно|любое)|неважно\s+во\s+сколько|в\s+любое\s+время\s+дня)/u.test(lower)) {
+  /* Ответы на уточнения и согласия следующей репликой: «вечера», «ближайшую», «давай платно», «возраст не важен». */
+  /*
+   * Короткий ответ на уточнение — вся реплика и есть ответ: «вечера», «да,
+   * утром», «ближайшую», «через неделю». Он выбирает одно из прочтений
+   * прошлого запроса, а не добавляет новое условие.
+   */
+  const FILLER = '(?:(?:да|нет|ну|ок|окей|ладно|хорошо|конечно|давай(?:те)?|лучше|наверное|скорее|пожалуйста|это|в|на|а|можно|тогда)[\\s,!.?]*)*';
+  const dayPart = new RegExp(`^[\\s,!.]*${FILLER}(?:\\d{1,2}\\s+)?(утра|утром|с\\s+утра|вечера|вечером|дн[её]м|после\\s+обеда)[\\s,!.?]*${FILLER}$`, 'u').exec(lower);
+  if (dayPart) result.dayPartAnswer = /^(?:утр|с\s+утра)/u.test(dayPart[1]) ? 'am' : 'pm';
+  const weekPart = new RegExp(`^[\\s,!.]*${FILLER}(ближайш\\p{L}*|эт(?:у|а|от|ой)|следующ\\p{L}*|через\\s+неделю|не\\s+эт\\p{L}*)(?:\\s+\\p{L}+)?[\\s,!.?]*$`, 'u').exec(lower);
+  // С названным днём («в следующую среду») или неделей это не ответ, а новый день.
+  if (weekPart && !/(?:недел[еия]|понедельник|вторник|сред|четверг|пятниц|суббот|воскресен)/u.test(lower.replace(/через\s+неделю/u, ''))) {
+    result.weekAnswer = /^(?:ближайш|эт)/u.test(weekPart[1]) ? 'this' : 'next';
+  }
+  const clearUnsupported = [
+    ['doctor_age', /(?<!\p{L})(?:возраст\p{L}*(?:\s+врача)?\s+(?:не\s+важ\p{L}*|неваж\p{L}*|любой)|без\s+уч[её]та\s+возраста|любого\s+возраста)/u],
+    ['anonymous', /(?<!\p{L})(?:можно\s+не\s+анонимно|анонимн\p{L}*\s+(?:не\s+(?:важн|нужн|обязательн)\p{L}*|неважн\p{L}*)|не\s+анонимно)/u],
+    ['rating', /(?<!\p{L})(?:(?:отзыв|рейтинг)\p{L}*\s+(?:не\s+важн\p{L}*|неважн\p{L}*)|без\s+(?:отзывов|рейтинга))/u],
+    ['certificate', /(?<!\p{L})(?:без\s+справки|справк\p{L}*\s+(?:не\s+нужн\p{L}*|не\s+надо))/u],
+    ['multi_patient', /(?<!\p{L})(?:по\s+одному|(?:одну|одна)\s+запис\p{L}*|сначала\s+(?:одного|одну))/u],
+  ].filter(([, pattern]) => pattern.test(lower)).map(([key]) => key);
+  if (clearUnsupported.length > 0) result.clearUnsupported = clearUnsupported;
+  // Ответ на «поставьте точку или подтвердите, что вы там»: «я сейчас дома», «считай от меня».
+  if (/(?<!\p{L})(?:(?:я|мы)\s+)?(?:сейчас|уже)\s+(?:там|дома|на\s+работе|здесь|тут|в\s+офисе)|(?:считай(?:те)?|считать)\s+от\s+(?:меня|моей\s+точки|текущ\p{L}*\s+(?:места|точки))|от\s+моего\s+(?:местоположения|места)|по\s+(?:моей\s+)?геолокации/u.test(lower)) result.originHere = true;
+  // Ответ на «выберите программу ДМС» одним словом: «премиум», «у меня стандарт».
+  const planAnswer = /^[\s,.!]*(?:(?:у\s+меня|программа|давай(?:те)?|да,?|полис)\s+)?(basic|standard|premium|базов\p{L}*|стандарт\p{L}*|премиум\p{L}*)[\s.!]*$/u.exec(lower);
+  if (planAnswer && !result.planId) result.planAnswer = /^(?:basic|базов)/u.test(planAnswer[1]) ? 'demo-basic' : /^(?:standard|стандарт)/u.test(planAnswer[1]) ? 'demo-standard' : 'demo-premium';
+  // «А подешевле?», «недорого» без суммы — дешёвые первыми, а не придуманный потолок.
+  if (/(?<!\p{L})(?:подешевле|недорог\p{L}*|бюджетн\p{L}*|подешевл\p{L}*|самый\s+дешёв\p{L}*|самый\s+дешев\p{L}*|подешевше)(?!\p{L})/u.test(lower) && !Number.isInteger(result.maxPrice)) result.preferCheap = true;
+  // «А просто консультация?», «обычный приём» — без процедуры, первичный приём.
+  if (/(?<!\p{L})(?:(?:просто|обычн\p{L}*)\s+(?:консультаци\p{L}*|при[её]м\p{L}*)|без\s+процедур\p{L}*|только\s+консультаци\p{L}*)/u.test(lower) && !result.serviceId) result.serviceClear = true;
+  // «И в выходные тоже можно» — выходные в добавление к будням, а не вместо них.
+  if (/(?<!\p{L})(?:и\s+)?(?:в|на)\s+выходн\p{L}*\s+(?:тоже|также)(?:\s+(?:можно|подойд\p{L}*|норм\p{L}*))?|(?:можно|подойд\p{L}*)\s+и\s+(?:в|на)\s+выходн\p{L}*/u.test(lower)) {
+    result.alsoWeekend = true;
+    delete result.explicitWeekend;
+    if (result.date?.kind === 'weekend') delete result.date;
+  }
+  // «Или в пятницу?», «или на 14:00» отдельной репликой — ещё один вариант к прежнему, а не замена.
+  if (/^[\s,]*(?:или|либо|а\s+ещё|а\s+еще|можно\s+и)(?!\p{L})|(?<!\p{L})тоже\s+(?:можно|подойд\p{L}*|пойд\p{L}*)(?!\p{L})/u.test(lower)) result.alsoOption = true;
+  // «А взрослому?», «для взрослого» — взрослый приём.
+  if (/(?<!\p{L})(?:взросл(?:ому|ого|ый|ая|ой)|для\s+взрослых)(?!\s+(?:реб[её]н|сын|доч))(?!\p{L})/u.test(lower)
+    && !/(?<!\p{L})(?:реб[её]н\p{L}*|сын\p{L}*|доч\p{L}*|малыш\p{L}*|подрост\p{L}*|детск\p{L}*)/u.test(lower)) result.adult = true;
+  // «Запиши меня к первому», «давай второй вариант» — запись делается кнопкой в карточке, не текстом.
+  if (/(?<!\p{L})(?:к\s+)?(?:перв|втор|трет|четв[её]рт|пят)\p{L}*\s+(?:вариант|врач\p{L}*|доктор\p{L}*|из\s+списка)|(?:запиши|запишите|записать|оформи)\p{L}*\s+(?:меня\s+)?(?:к\s+)?(?:первому|второму|третьему|нему|ней|этому|этой)(?!\p{L})|(?:беру|выбираю)\s+(?:перв|втор|трет)\p{L}*/u.test(lower)) result.pickOption = true;
+  if (/(?<!\p{L})(?:можно\s+(?:и\s+)?платно|(?:давай(?:те)?|ладно,?|хорошо,?)\s+(?:и\s+)?платно|платно\s+тоже\s+(?:можно|подойд\p{L}*)|готов\p{L}*\s+(?:и\s+)?(?:за)?платить)/u.test(lower)) result.allowPaid = true;
+  if (/(?<!\p{L})(?:(?:стаж|опыт)\p{L}*\s+(?:не\s+важ\p{L}*|неваж\p{L}*|любой)|без\s+(?:требовани\p{L}*\s+(?:к|по)\s+)?стаж\p{L}*)/u.test(lower)) result.experienceAny = true;
+  if (/(?<![\p{L}])(?:в\s+любое\s+время|(?:давай(?:те)?|можно|ладно,?)\s+любое\s+время|без\s+ограничени\p{L}*\s+по\s+времени|время\s+(?:не\s+важно|неважно|любое)|неважно\s+во\s+сколько|в\s+любое\s+время\s+дня)/u.test(lower)) {
     result.timeAny = true;
   }
   if (/(?<![\p{L}])(?:неважно|не\s+важно|без\s+разницы)\s+(?:сколько\s+ехать|как\s+далеко|далеко)|можно\s+(?:и\s+)?подальше|расстояние\s+не\s+важно/u.test(lower)) {
@@ -1362,6 +1499,11 @@ export const mergeBookingTurns = (turns) => {
     preferMinExperience: null,
     preferDistricts: [],
     adult: false,
+    pendingTime: null,
+    busyFrom: null,
+    originConfirmed: false,
+    preferCheap: false,
+    pickOption: false,
     timeWindows: null,
     excludeDays: [],
     afterHours: null,
@@ -1369,7 +1511,65 @@ export const mergeBookingTurns = (turns) => {
     bookingIntent: false,
   };
 
-  for (const { booking = {}, constraints = {} } of turns) {
+  for (const turn of turns) {
+    let booking = turn.booking || {};
+    let constraints = turn.constraints || {};
+    const explicitTime = Boolean(booking.timeExact || booking.timeAround || booking.spokenAfter || booking.spokenBefore || booking.timeWindows || booking.dayWindows
+      || booking.timeAmbiguity || constraints.availableAfter || constraints.availableBefore || constraints.timeAmbiguity);
+    /*
+     * Ответ на уточнение — продолжение прошлого запроса: «после 7» →
+     * «утра или вечера?» → «вечера». Короткий ответ не становится новым
+     * условием «вечером», а выбирает одно из двух прочтений.
+     */
+    if (merged.pendingTime && booking.dayPartAnswer && !explicitTime) {
+      const reading = merged.pendingTime[booking.dayPartAnswer === 'am' ? 0 : 1];
+      merged.timeFrom = reading.from;
+      merged.timeTo = reading.to;
+      merged.pendingTime = null;
+      booking = { ...booking };
+      constraints = { ...constraints };
+      delete booking.timeOfDay;
+      delete constraints.evening;
+    }
+    // «В следующую пятницу» → «ближайшая или через неделю?» → «ближайшую».
+    const weekAnswer = booking.weekAnswer || (booking.date?.kind === 'this_week' ? 'this' : booking.date?.kind === 'next_week' ? 'next' : null);
+    const weekAnswerable = merged.date?.askWeek || (booking.weekAnswer && merged.date
+      && (['this_week', 'next_week'].includes(merged.date.kind) || (merged.date.kind === 'weekday' && merged.date.week)));
+    if (weekAnswerable && weekAnswer
+      && (!booking.date || ['this_week', 'next_week'].includes(booking.date.kind) || (booking.weekAnswer && booking.date.kind === 'in_days'))) {
+      // «На следующей неделе» → «а можно в эту?» — та же неделя-вопрос, другой ответ.
+      merged.date = merged.date.kind === 'weekday'
+        ? { kind: 'weekday', weekday: merged.date.weekday, week: weekAnswer }
+        : { kind: weekAnswer === 'this' ? 'this_week' : 'next_week' };
+      booking = { ...booking };
+      delete booking.date;
+      // «Ближайшую» здесь — о дне, а не «поближе по расстоянию».
+      constraints = { ...constraints };
+      delete constraints.selection;
+    }
+    const SIMPLE_KINDS = ['today', 'tomorrow', 'after_tomorrow', 'weekday', 'date'];
+    // «Или на 14:00» после «на 13:30» — оба времени.
+    if (booking.alsoOption && (booking.timeExact || booking.timeAround) && merged.timeFrom && merged.timeTo) {
+      const previous = merged.timeWindows || [{ from: merged.timeFrom, to: merged.timeTo }];
+      const [hours, minutes] = (booking.timeExact || booking.timeAround).split(':').map(Number);
+      const at = hours * 60 + minutes;
+      const asText = (value) => `${String(Math.floor(Math.min(Math.max(value, 0), 1439) / 60)).padStart(2, '0')}:${String(Math.min(Math.max(value, 0), 1439) % 60).padStart(2, '0')}`;
+      const added = booking.timeExact ? { from: asText(at), to: asText(at + 1) } : { from: asText(at - 30), to: asText(at + 31) };
+      booking = { ...booking, timeWindows: [...previous, added].slice(0, 3) };
+      delete booking.timeExact;
+      delete booking.timeAround;
+    }
+    if ((booking.dateFallback || booking.alsoOption) && booking.date && SIMPLE_KINDS.includes(booking.date.kind)
+      && merged.date && (SIMPLE_KINDS.includes(merged.date.kind) || merged.date.kind === 'any_of')) {
+      const previous = merged.date.kind === 'any_of' ? merged.date.options : [merged.date];
+      merged.date = { kind: 'any_of', options: [...previous, booking.date].slice(0, 7) };
+      booking = { ...booking };
+      delete booking.date;
+    }
+    // «На этой неделе» → «тогда в четверг»: четверг той же недели, а не просто ближайший.
+    if (booking.date?.kind === 'weekday' && !booking.date.week && ['this_week', 'next_week'].includes(merged.date?.kind)) {
+      booking = { ...booking, date: { ...booking.date, week: merged.date.kind === 'this_week' ? 'this' : 'next' } };
+    }
     if ('date' in booking) {
       merged.date = booking.date;
       // «В любой день» снимает и «в выходные», и «в будни», и исключённые дни.
@@ -1389,6 +1589,8 @@ export const mergeBookingTurns = (turns) => {
     if (booking.workdays) {
       merged.workdays = true;
       merged.weekend = false;
+      // «В выходные» → «а в будни?»: прежний день «выходные» снимается вместе с фильтром.
+      if (merged.date?.kind === 'weekend' && !('date' in booking)) merged.date = null;
     }
     if (booking.districtAny) {
       merged.districts = [];
@@ -1428,6 +1630,17 @@ export const mergeBookingTurns = (turns) => {
       merged.unsupported = merged.unsupported.filter((key) => !consented.includes(key));
     }
     if (booking.preferExperience) merged.preferExperience = true;
+    // Согласие словами: «возраст не важен», «можно не анонимно», «без справки».
+    if (booking.clearUnsupported) merged.unsupported = merged.unsupported.filter((key) => !booking.clearUnsupported.includes(key));
+    if (booking.experienceAny) {
+      merged.minExperience = null;
+      merged.preferMinExperience = null;
+    }
+    // «Да, можно и к мужчине» после «только женщина» — пол становится пожеланием.
+    if (booking.genderAlsoOk && merged.doctorGender && merged.doctorGender !== booking.genderAlsoOk) {
+      merged.preferGender = merged.doctorGender;
+      merged.doctorGender = null;
+    }
     if (booking.preferMinExperience) {
       merged.preferMinExperience = booking.preferMinExperience;
       merged.minExperience = null;
@@ -1441,7 +1654,16 @@ export const mergeBookingTurns = (turns) => {
     // Новый день или время снимают «через час» прошлой реплики.
     else if ('date' in booking || booking.timeExact || booking.timeAround || constraints.availableAfter || booking.spokenAfter) merged.afterHours = null;
     if (booking.planId) merged.planId = booking.planId;
-    if (booking.originHint) merged.originHint = booking.originHint;
+    if (booking.originHint) {
+      merged.originHint = booking.originHint;
+      merged.originConfirmed = false;
+    }
+    if (booking.originHere) merged.originConfirmed = true;
+    if (booking.planAnswer) merged.planId = booking.planAnswer;
+    if (booking.preferCheap) merged.preferCheap = true;
+    if ('maxPrice' in booking && booking.maxPrice) merged.preferCheap = false;
+    // «Запиши к первому» — только в этой реплике: следующая — уже о другом.
+    merged.pickOption = Boolean(booking.pickOption);
 
     // «К другому врачу» — не к тому, что был назван.
     if (booking.doctorOther && !booking.doctorIds?.length && merged.doctorIds.length > 0) {
@@ -1477,6 +1699,10 @@ export const mergeBookingTurns = (turns) => {
     if (booking.serviceId) {
       merged.serviceId = booking.serviceId;
       merged.procedureSpecialty = booking.procedureSpecialty;
+    }
+    if (booking.serviceClear) {
+      merged.serviceId = null;
+      merged.procedureSpecialty = null;
     }
 
     if (booking.timeAny) {
@@ -1519,6 +1745,7 @@ export const mergeBookingTurns = (turns) => {
       if (!booking.spokenAfter && !constraints.availableAfter && merged.timeFrom && merged.timeFrom >= booking.spokenBefore) merged.timeFrom = null;
     }
     if (booking.afterWork) merged.evening = true;
+    if (booking.busyUntil && booking.spokenAfter) merged.busyFrom = booking.spokenAfter;
     if (booking.nearPlace) merged.nearest = true;
     // «Работаю до 18» — не граница «до 18», которую мог прочитать gateway в той же реплике.
     if (booking.busyUntil && constraints.availableBefore && !booking.spokenBefore) merged.timeTo = null;
@@ -1537,11 +1764,45 @@ export const mergeBookingTurns = (turns) => {
     // «В субботу 16 октября»: «суббота» здесь — проверка даты, а не отдельное «в выходные».
     // «В пятницу 16-го или в субботу 17-го»: суббота — один из названных дней, а не «только выходные».
     const datedDays = booking.date && ['date', 'any_of', 'range'].includes(booking.date.kind) && !booking.explicitWeekend;
-    if (constraints.weekend && !booking.workdays && !booking.date?.expectWeekday && !booking.suppressWeekend && !datedDays) {
+    if (constraints.weekend && !booking.workdays && !booking.date?.expectWeekday && !booking.suppressWeekend && !datedDays && !booking.alsoWeekend) {
       merged.weekend = true;
       merged.workdays = false;
     }
 
+    /*
+     * «После 7», «до 9» без «утра/вечера» — не выбираем: прежнее условие на
+     * время заменяется вопросом, ответ придёт следующей репликой или кнопкой.
+     */
+    const ambiguity = booking.timeAmbiguity || constraints.timeAmbiguity;
+    if (ambiguity && !booking.timeWindows && !booking.dayWindows && !booking.busyUntil) {
+      merged.pendingTime = ambiguity;
+      merged.timeFrom = null;
+      merged.timeTo = null;
+      merged.evening = false;
+    } else if (explicitTime || booking.timeAny || booking.timeOfDay) {
+      merged.pendingTime = null;
+    }
+    /*
+     * «Работаю до 19» → «и в выходные тоже можно»: будни — после 19:00,
+     * выходные — в любое время. Раньше получалось «только выходные после 19».
+     */
+    if (booking.alsoWeekend) {
+      const from = merged.busyFrom && merged.timeFrom === merged.busyFrom ? merged.busyFrom : null;
+      if (from || merged.workdays) {
+        merged.date = {
+          kind: 'any_of',
+          options: [1, 2, 3, 4, 5].map((weekday) => ({ kind: 'weekday', weekday, ...(from ? { from, to: merged.timeTo } : {}) }))
+            .concat([{ kind: 'weekday', weekday: 6 }, { kind: 'weekday', weekday: 7 }]),
+        };
+        merged.timeFrom = null;
+        merged.timeTo = null;
+        merged.workdays = false;
+        merged.weekend = false;
+        booking = { ...booking, dayWindows: Boolean(from) };
+      } else {
+        merged.workdays = false;
+      }
+    }
     // У каждого дня своё окно — общие границы этой реплики не действуют.
     if (booking.dayWindows) {
       merged.timeFrom = null;
@@ -1567,6 +1828,8 @@ export const mergeBookingTurns = (turns) => {
       merged.timeWindows = null;
     }
 
+    // «Можно и платно» после «по ДМС» — ДМС становится пожеланием: покрытые первыми.
+    if (booking.allowPaid && merged.dms === true) merged.preferDms = true;
     if (booking.dms === false) merged.dms = false;
     else if (booking.dms === true || constraints.dmsOnly) merged.dms = true;
 

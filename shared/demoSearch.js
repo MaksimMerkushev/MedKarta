@@ -110,14 +110,19 @@ export const withoutDayWindow = (option) => {
   return copy;
 };
 
-const normalizeSimpleDate = (input, { windows = false } = {}) => {
+const normalizeSimpleDate = (input, { windows = false, top = false } = {}) => {
   if (!input || typeof input !== 'object' || !SIMPLE_DATE_KINDS.includes(input.kind)) return null;
   const window = windows ? dayWindowOf(input) : {};
   if (input.kind === 'weekday') {
     const weekday = Number(input.weekday);
     if (!Number.isInteger(weekday) || weekday < 1 || weekday > 7) return null;
-    // «На следующей неделе в понедельник» — день этой или следующей недели, а не просто ближайший.
-    return ['this', 'next'].includes(input.week) ? { kind: 'weekday', weekday, week: input.week, ...window } : { kind: 'weekday', weekday, ...window };
+    /*
+     * «На следующей неделе в понедельник» — день этой или следующей недели.
+     * «В следующую пятницу», сказанное раньше пятницы, — вопрос (askWeek):
+     * ближайшая или через неделю — подбор не выбирает за пользователя.
+     */
+    const ask = top && input.week === 'next' && input.askWeek === true ? { askWeek: true } : {};
+    return ['this', 'next'].includes(input.week) ? { kind: 'weekday', weekday, week: input.week, ...ask, ...window } : { kind: 'weekday', weekday, ...window };
   }
   if (input.kind === 'date') return typeof input.day === 'string' && DAY.test(input.day) ? { kind: 'date', day: input.day, ...window } : null;
   return { kind: input.kind, ...window };
@@ -171,6 +176,8 @@ export const normalizeSearchRequest = (raw = {}) => {
   const fallbacks = uniqueList(input.fallbacks, (item) => Object.hasOwn(CONSENTED_FALLBACKS, item) && !unsupported.includes(item), 3);
   // «У кого стаж побольше» — опытные первыми; условием не становится.
   const preferExperience = input.preferExperience === true;
+  // «Подешевле», «недорого» без суммы — дешёвые первыми, потолок цены не выдумывается.
+  const preferCheap = input.preferCheap === true;
   const originHint = Object.hasOwn(ORIGIN_HINTS, input.originHint) ? input.originHint : null;
   // Точку для названного места пользователь подтвердил сам (поставил на карте / «я там»).
   const originConfirmed = input.originConfirmed === true;
@@ -188,7 +195,7 @@ export const normalizeSearchRequest = (raw = {}) => {
   const dateInput = input.date && typeof input.date === 'object' ? input.date : { kind: 'any' };
   let singleWindow = null;
   let date = { kind: DATE_KINDS.includes(dateInput.kind) ? dateInput.kind : 'any' };
-  if (date.kind === 'weekday') date = normalizeSimpleDate(dateInput) || { kind: 'any' };
+  if (date.kind === 'weekday') date = normalizeSimpleDate(dateInput, { top: true }) || { kind: 'any' };
   if (date.kind === 'date') {
     date = typeof dateInput.day === 'string' && DAY.test(dateInput.day) ? { kind: 'date', day: dateInput.day } : { kind: 'any' };
   }
@@ -233,6 +240,14 @@ export const normalizeSearchRequest = (raw = {}) => {
     : [];
   // «Кроме завтра», «сегодня не могу» — исключённые даты.
   const excludeDates = uniqueList(input.excludeDates, (item) => DAY.test(item), 7);
+  /*
+   * «После 7», «до 9» без «утра/вечера» — два прочтения (утро и вечер).
+   * Подбор не выбирает: спрашивает, а ответ («вечера» или кнопка) ставит одно.
+   */
+  const timeChoice = Array.isArray(input.timeChoice) && input.timeChoice.length === 2
+    && input.timeChoice.every((item) => item && typeof item === 'object' && (TIME.test(item.from || '') || TIME.test(item.to || '')))
+    ? input.timeChoice.map((item) => ({ from: TIME.test(item.from || '') ? item.from : null, to: TIME.test(item.to || '') ? item.to : null }))
+    : [];
   const evening = input.evening === true;
   // «В будни» и «в выходные» — фильтр поверх дня; вместе не бывают, побеждает будни.
   const workdays = input.workdays === true;
@@ -268,8 +283,8 @@ export const normalizeSearchRequest = (raw = {}) => {
   return {
     request: {
       specialty, specialtyAny, doctorIds, excludeDoctorIds, branchIds, excludeBranchIds, districts, preferDistricts, excludeDistricts, serviceId, visit, patient,
-      minExperience, preferMinExperience, doctorGender, preferGender, preferExperience, excludeWeekdays, excludeDates, preferTime, wheelchair, parking, fallbacks,
-      date, timeFrom: timeWindows.length > 0 ? null : timeFrom, timeTo: timeWindows.length > 0 ? null : timeTo, timeWindows, evening, weekend, workdays, maxPrice, dms, travel, origin, originHint, originConfirmed, city, unsupported, limit,
+      minExperience, preferMinExperience, doctorGender, preferGender, preferExperience, preferCheap, excludeWeekdays, excludeDates, preferTime, wheelchair, parking, fallbacks,
+      date, timeFrom: timeWindows.length > 0 ? null : timeFrom, timeTo: timeWindows.length > 0 ? null : timeTo, timeWindows, timeChoice, evening, weekend, workdays, maxPrice, dms, travel, origin, originHint, originConfirmed, city, unsupported, limit,
     },
     errors,
   };
@@ -288,12 +303,28 @@ const describeSimpleDate = (date) => {
   if (date.kind === 'today') return `сегодня${describeDayWindow(date)}`;
   if (date.kind === 'tomorrow') return `завтра${describeDayWindow(date)}`;
   if (date.kind === 'after_tomorrow') return `послезавтра${describeDayWindow(date)}`;
+  if (date.kind === 'weekday' && date.askWeek) {
+    const nearest = [3, 5, 6].includes(date.weekday) ? 'ближайшую' : date.weekday === 7 ? 'ближайшее' : 'ближайший';
+    return `${date.weekday === 2 ? 'во' : 'в'} ${WEEKDAYS_ACC[date.weekday]} — ${nearest} или через неделю (уточните)`;
+  }
   if (date.kind === 'weekday') {
     const prefix = date.week === 'next' ? 'на следующей неделе ' : date.week === 'this' ? 'на этой неделе ' : '';
     return `${prefix}${date.weekday === 2 ? 'во' : 'в'} ${WEEKDAYS_ACC[date.weekday]}${describeDayWindow(date)}`;
   }
   if (date.kind === 'date') return `${date.day.split('-').reverse().join('.')}${describeDayWindow(date)}`;
   return null;
+};
+
+/** Окно времени словами: «после 19:00», «до 09:00», «с 07:00 до 09:00», «ровно в 20:00». */
+export const describeTimeWindow = (item) => {
+  const minutes = (time) => Number(time.slice(0, 2)) * 60 + Number(time.slice(3));
+  if (item.from && item.to && minutes(item.to) - minutes(item.from) === 1) return `ровно в ${item.from}`;
+  if (item.from && item.to && minutes(item.to) - minutes(item.from) === 61) {
+    const middle = minutes(item.from) + 30;
+    return `около ${String(Math.floor(middle / 60)).padStart(2, '0')}:${String(middle % 60).padStart(2, '0')}`;
+  }
+  if (item.from && item.to) return `с ${item.from} до ${item.to}`;
+  return item.from ? `после ${item.from}` : `до ${item.to}`;
 };
 
 const yearsGenitive = (count) => (count % 10 === 1 && count % 100 !== 11 ? 'года' : 'лет');
@@ -338,6 +369,7 @@ export const describeRequest = (request, {
   if (request.minExperience) parts.push(`стаж от ${request.minExperience} ${yearsGenitive(request.minExperience)}`);
   if (request.preferMinExperience) parts.push(`желательно стаж от ${request.preferMinExperience} ${yearsGenitive(request.preferMinExperience)} (такие — первыми)`);
   if (request.preferExperience) parts.push('сначала — врачи с большим стажем');
+  if (request.preferCheap) parts.push('сначала — дешевле');
   if (request.serviceId) parts.push(SERVICE_BY_ID[request.serviceId]?.name || 'процедура');
   else if (request.visit === 'procedure') parts.push('процедура или обследование');
   if (request.visit === 'repeat') parts.push('повторный приём');
@@ -346,7 +378,21 @@ export const describeRequest = (request, {
   // Названный день недели показываем рядом с датой и только если он с ней расходится.
   const mismatch = date.expectWeekday && !(date.day && weekdayOfDay(date.day) === date.expectWeekday);
   if (simple) parts.push(mismatch ? `${simple} (вы указали ${WEEKDAYS_ACC[date.expectWeekday]})` : simple);
-  if (date.kind === 'any_of') {
+  // «Будни после 19:00 или выходные»: дни недели с одинаковым окном — одной группой.
+  const plainWeekdays = date.kind === 'any_of' && date.options.length > 3 && date.options.every((option) => option.kind === 'weekday' && !option.week);
+  if (plainWeekdays) {
+    const groups = new Map();
+    for (const option of date.options) {
+      const key = `${option.from || ''}|${option.to || ''}`;
+      groups.set(key, [...(groups.get(key) || []), option]);
+    }
+    parts.push([...groups.values()].map((group) => {
+      const days = group.map((option) => option.weekday).sort().join(',');
+      const label = days === '1,2,3,4,5' ? 'в будни' : days === '6,7' ? 'в выходные'
+        : group.map((option) => `${option.weekday === 2 ? 'во' : 'в'} ${WEEKDAYS_ACC[option.weekday]}`).join(', ');
+      return `${label}${describeDayWindow(group[0])}`;
+    }).join(' или '));
+  } else if (date.kind === 'any_of') {
     const sharedWeek = date.options.every((option) => option.week && option.week === date.options[0].week) ? date.options[0].week : null;
     const options = date.options.map((option) => describeSimpleDate(sharedWeek ? { ...option, week: undefined } : option));
     if (sharedWeek) parts.push(sharedWeek === 'next' ? 'на следующей неделе' : 'на этой неделе');
@@ -372,6 +418,9 @@ export const describeRequest = (request, {
   const width = request.timeFrom && request.timeTo ? minutes(request.timeTo) - minutes(request.timeFrom) : null;
   const clock = (value) => `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`;
   // «На 17:30» — окно в минуту, «около 18:00» — ±30 минут: так и пишем, а не «с 17:30 до 17:31».
+  if (request.timeChoice?.length === 2) {
+    parts.push(`время: ${request.timeChoice.map((item) => describeTimeWindow(item)).join(' или ')} (уточните)`);
+  }
   if (request.timeWindows?.length) {
     const windowText = (item) => {
       const span = item.from && item.to ? minutes(item.to) - minutes(item.from) : null;

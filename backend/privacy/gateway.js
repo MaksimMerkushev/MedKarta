@@ -41,8 +41,8 @@ import {
 import { decideGatewayPolicy, POLICY, POLICY_VERSION } from './policies.js';
 import { FAIL_CLOSED_REASON, GATEWAY_DECISION, mintSanitizedPlannerRequest } from './models.js';
 import { SPECIALTY_CANON } from './catalog.js';
-import { extractBookingConstraints, mergeBookingTurns } from './bookingConstraints.js';
-import { demoRefsOf } from './demoRefs.js';
+import { combineTimeReadings, extractBookingConstraints, mergeBookingTurns } from './bookingConstraints.js';
+import { branchesOnStreet, demoRefsOf } from './demoRefs.js';
 import { findUnknownSpecialties } from './unknownSpecialties.js';
 import {
   checkClosedVocabulary,
@@ -53,6 +53,15 @@ import {
 } from './vocabulary.js';
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{12,64}$/;
+
+/* Приём для взрослого, сказанный словами: «для меня», «а теперь маме», «мне самому». */
+const ADULT_PATIENT = /(?<!\p{L})(?:для\s+(?:меня|себя|мужа|жены|мамы|папы|бабушки|дедушки|супруг\p{L}*|взросл\p{L}*)|мне\s+сам(?:ому|ой)|а\s+(?:теперь\s+)?(?:мне|маме|папе|мужу|жене|бабушке|дедушке)|взросл\p{L}*\s+(?:при[её]м|врач\p{L}*|пациент\p{L}*))(?!\p{L})/u;
+
+/* Сколько последних реплик пользователя держит контекст диалога. */
+const MAX_CONTEXT_TURNS = 20;
+
+/* «Давай заново», «новый запрос», «забудь всё, что я писал» — начало нового запроса. */
+const CONTEXT_RESET = /(?<!\p{L})(?:начн[её]м\s+(?:с\s+)?(?:начала|заново|сначала)|(?:давай(?:те)?|можно)\s+(?:с\s+начала|сначала|заново|по-новому)|новый\s+(?:запрос|поиск|вопрос)|забудь(?:те)?\s+(?:вс[её]|предыдущ\p{L}*|прошл\p{L}*|что\s+я\s+(?:писал|говорил|просил)\p{L}*)|сброс(?:ь|ьте|ить)?\s+(?:вс[её]|услови\p{L}*|фильтр\p{L}*|контекст)|другой\s+(?:вопрос|запрос)|с\s+чистого\s+листа)(?!\p{L})/u;
 
 /*
  * Самоисправление в одной реплике: «хочу к эндокринологу. не, к
@@ -129,20 +138,36 @@ export const extractConstraints = (text) => {
   // «До 2 дней», «до 5 лет» — не время приёма.
   const TIME_BEFORE = new RegExp(`(?<![\\p{L}\\p{N}])(?:до|(?<!не\\s)раньше|(?<!не\\s)ранее|не\\s+позже|не\\s+позднее)\\s+(\\d{1,2})(?::(\\d{2}))?(?![\\d:-])(?!\\.\\d)(?!\\s*(?:мин|час|тыс|руб|₽|р\\.|т\\.?\\s?р|к(?!\\p{L})|\\d{3}(?!\\d)|дней|сут|недел|лет|год|раз))${NOT_A_DATE}`, 'u');
 
-  const after = lower.match(TIME_AFTER);
-  if (after) {
-    const hour = Number(after[1]);
-    if (hour >= 0 && hour <= 23) {
-      constraints.availableAfter = `${String(hour).padStart(2, '0')}:${after[2] || '00'}`;
-    }
-  }
-
-  const before = lower.match(TIME_BEFORE);
-  if (before) {
-    const hour = Number(before[1]);
-    if (hour >= 0 && hour <= 23) {
-      constraints.availableBefore = `${String(hour).padStart(2, '0')}:${before[2] || '00'}`;
-    }
+  /*
+   * Час без минут и без части суток: «после 5» — это 17:00 (в 5 утра
+   * клиники закрыты), а «после 7» — и 7 утра, и 7 вечера. Раньше «после 5»
+   * молча становилось 05:00, а «после 7» — 07:00. Теперь понятное
+   * достраивается, а двусмысленное (после 7–8, до 8–9, «с 7 до 9»)
+   * не выбирается за пользователя: в timeAmbiguity оба прочтения, и
+   * ассистент спрашивает «утра или вечера?».
+   */
+  const morningWords = /(?<!\p{L})(?:утр\p{L}*|с\s+утра)(?!\p{L})/u.test(lower);
+  const eveningWords = /(?<!\p{L})(?:вечер\p{L}*|после\s+работы|после\s+обеда|дн[её]м)(?!\p{L})/u.test(lower);
+  const clockOf = (hour, minutes) => `${String(hour).padStart(2, '0')}:${minutes || '00'}`;
+  const readings = (match, bound) => {
+    if (!match) return [null];
+    const hour = Number(match[1]);
+    if (hour > 23) return [];
+    if (match[2] || hour === 0 || hour >= 12) return [clockOf(hour, match[2])];
+    if (eveningWords) return [clockOf(hour + 12)];
+    if (morningWords) return [clockOf(hour)];
+    if (bound === 'after') return hour <= 6 ? [clockOf(hour + 12)] : hour <= 8 ? [clockOf(hour), clockOf(hour + 12)] : [clockOf(hour)];
+    return hour <= 7 ? [clockOf(hour + 12)] : hour <= 9 ? [clockOf(hour), clockOf(hour + 12)] : [clockOf(hour)];
+  };
+  const afterReadings = readings(lower.match(TIME_AFTER), 'after');
+  const beforeReadings = readings(lower.match(TIME_BEFORE), 'before');
+  // Оба двусмысленны — прочтения согласованы: утро с утром, вечер с вечером.
+  const combined = combineTimeReadings(afterReadings, beforeReadings);
+  if (combined.ambiguity) {
+    constraints.timeAmbiguity = combined.ambiguity;
+  } else {
+    if (combined.from) constraints.availableAfter = combined.from;
+    if (combined.to) constraints.availableBefore = combined.to;
   }
 
   /*
@@ -453,7 +478,15 @@ export const createPrivacyGateway = ({
      * наши настоящие ответы содержат реальные ФИО найденных врачей. Планировщику
      * история ответов не нужна: он строит план по запросам пользователя.
      */
-    const messages = (Array.isArray(incoming) ? incoming : []).filter((message) => message.role === 'user');
+    const userMessages = (Array.isArray(incoming) ? incoming : []).filter((message) => message.role === 'user');
+    /*
+     * Контекст диалога держится по всем репликам пользователя: «а завтра?»
+     * дополняет прошлый запрос, а не начинает новый. Начать заново можно
+     * словами — «давай заново», «новый запрос», «забудь всё»: прежние
+     * реплики тогда не участвуют ни в условиях, ни в плане.
+     */
+    const resetAt = userMessages.findLastIndex((message) => CONTEXT_RESET.test(String(message.content || '').toLowerCase()));
+    const messages = (resetAt > 0 ? userMessages.slice(resetAt) : userMessages).slice(-MAX_CONTEXT_TURNS);
     const counters = new Map();
     const placeholders = [];
     const trusted = new Map();
@@ -490,6 +523,7 @@ export const createPrivacyGateway = ({
     let analyses;
     let classification;
     let perTurnSpecialties = [];
+    let perTurnChild = [];
     try {
       /*
        * Между репликами — уступка циклу событий. Разбор синхронный, и
@@ -529,8 +563,18 @@ export const createPrivacyGateway = ({
        * не назван — первый по классификатору жалобы. Запасной «терапевт»
        * классификатора здесь не нужен: запись идёт к одному врачу.
        */
-      perTurnSpecialties = perTurn.map((item, index) =>
-        analyses[index].specialties.length > 0 ? [...new Set(analyses[index].specialties)] : (item.specialties || []).slice(0, 1));
+      /*
+       * Профиль по жалобе в поздней реплике не перебивает названный раньше
+       * профиль, если классификатор не уверен: «дерматолог» → «а просто
+       * консультация?» не должно превращаться в терапевта.
+       */
+      perTurnSpecialties = perTurn.map((item, index) => {
+        if (analyses[index].specialties.length > 0) return [...new Set(analyses[index].specialties)];
+        const namedEarlier = analyses.slice(0, index).some((analysis) => analysis.specialties.length > 0);
+        if (namedEarlier && item.confidence < POLICY.symptomConfidenceThreshold) return [];
+        return (item.specialties || []).slice(0, 1);
+      });
+      perTurnChild = perTurn.map((item) => Boolean(item.isChild));
       const lastTurn = perTurn[perTurn.length - 1] || classifier('');
       /*
        * Красные флаги проверяются и по тексту БЕЗ маскировки. Маскировка
@@ -589,14 +633,32 @@ export const createPrivacyGateway = ({
     const unknownWins = lastUnknownIndex >= 0 && lastUnknownIndex >= lastSpecialtyIndex;
     const unknownOnly = unknownWins && analyses[lastUnknownIndex].specialties.length === 0;
     const lastSpecialties = unknownOnly ? [] : perTurnSpecialties[lastSpecialtyIndex] || [];
-    const mergedBooking = mergeBookingTurns(userTexts.map((text, index) => ({
-      booking: { ...extractBookingConstraints(text), ...demoRefsOf(analyses[index]) },
-      constraints: turnConstraints[index],
-    })));
+    const turnBookings = userTexts.map((text, index) => ({ ...extractBookingConstraints(text), ...demoRefsOf(analyses[index]) }));
+    /*
+     * «В Разумед на Пушкина» → «а на Ленинградской?»: улица без названия
+     * клиники — другой филиал той же клиники (слово улицы справочник клиник
+     * не связывает, если в реплике нет самой клиники).
+     */
+    for (let index = 1; index < turnBookings.length; index += 1) {
+      if (turnBookings[index].branchIds?.length || turnBookings[index].excludeBranchIds?.length) continue;
+      const earlier = turnBookings.slice(0, index).reverse().find((item) => item.clinicBranches?.length);
+      if (!earlier) continue;
+      const onStreet = branchesOnStreet(earlier.clinicBranches, userTexts[index]);
+      if (onStreet.length > 0 && onStreet.length < earlier.clinicBranches.length) turnBookings[index] = { ...turnBookings[index], branchIds: onStreet };
+    }
+    const mergedBooking = mergeBookingTurns(turnBookings.map((booking, index) => ({ booking, constraints: turnConstraints[index] })));
     // «Подбор очков» без слова «офтальмолог»: профиль однозначно задан процедурой.
-    const bookingSpecialties = lastSpecialties.length > 0 || unknownOnly
-      ? lastSpecialties
-      : mergedBooking.procedureSpecialty ? [mergedBooking.procedureSpecialty] : [];
+    /*
+     * «Невролог Ефимова» → «а Ефимов?»: врач, названный позже профиля, сам
+     * задаёт профиль — прежний «невролог» к нему не применяется (иначе
+     * подбор пуст: Ефимов — ЛОР).
+     */
+    const lastDoctorIndex = turnBookings.findLastIndex((item) => item.doctorIds?.length > 0);
+    const doctorAfterSpecialty = lastDoctorIndex >= 0 && lastDoctorIndex > lastSpecialtyIndex;
+    const bookingSpecialties = doctorAfterSpecialty ? []
+      : lastSpecialties.length > 0 || unknownOnly
+        ? lastSpecialties
+        : mergedBooking.procedureSpecialty ? [mergedBooking.procedureSpecialty] : [];
     /*
      * «Невролог или терапевт» — выбор из двух профилей для одной записи, а
      * не маршрут по двум врачам («ЛОР и стоматолог»). Определяется по
@@ -619,8 +681,17 @@ export const createPrivacyGateway = ({
       specialtyChoice,
       specialties: bookingSpecialties.filter((key) => key in SPECIALTY_CANON),
       unknownSpecialty: unknownWins ? analyses[lastUnknownIndex].unknownSpecialties[0] : null,
-      // «Не детский, а взрослый» — слово «детский» не делает приём детским.
-      child: Boolean(classification.isChild) && !mergedBooking.adult,
+      /*
+       * Для кого приём — по последней реплике, где это сказано: «педиатр для
+       * сына» → «а теперь мне к терапевту» — взрослый приём. «Не детский, а
+       * взрослый» — слово «детский» не делает приём детским.
+       */
+      child: (() => {
+        const lastSaid = userTexts.map((text, index) => (turnBookings[index].adult ? 'adult'
+          : perTurnChild[index] ? 'child'
+            : ADULT_PATIENT.test(String(text).toLowerCase()) ? 'adult' : null)).filter(Boolean).pop();
+        return lastSaid === 'child';
+      })(),
       medicalText: Boolean(classification.hasMedicalText),
     };
     const signals = {};

@@ -10,7 +10,9 @@
 import { normalizeSearchRequest } from './demoSearch.js';
 
 export const LIMITS = {
-  MAX_MESSAGES: 12,
+  // Всего сообщений в истории (сервер отклоняет больше) и реплик пользователя, которые шлёт клиент.
+  MAX_MESSAGES: 40,
+  MAX_USER_TURNS: 20,
   MAX_MESSAGE_CHARS: 1000,
   MAX_REPLY_CHARS: 1500,
   MAX_FIELD_CHARS: 80,
