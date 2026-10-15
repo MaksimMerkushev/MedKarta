@@ -113,6 +113,15 @@
 [развёртывание](docs/deployment.md), [приватность](docs/privacy-architecture.md),
 [кабинет](docs/accounts.md), [маршруты](docs/routing.md), [безопасность](SECURITY.md).
 
+## Техническая документация
+
+Полная техническая документация — в [docs/README.md](docs/README.md):
+архитектура, ИИ-ассистент, приватность, безопасность, маршрутизация, API,
+модель данных, конфигурация, развёртывание, тестирование, известные
+ограничения, матрица трассируемости, глоссарий, архитектурные решения (ADR) и
+диаграммы. Каталог `docs/` готов к публикации на GitHub Pages (docsify):
+Settings → Pages → Deploy from a branch → папка `/docs`.
+
 ## Команда MedKarta
 
 **Варвара Демахина** — Co-founder, Business & Medical Development\
