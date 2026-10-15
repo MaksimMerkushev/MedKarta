@@ -33,6 +33,15 @@ describe('Яндекс Карты', () => {
     assert.equal(url.split('rtext=')[1].split('&')[0].split('~').length, 3);
   });
 
+  it('два врача в одном здании — одна точка маршрута', () => {
+    const url = buildYandexRouteUrl(ORIGIN, [CLINIC, { ...CLINIC }, { lat: 55.8, lng: 49.13 }], 'foot');
+    assert.equal(url, 'https://yandex.ru/maps/?rtext=55.796300,49.108800~55.760246,49.176412~55.800000,49.130000&rtt=pd');
+    assert.equal(
+      build2gisRouteUrl(ORIGIN, [CLINIC, { ...CLINIC }], 'foot'),
+      'https://2gis.ru/kazan/directions/tab/pedestrian/points/49.108800,55.796300|49.176412,55.760246',
+    );
+  });
+
   it('без целей ссылки нет', () => {
     assert.equal(buildYandexRouteUrl(ORIGIN, []), null);
     assert.equal(buildYandexRouteUrl(ORIGIN, [{ lat: 'x', lng: 1 }]), null);

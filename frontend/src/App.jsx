@@ -48,6 +48,7 @@ import {
   CalendarCheck,
   ShieldPlus,
   FlaskConical,
+  CircleUserRound,
 } from 'lucide-react';
 import { doctorsData } from '@data/doctors.legacy.js';
 import { verifiedDoctors } from '@data/doctors';
@@ -62,22 +63,30 @@ import SearchFilters from './SearchFilters';
 import PlaceDoctorList from './PlaceDoctorList';
 import { DataReportButton, SearchFeedbackPrompt } from './FeedbackWidgets';
 import DmsPanel from './DmsPanel';
-import { fetchServerDemoFlag, loadDemoData, readDemoPreference, setDemoPreference } from './demoMode';
+import { fetchServerConfig, loadDemoData, readDemoPreference, setDemoPreference } from './demoMode';
+import MyBookingsPanel from './MyBookingsPanel';
+import PlaceDetailsModal from './PlaceDetailsModal';
+import DemoDoctorSchedule from './DemoDoctorSchedule';
+import { readMyBookings, toStoredBooking, writeMyBookings } from './services/demoBooking';
 import { coverageBadge, coverageFor, findPlan, findProvider } from '@shared/dms.js';
 import { track } from './services/analytics';
 import { buildExternalRouteUrl, EXTERNAL_MODE_BY_TRAVEL_MODE } from './externalMaps';
 import { GOSUSLUGI_APPOINTMENT_URL, omsHint, withReferral } from './booking';
 import { fetchTravelTimes } from './services/travelTimes';
+import { describeCriteria, pickReasons, selectTopPicks, SORT_EXPLANATION, wantsTopPicks } from './bestPicks';
 import { SORT_MODES } from '@shared/contract.js';
 import { ownershipCode } from '@shared/analytics.js';
 import { isPediatricRecord, specialtyCode } from '@shared/specialties.js';
 import { parseOpeningHours, scheduleIntervals } from '@shared/openingHours.js';
 import { useDebouncedValue } from './hooks/useDebouncedValue';
 import { isBoolean, isPlanIdOrNull, isStringIdArray, useLocalStorageState } from './hooks/useLocalStorageState';
+import { useAccount } from './hooks/useAccount';
 
 // Помощник и его зависимости грузятся отдельным чанком: большинство сессий
 // открывается ради карты, а не чата, — нет смысла тянуть его в первый байт.
 const AIAssistant = lazy(() => import('./AIAssistant'));
+const AccountPanel = lazy(() => import('./AccountPanel'));
+const BookingDialog = lazy(() => import('./BookingDialog'));
 
 delete L.Icon.Default.prototype._getIconUrl;
 
@@ -123,6 +132,19 @@ const createBeautifulArrow = (rawColor, isUser = false, rawLabel = null) => {
 };
 const dayKeys = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const FAVORITES_STORAGE_KEY = 'med-navigator-favorites';
+// Сколько ждать «устоявшейся» выдачи для подборки ассистента, мс.
+const PICKS_MAX_WAIT_MS = 6000;
+
+/** Инициалы для кнопки кабинета: «Анна (демо)» → «А», «Семья Демо» → «СД». */
+const accountInitials = (name) =>
+  String(name || '')
+    .replace(/\(.*?\)/g, '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0].toUpperCase())
+    .join('') || '·';
 const DARK_MODE_STORAGE_KEY = 'med-navigator-dark-mode';
 // Без сохранённого выбора тема следует системной (см. public/theme-init.js).
 const PREFERS_DARK = typeof window !== 'undefined'
@@ -867,12 +889,61 @@ const FLAG_KEYS = ['open', 'fav', 'weekend', 'evening', 'online', 'wheelchair', 
 
 const DMS_PLAN_STORAGE_KEY = 'medkarta.dms.plan';
 
+/*
+ * Кабинет и данные этого браузера.
+ *   GUEST_STASH_KEY   — избранное и ДМС гостя, отложенные на время входа в
+ *                       демо-аккаунт: демо не должен их забирать, а после
+ *                       выхода они возвращаются.
+ *   ACCOUNT_OWNED_KEY — «избранное и ДМС в localStorage сейчас принадлежат
+ *                       аккаунту». Если сессия кончилась, пока сайт был
+ *                       закрыт, при следующем открытии их нужно убрать.
+ */
+const GUEST_STASH_KEY = 'medkarta.guest-stash';
+const ACCOUNT_OWNED_KEY = 'medkarta.account-owned';
+
+const readStorage = (key) => {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+
+const writeStorage = (key, value) => {
+  try {
+    if (value === null) window.localStorage.removeItem(key);
+    else window.localStorage.setItem(key, value);
+  } catch {
+    // Приватный режим или переполненное хранилище: кабинет работает и без этого.
+  }
+};
+
+const readGuestStash = () => {
+  try {
+    const parsed = JSON.parse(readStorage(GUEST_STASH_KEY) || 'null');
+    if (!parsed || typeof parsed !== 'object') return null;
+    return {
+      favorites: isStringIdArray(parsed.favorites) ? [...new Set(parsed.favorites)].slice(0, 500) : [],
+      dmsPlanId: isPlanIdOrNull(parsed.dmsPlanId) ? parsed.dmsPlanId : null,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const unionIds = (...lists) => [...new Set(lists.flat())].slice(0, 500);
+
 // Частные клиники, собранные сборщиком (npm run data:build), и результаты
 // проверки госврачей на сайтах учреждений (npm run data:verify).
 const COLLECTED_FACILITIES = flattenPrivateCatalog(collectedCatalog);
 const VERIFICATION = verificationData?.results && typeof verificationData.results === 'object' ? verificationData.results : {};
 const EMPTY_LIST = Object.freeze([]);
-const EMPTY_DEMO = Object.freeze({ enabled: false, items: EMPTY_LIST, insurance: null });
+/*
+ * booking — симуляция записи включена на сервере; publicClinics — показывать
+ * государственные учреждения (в демо по умолчанию скрыты, данные не удаляются).
+ */
+const EMPTY_DEMO = Object.freeze({ enabled: false, items: EMPTY_LIST, insurance: null, booking: false, publicClinics: true });
+const PUBLIC_OWNERSHIP = 'Государственная';
 
 /** Варианты фильтра «не дольше N минут в пути». */
 const TRAVEL_LIMIT_OPTIONS = [10, 15, 20, 30, 45, 60];
@@ -975,6 +1046,14 @@ const calculateDistanceKm = (origin, target) => {
   return earthRadius * c;
 };
 
+const pluralYears = (count) => {
+  const tail = count % 100;
+  if (tail >= 11 && tail <= 14) return 'лет';
+  if (count % 10 === 1) return 'год';
+  if (count % 10 >= 2 && count % 10 <= 4) return 'года';
+  return 'лет';
+};
+
 const formatDistance = (meters) => {
   if (meters == null) {
     return '—';
@@ -1058,12 +1137,107 @@ export default function App() {
   }, [setFavorites]);
   const [now, setNow] = useState(() => kazanWallClock());
   const [isLocationReady, setIsLocationReady] = useState(!hasGeolocationSupport);
+  const { toast, showToast, dismiss: dismissToast } = useToast();
+
+  /*
+   * Личный кабинет. Пока пользователь не вошёл, избранное и программа ДМС
+   * живут в этом браузере, как и раньше. После входа источник правды —
+   * аккаунт: избранное браузера сливается с ним, программа берётся из него.
+   * Демо-аккаунт — исключение: он общий для всех зрителей, поэтому данные
+   * гостя в него не переносятся, а откладываются и возвращаются после выхода.
+   */
+  const favoritesRef = useRef(favorites);
+  const dmsPlanIdRef = useRef(dmsPlanId);
+  const accountRef = useRef(null);
+  useEffect(() => {
+    favoritesRef.current = favorites;
+  }, [favorites]);
+  useEffect(() => {
+    dmsPlanIdRef.current = dmsPlanId;
+  }, [dmsPlanId]);
+
+  const handleSignedIn = useCallback((payload, origin) => {
+    const remote = Array.isArray(payload.favorites) ? payload.favorites : [];
+    const remotePlan = payload.user?.dmsPlanId || null;
+    const local = favoritesRef.current;
+    const localPlan = dmsPlanIdRef.current;
+    // Данные гостя — только если до входа браузер не держал данные другого аккаунта.
+    const fromGuest = origin === 'login' && readStorage(ACCOUNT_OWNED_KEY) !== '1';
+    const isDemo = Boolean(payload.user?.isDemo);
+    let stashed = false;
+
+    if (isDemo || !fromGuest) {
+      if (isDemo && fromGuest && (local.length > 0 || localPlan)) {
+        writeStorage(GUEST_STASH_KEY, JSON.stringify({ favorites: local, dmsPlanId: localPlan }));
+        stashed = true;
+      }
+      setFavorites(remote);
+      setDmsPlanId(remotePlan);
+    } else {
+      if (local.length > 0) {
+        // Сразу показываем объединение, ответ сервера его уточнит.
+        setFavorites(unionIds(remote, local));
+        accountRef.current?.syncFavorites('merge', local).then(setFavorites, (error) => {
+          if (error?.status === 401) return;
+          showToast('Не удалось перенести избранное этого браузера в кабинет — оно осталось здесь.', 'warning');
+        });
+      } else {
+        setFavorites(remote);
+      }
+      if (remotePlan) {
+        setDmsPlanId(remotePlan);
+      } else if (localPlan) {
+        accountRef.current?.setPlan(localPlan).catch(() => {});
+      }
+    }
+    writeStorage(ACCOUNT_OWNED_KEY, '1');
+    if (origin === 'login') {
+      showToast(stashed
+        ? `Вы вошли: ${payload.user.displayName}. Ваше избранное и ДМС вернутся после выхода.`
+        : `Вы вошли: ${payload.user.displayName}`, 'success');
+    }
+  }, [setFavorites, setDmsPlanId, showToast]);
+
+  // Убрать с устройства данные аккаунта; вернуть отложенные данные гостя, если они есть.
+  const releaseAccountData = useCallback(() => {
+    const stash = readGuestStash();
+    writeStorage(GUEST_STASH_KEY, null);
+    writeStorage(ACCOUNT_OWNED_KEY, null);
+    setFavorites(stash?.favorites || []);
+    setDmsPlanId(stash?.dmsPlanId || null);
+    setDmsOnly(false);
+    return Boolean(stash);
+  }, [setFavorites, setDmsPlanId]);
+
+  const handleSignedOut = useCallback((reason) => {
+    // На общем устройстве после выхода не должно оставаться чужих данных.
+    const restored = releaseAccountData();
+    if (reason === 'expired') {
+      showToast('Сессия кабинета закончилась — войдите снова. Избранное и ДМС сохранены в аккаунте.', 'warning');
+    } else if (reason === 'deleted') {
+      showToast('Аккаунт удалён вместе с избранным и программой ДМС.', 'info');
+    } else if (restored) {
+      showToast('Вы вышли из демо-аккаунта. Вернули ваше избранное и ДМС.', 'info');
+    } else {
+      showToast('Вы вышли из кабинета. Избранное и ДМС сохранены в аккаунте.', 'info');
+    }
+  }, [releaseAccountData, showToast]);
+
+  // Сайт открыт, а входа нет: если сессия кончилась, пока он был закрыт, — прибраться.
+  const handleGuest = useCallback(() => {
+    if (readStorage(ACCOUNT_OWNED_KEY) === '1') releaseAccountData();
+  }, [releaseAccountData]);
+
+  const account = useAccount({ onSignedIn: handleSignedIn, onSignedOut: handleSignedOut, onGuest: handleGuest });
+  useEffect(() => {
+    accountRef.current = account;
+  }, [account]);
+  const [isAccountOpen, setIsAccountOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
   const [mobileSheetDragOffset, setMobileSheetDragOffset] = useState(0);
   const [isDarkMode, setIsDarkMode] = useLocalStorageState(DARK_MODE_STORAGE_KEY, PREFERS_DARK, isBoolean);
-  const { toast, showToast, dismiss: dismissToast } = useToast();
 
   const [isAIAssistantOpen, setIsAIAssistantOpen] = useState(false);
   // После первого открытия ассистент остаётся смонтированным и прячется, а не
@@ -1074,6 +1248,25 @@ export default function App() {
     setIsAIAssistantOpen((current) => !current);
   }, []);
   const [isRoutePanelCollapsed, setIsRoutePanelCollapsed] = useState(false);
+  /*
+   * «Топ-3» под ответами ассистента: id реплики → подборка. Подборка — снимок
+   * на момент ответа: если потом поменять фильтры, старый ответ не меняется.
+   */
+  const [assistantPicks, setAssistantPicks] = useState({});
+  /*
+   * Демо-запись под ответами ассистента: id реплики → запрос строгого
+   * подбора. Подбор исполняет сервер (DemoOffers → /api/demo/search).
+   */
+  const [assistantBookings, setAssistantBookings] = useState({});
+  const bookingEnabledRef = useRef(false);
+  const [bookingTarget, setBookingTarget] = useState(null);
+  // Окно подробностей карточки: в списке — кратко, всё остальное — здесь.
+  const [detailsId, setDetailsId] = useState(null);
+  const [myBookings, setMyBookings] = useState(() => readMyBookings());
+  const [bookingsRefresh, setBookingsRefresh] = useState(0);
+  const [isMyBookingsOpen, setIsMyBookingsOpen] = useState(false);
+  const pendingPicksRef = useRef(null);
+  const [picksTick, setPicksTick] = useState(0);
   const [buildRouteTrigger, setBuildRouteTrigger] = useState(false);
   const [targetStopsTrigger, setTargetStopsTrigger] = useState(null); // Apply processing results to UI state
 
@@ -1085,8 +1278,23 @@ export default function App() {
   const doctorProfileSetRef = useRef(new Set());
   const serviceSetRef = useRef(new Set());
 
-  const handleApplyTriage = useCallback((result) => {
+  const handleApplyTriage = useCallback((result, meta = {}) => {
     searchSourceRef.current = { source: 'assistant', at: Date.now() };
+    // Режим записи: вместо «топ-3» по справочнику — строгий подбор свободного времени.
+    const bookingMode = Boolean(result.booking) && bookingEnabledRef.current && Number.isInteger(meta.messageId);
+    if (bookingMode) {
+      setAssistantBookings((current) => {
+        const kept = Object.entries(current).slice(-19);
+        return { ...Object.fromEntries(kept), [meta.messageId]: result.booking };
+      });
+    } else if (Number.isInteger(meta.messageId) && wantsTopPicks(result)) {
+      pendingPicksRef.current = { messageId: meta.messageId, at: Date.now() };
+      setAssistantPicks((current) => {
+        // Хранятся подборки последних 20 ответов — переписка длинной не бывает.
+        const kept = Object.entries(current).slice(-19);
+        return { ...Object.fromEntries(kept), [meta.messageId]: { status: 'pending' } };
+      });
+    }
     // === МАРШРУТ ===
     // «Сбрось маршрут и фильтры» — это и то и другое. Раньше при обоих
     // флагах маршрут оставался на месте.
@@ -1168,9 +1376,10 @@ export default function App() {
     }
     if (result.dmsOnly) {
       // Есть ли справочник и выбрана ли программа, проверит эффект ниже:
-      // здесь их значения могли устареть.
+      // здесь их значения могли устареть. В режиме записи программу
+      // спрашивает подборка в чате — второй вопрос не нужен.
       setDmsOnly(true);
-      setDmsPromptPending(true);
+      if (!bookingMode) setDmsPromptPending(true);
     }
     if (Number.isInteger(result.maxTravelMinutes)) {
       // Ближайший вариант из списка не меньше запрошенного: «25 минут» → 30.
@@ -1275,7 +1484,12 @@ export default function App() {
   const sourceFacilities = useMemo(() => {
     // Источники: проверенные врачи с официальных сайтов больниц,
     // учреждения из OpenStreetMap и данные по клиникам.
-    const base = [...verifiedDoctors, ...doctorsData, ...kazanFacilities.map(withOsmSchedule), ...clinicsFacilities, ...COLLECTED_FACILITIES, ...demoState.items];
+    // Реальная частная клиника из демо-набора заменяет свою карточку из OSM, а не дублирует её.
+    const replacedByDemo = new Set(demoState.items.map((item) => item.osmId).filter(Boolean));
+    const osmFacilities = replacedByDemo.size > 0 ? kazanFacilities.filter((item) => !replacedByDemo.has(item.id)) : kazanFacilities;
+    const all = [...verifiedDoctors, ...doctorsData, ...osmFacilities.map(withOsmSchedule), ...clinicsFacilities, ...COLLECTED_FACILITIES, ...demoState.items];
+    // Демо-режим: государственные учреждения скрыты из выдачи (флаг сервера PUBLIC_CLINICS).
+    const base = demoState.enabled && !demoState.publicClinics ? all.filter((item) => item.ownership !== PUBLIC_OWNERSHIP) : all;
     const clinicAddressMap = new Map();
     const clinicCoordsMap = new Map();
 
@@ -1329,7 +1543,7 @@ export default function App() {
         const hasCoords = typeof item.lat === 'number' && typeof item.lng === 'number';
         return Boolean(address) && !/уточняется/i.test(address) && hasCoords;
       });
-  }, [clinicsFacilities, demoState.items]);
+  }, [clinicsFacilities, demoState.items, demoState.enabled, demoState.publicClinics]);
 
   const activeOrigin = isManualOrigin && customOrigin ? customOrigin : userLocation;
   // Поле ввода обновляется мгновенно, тяжёлая фильтрация — с задержкой.
@@ -1594,11 +1808,13 @@ export default function App() {
     let cancelled = false;
     (async () => {
       const preference = readDemoPreference();
-      const enabled = preference ?? (await fetchServerDemoFlag());
+      const config = await fetchServerConfig();
+      const enabled = preference ?? config.demo;
       if (!enabled || cancelled) return;
       try {
         const data = await loadDemoData();
-        if (!cancelled) setDemoState({ enabled: true, ...data });
+        // Запись и скрытие госучреждений — только если демо включено и на сервере.
+        if (!cancelled) setDemoState({ enabled: true, ...data, booking: config.demo && config.booking, publicClinics: !config.demo || config.publicClinics });
       } catch {
         // Демо-набор необязателен: без него работает обычный справочник.
       }
@@ -1654,7 +1870,12 @@ export default function App() {
     setDemoState(EMPTY_DEMO);
     setDmsOnly(false);
     setIsDmsPanelOpen(false);
+    setIsMyBookingsOpen(false);
   }, []);
+
+  useEffect(() => {
+    bookingEnabledRef.current = demoState.booking;
+  }, [demoState.booking]);
 
   useEffect(() => {
     enrichedDoctorsRef.current = enrichedDoctors;
@@ -1968,19 +2189,6 @@ export default function App() {
   }, [travelFilteredDoctors, now, sortBy]);
 
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-  const [expandedSchedules, setExpandedSchedules] = useState(() => new Set());
-
-  const toggleSchedule = useCallback((id) => {
-    setExpandedSchedules((current) => {
-      const next = new Set(current);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  }, []);
 
   // Отражаем фильтры в адресной строке через replaceState: ссылку можно
   // переслать или сохранить, но история браузера не засоряется — иначе
@@ -2150,6 +2358,72 @@ export default function App() {
 
   const resultCount = sortedDoctors.length;
   const resultsSettled = travelEstimateState !== 'loading';
+
+  /*
+   * Подборка для ответа ассистента собирается, когда выдача «устоялась»:
+   * строка поиска дошла до фильтра, а время в пути посчитано. Ждём не
+   * дольше PICKS_MAX_WAIT_MS — дальше берём оценку по прямой.
+   */
+  useEffect(() => {
+    const pending = pendingPicksRef.current;
+    if (!pending) return undefined;
+    const settled = deferredSearchQuery === searchQuery && resultsSettled;
+    if (!settled && Date.now() - pending.at < PICKS_MAX_WAIT_MS) {
+      const timerId = setTimeout(() => setPicksTick((tick) => tick + 1), 300);
+      return () => clearTimeout(timerId);
+    }
+    pendingPicksRef.current = null;
+
+    const exclude = new Set(routeTargets.map((target) => target.id));
+    const { picks, total } = selectTopPicks(sortedDoctors, { exclude });
+    const query = normalizeText(deferredSearchQuery).trim();
+    const queryProfile = query ? doctorProfiles.find((item) => normalizeText(item) === query) : null;
+    const profile = selectedDoctorProfile !== 'all'
+      ? selectedDoctorProfile
+      : queryProfile || (deferredSearchQuery.trim() ? `«${deferredSearchQuery.trim()}»` : null);
+
+    const snapshot = {
+      status: 'ready',
+      total,
+      sortText: SORT_EXPLANATION[sortBy] || null,
+      criteria: describeCriteria({
+        profile,
+        childrenOnly,
+        maxTravelMinutes,
+        travelMode,
+        travelActive: travelFilterActive,
+        dmsPlanName: dmsFilterActive ? dmsPlan?.name : null,
+        openOnly,
+        eveningOnly,
+        weekendOnly,
+        ownership: selectedOwnership,
+        district: selectedDistrict,
+      }),
+      picks: picks.map((doc) => ({
+        id: doc.id,
+        name: doc.name,
+        specialty: doc.specialty,
+        doctorProfile: doc.doctorProfile,
+        facilityType: doc.facilityType,
+        entityKind: doc.entityKind,
+        clinic: doc.clinic,
+        address: doc.address,
+        lat: doc.lat,
+        lng: doc.lng,
+        demo: Boolean(doc.demo),
+        reasons: pickReasons(doc, { travelMode, childrenOnly }),
+      })),
+    };
+    // Состояние меняется вне тела эффекта — как и в остальных эффектах файла.
+    // Таймер не отменяется при перерисовке: ожидание уже снято, и без него
+    // подборка навсегда осталась бы «подбираю…».
+    setTimeout(() => setAssistantPicks((current) => ({ ...current, [pending.messageId]: snapshot })), 0);
+    return undefined;
+    // Снимок зависит от выдачи и условий на момент ответа; перечислять всё,
+    // что входит в снимок, незачем — эффект ждёт только «устоявшейся» выдачи.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assistantPicks, picksTick, sortedDoctors, deferredSearchQuery, searchQuery, resultsSettled]);
+
   const lastTrackedSearchRef = useRef('');
   const firstSearchRef = useRef(true);
 
@@ -2251,6 +2525,12 @@ export default function App() {
   const favoritesCount = enrichedDoctors.filter((doc) => doc.isFavorite).length;
   // Сортировка «сначала дешевле» имеет смысл, только когда в справочнике есть цены.
   const hasPrices = useMemo(() => sourceFacilities.some((doc) => Number.isFinite(doc.consultPrice)), [sourceFacilities]);
+
+  // Карточка в окне подробностей — та же, что в списке (со временем в пути), а если её отфильтровали — из справочника.
+  const detailsDoc = useMemo(() => {
+    if (!detailsId) return null;
+    return sortedDoctors.find((doc) => doc.id === detailsId) || dmsAnnotatedDoctors.find((doc) => doc.id === detailsId) || null;
+  }, [detailsId, sortedDoctors, dmsAnnotatedDoctors]);
   // Сколько записей фильтр «Открытые сейчас» прячет не потому, что они закрыты,
   // а потому, что графика нет в данных. Молча терять половину базы нечестно.
   const unknownScheduleCount = enrichedDoctors.filter((doc) => doc.openState === OPEN_STATE.UNKNOWN).length;
@@ -2360,8 +2640,16 @@ export default function App() {
 
   // Toggle favorite status
   const toggleFavorite = useCallback((id) => {
+    const adding = !favoritesRef.current.includes(id);
     setFavorites((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
-  }, [setFavorites]);
+    if (accountRef.current?.user) {
+      accountRef.current.syncFavorites(adding ? 'add' : 'remove', [id]).catch((error) => {
+        // 401 — сессия кончилась, об этом уже сказал кабинет.
+        if (error?.status === 401) return;
+        showToast('Не удалось сохранить избранное в кабинете — изменение осталось в этом браузере.', 'warning');
+      });
+    }
+  }, [setFavorites, showToast]);
 
   const handleRouteClick = useCallback((doc) => {
     if (!activeOrigin) {
@@ -2384,6 +2672,146 @@ export default function App() {
     });
   }, [activeOrigin, showToast]);
 
+  const focusPick = useCallback((pick) => {
+    if (!Number.isFinite(pick?.lat) || !Number.isFinite(pick?.lng)) return;
+    setIsFollowingUser(false);
+    setFlyToTarget([pick.lat, pick.lng]);
+    if (isMobile) setIsAIAssistantOpen(false);
+  }, [isMobile]);
+
+  const routePick = useCallback((pick) => {
+    const doc = enrichedDoctorsRef.current.find((item) => item.id === pick.id);
+    if (!doc) {
+      showToast('Этот вариант больше не найден в справочнике.', 'warning');
+      return;
+    }
+    handleRouteClick(doc);
+    if (isMobile) setIsAIAssistantOpen(false);
+  }, [handleRouteClick, isMobile, showToast]);
+
+  const showAllPicks = useCallback(() => {
+    setIsSidebarCollapsed(false);
+    if (isMobile) {
+      setIsAIAssistantOpen(false);
+      setIsMobileFiltersOpen(true);
+    }
+    setTimeout(() => document.getElementById('results-heading')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
+  }, [isMobile]);
+
+  // --- Демо-запись ---------------------------------------------------------
+
+  /*
+   * Точка отправления для подбора — только настоящая: геолокация или точка,
+   * поставленная вручную. Центр Казани по умолчанию — не местоположение
+   * пользователя, и время в пути от него не считается.
+   */
+  const bookingOrigin = isManualOrigin && customOrigin ? customOrigin : isLocationReady && !locationError ? userLocation : null;
+
+  const updateMyBookings = useCallback((next) => {
+    setMyBookings(next);
+    writeMyBookings(next);
+  }, []);
+
+  const openBooking = useCallback((option, slot, patient = null) => {
+    setBookingTarget({
+      doctorId: option.doctor.id,
+      branchId: option.clinic.branchId,
+      serviceId: slot?.serviceId || option.service?.id || null,
+      slotId: slot?.id || null,
+      patient,
+      doctorName: option.doctor.name,
+      specialty: option.doctor.specialty,
+      clinicName: option.clinic.name,
+      branchName: option.clinic.branchName,
+      address: option.clinic.address,
+    });
+  }, []);
+
+  const openBookingForDoc = useCallback((doc, slot = null) => {
+    if (!doc?.doctorId || !doc.branchId) return;
+    setBookingTarget({
+      doctorId: doc.doctorId,
+      branchId: doc.branchId,
+      serviceId: slot?.serviceId || null,
+      slotId: slot?.id || null,
+      patient: childrenOnly && doc.ageGroups?.includes('child') ? 'child' : null,
+      doctorName: doc.name,
+      specialty: doc.specialty,
+      clinicName: doc.clinic,
+      branchName: null,
+      address: doc.address,
+    });
+  }, [childrenOnly]);
+
+  const handleBooked = useCallback((booking) => {
+    const stored = toStoredBooking(booking);
+    if (stored) updateMyBookings([stored, ...myBookings.filter((item) => item.number !== stored.number)]);
+    setBookingsRefresh((value) => value + 1);
+  }, [myBookings, updateMyBookings]);
+
+  const handleBookingCancelled = useCallback((booking) => {
+    updateMyBookings(myBookings.map((item) => (item.number === booking.number ? { ...item, status: 'CANCELLED' } : item)));
+    setBookingsRefresh((value) => value + 1);
+  }, [myBookings, updateMyBookings]);
+
+  /** Маршрут к клинике записи — тем же движком, что и обычный маршрут. */
+  const routeToBooking = useCallback((booking) => {
+    const itemId = booking.itemId || (booking.doctor && booking.clinic ? `${booking.doctor.id}--${booking.clinic.branchId}` : null);
+    const doc = itemId ? enrichedDoctorsRef.current.find((item) => item.id === itemId) : null;
+    if (!doc) {
+      showToast('Клиника этой записи не найдена на карте.', 'warning');
+      return;
+    }
+    setBookingTarget(null);
+    handleRouteClick(doc);
+    setIsRouteStarted(false);
+    if (isMobile) setIsAIAssistantOpen(false);
+  }, [handleRouteClick, isMobile, showToast]);
+
+  const requestBookingOrigin = useCallback(() => {
+    setIsFollowingUser(false);
+    setFlyToTarget(activeOrigin);
+    if (isMobile) setIsAIAssistantOpen(false);
+    showToast('Перетащите красную точку на карте туда, откуда поедете, — подбор пересчитается.', 'info', 6000);
+  }, [activeOrigin, isMobile, showToast]);
+
+  const choosePlanFromChat = useCallback((planId) => {
+    setDmsPlanId(planId);
+    if (account.user) {
+      account.setPlan(planId).catch((error) => {
+        if (error?.status !== 401) showToast('Не удалось сохранить программу в кабинете — она сохранена в этом браузере.', 'warning');
+      });
+    }
+  }, [account, setDmsPlanId, showToast]);
+
+  // Избранное для кабинета: id из аккаунта → записи справочника на карте.
+  const favoriteDetails = useMemo(() => {
+    if (!isAccountOpen) return [];
+    const byId = new Map(enrichedDoctors.map((doc) => [doc.id, doc]));
+    return [...favorites].reverse().map((id) => {
+      const doc = byId.get(id);
+      if (!doc) return { id, name: 'Запись больше не найдена', subtitle: 'Её убрали из справочника — можно удалить', found: false };
+      const subtitle = doc.entityKind === 'doctor'
+        ? [doc.doctorProfile || doc.specialty, doc.clinic].filter(Boolean).join(' · ')
+        : [doc.facilityType, doc.address].filter(Boolean).join(' · ');
+      return { id, name: doc.name, subtitle, lat: doc.lat, lng: doc.lng, found: true };
+    });
+  }, [isAccountOpen, enrichedDoctors, favorites]);
+
+  const focusFavorite = useCallback((item) => {
+    if (!Number.isFinite(item?.lat) || !Number.isFinite(item?.lng)) return;
+    setIsAccountOpen(false);
+    setIsFollowingUser(false);
+    setFlyToTarget([item.lat, item.lng]);
+    if (isMobile) setIsMobileFiltersOpen(false);
+  }, [isMobile]);
+
+  const selectPlanFromAccount = useCallback(async (planId) => {
+    await account.setPlan(planId);
+    setDmsPlanId(planId);
+    if (!planId) setDmsOnly(false);
+  }, [account, setDmsPlanId]);
+
   const handleGoToNearest = () => {
     if (!nearestOpenDoctor) {
       showToast('Сейчас нет открытых мест с известным графиком работы.', 'warning');
@@ -2405,12 +2833,16 @@ export default function App() {
   /*
    * Ссылки «Как добраться» в Яндекс Карты и 2ГИС. МедКарта подбирает, куда
    * обратиться; вести до двери — с пробками, автобусами и голосом — лучше
-   * умеют навигаторы. Без настоящей точки отправления ссылка строится «от
-   * моего местоположения», а не от центра Казани.
+   * умеют навигаторы.
+   *
+   * Точка отправления передаётся всегда — та же, от которой построен наш
+   * маршрут: геолокация или красный маркер, перетащенный вручную. Раньше без
+   * геолокации она не передавалась, и Яндекс спрашивал «Откуда?», а маршрут
+   * в навигаторе расходился с маршрутом на нашей карте.
    */
   const renderExternalRouteLinks = (targets, { doc = null, label = 'Как добраться:', className = '' } = {}) => {
     if (!targets || targets.length === 0) return null;
-    const origin = travelOriginKnown ? activeOrigin : null;
+    const origin = activeOrigin;
     const mode = EXTERNAL_MODE_BY_TRAVEL_MODE[travelMode] || 'auto';
     const links = [
       { provider: 'yandex', mode, text: 'Яндекс Карты' },
@@ -2683,6 +3115,14 @@ export default function App() {
                     {primary.isFavorite ? <Heart size={14} fill="currentColor" /> : <HeartOff size={14} />}{' '}
                     {primary.isFavorite ? 'В избранном' : 'В избранное'}
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setDetailsId(primary.id)}
+                    className="mt-1.5 inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition-all hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300"
+                    data-testid="popup-details"
+                  >
+                    Подробнее{primary.demo && primary.entityKind === 'doctor' ? ' и расписание' : ''}
+                  </button>
                 </div>
               ) : (
                 <PlaceDoctorList
@@ -2690,6 +3130,7 @@ export default function App() {
                   onAddToRoute={handleRouteClick}
                   onRemoveFromRoute={removeFromRoute}
                   onToggleFavorite={toggleFavorite}
+                  onOpenDetails={setDetailsId}
                 />
               )}
             </div>
@@ -2787,20 +3228,28 @@ export default function App() {
     window.addEventListener('mouseup', onMouseUp);
   };
 
-  const renderRouteButton = (doc, isPopup = false) => {
+  // variant: false — крупная кнопка (окно подробностей), true — окно на карте, 'compact' — краткая карточка списка.
+  const renderRouteButton = (doc, variant = false) => {
+    const isPopup = variant === true;
     const isTarget = routeTargets.some(t => t.id === doc.id);
     const commonClasses = isPopup
       ? 'mt-3 w-full text-sm font-medium py-1.5 rounded-lg flex items-center justify-center gap-1.5 transition-all'
-      : 'w-full flex-1 bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white font-medium px-5 py-2.5 rounded-xl inline-flex items-center justify-center gap-2.5 transition-all border border-blue-200 dark:bg-blue-900 dark:text-blue-300 dark:border-blue-800 dark:hover:bg-blue-700 dark:hover:text-blue-100';
+      : variant === 'compact'
+        ? 'h-full min-h-8 min-w-9 bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white text-xs font-semibold px-2.5 py-1.5 rounded-lg inline-flex items-center justify-center gap-1.5 transition-all border border-blue-200 dark:bg-blue-900 dark:text-blue-300 dark:border-blue-800 dark:hover:bg-blue-700 dark:hover:text-blue-100'
+        : 'w-full flex-1 bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white font-medium px-5 py-2.5 rounded-xl inline-flex items-center justify-center gap-2.5 transition-all border border-blue-200 dark:bg-blue-900 dark:text-blue-300 dark:border-blue-800 dark:hover:bg-blue-700 dark:hover:text-blue-100';
+    const iconSize = isPopup ? 16 : variant === 'compact' ? 13 : 18;
 
     const redClasses = isPopup
       ? `${commonClasses} bg-red-50 text-red-600 border border-red-200`
       : `${commonClasses} bg-red-50 text-red-600 hover:bg-red-600 hover:text-white border-red-200 dark:bg-red-900 dark:text-red-300 dark:hover:bg-red-700 dark:hover:text-red-100 dark:border-red-800`;
 
+    const compact = variant === 'compact';
+    // В краткой карточке подпись видна, только если хватает ширины (контейнер карточки ≥ 21rem).
+    const compactLabel = (text) => <span className="hidden @min-[21rem]:inline">{text}</span>;
     if (isTarget) {
       return (
-        <button type="button" onClick={() => removeFromRoute(doc.id)} className={redClasses}>
-          <XCircle size={isPopup ? 16 : 18} /> {isPopup ? 'Убрать' : 'Убрать из маршрута'}
+        <button type="button" onClick={() => removeFromRoute(doc.id)} className={redClasses} aria-label={compact ? 'Убрать из маршрута' : undefined} title={compact ? 'Убрать из маршрута' : undefined}>
+          <XCircle size={iconSize} className="shrink-0" /> {isPopup ? 'Убрать' : compact ? compactLabel('Убрать') : 'Убрать из маршрута'}
         </button>
       );
     }
@@ -2810,18 +3259,119 @@ export default function App() {
         type="button"
         onClick={() => handleRouteClick(doc)}
         className={isPopup ? `${commonClasses} bg-blue-50 text-blue-600 border border-blue-200 dark:bg-blue-900 dark:text-blue-300 dark:border-blue-800` : commonClasses}
+        aria-label={compact ? 'Добавить в маршрут' : undefined}
+        title={compact ? 'Добавить в маршрут' : undefined}
       >
-        <Navigation size={isPopup ? 16 : 18} /> {isPopup ? 'Показать путь' : 'Добавить в маршрут'}
+        <Navigation size={iconSize} className="shrink-0" /> {isPopup ? 'Показать путь' : compact ? compactLabel('В маршрут') : 'Добавить в маршрут'}
       </button>
     );
   };
 
+  /*
+   * Краткая карточка списка: кто, где, сколько ехать, цена, ДМС — и
+   * действия. Всё остальное (график на неделю, цены, контакты, ссылки на
+   * карты, расписание демо-врача) — в окне «Подробнее».
+   */
   const renderListingCard = (doc, index = 0) => {
-    const isTarget = routeTargets.some(t => t.id === doc.id);
+    const isTarget = routeTargets.some((t) => t.id === doc.id);
+    const isDoctorCard = doc.entityKind === 'doctor';
+    const distanceLabel = doc.distanceKm == null ? null : formatDistance(doc.distanceKm * 1000);
+    const dmsBadge = dmsPlan && doc.dmsCoverage ? coverageBadge(doc.dmsCoverage, dmsPlan) : null;
+    const subtitle = isDoctorCard ? doc.doctorProfile || doc.specialty : doc.facilityType || doc.specialty;
+    const openDetails = () => {
+      track('result_open', { surface: 'list', rank: Math.min(index + 1, 500), ...placeFields(doc) });
+      setDetailsId(doc.id);
+    };
+
+    return (
+      <div
+        key={doc.id}
+        className={`card-fade-in @container rounded-2xl border bg-white p-3 shadow-sm transition-all dark:bg-slate-800 dark:text-white ${isTarget ? 'border-blue-400 ring-2 ring-blue-100 dark:border-blue-500 dark:ring-blue-900' : isDoctorCard ? 'border-blue-100 hover:shadow-md dark:border-blue-900' : 'border-emerald-100 hover:shadow-md dark:border-emerald-900'}`}
+        data-testid="place-card"
+      >
+        <div className="flex items-start gap-2">
+          <button type="button" onClick={openDetails} className="min-w-0 flex-1 text-left" aria-label={`Подробнее: ${doc.name}`}>
+            <h3 className="text-[15px] font-extrabold leading-5 text-slate-800 hover:text-blue-700 dark:text-white dark:hover:text-blue-300">{doc.name}</h3>
+            <p className="mt-0.5 truncate text-xs font-semibold text-blue-600 dark:text-blue-400">
+              {subtitle}{isDoctorCard && doc.experience > 0 ? ` · стаж ${doc.experience} ${pluralYears(doc.experience)}` : ''}
+            </p>
+            <p className="mt-0.5 truncate text-xs text-slate-500 dark:text-slate-400">{isDoctorCard ? doc.clinic : doc.address}</p>
+          </button>
+          <button
+            type="button"
+            onClick={() => toggleFavorite(doc.id)}
+            className={`shrink-0 rounded-full border p-1.5 transition-all ${doc.isFavorite ? 'border-amber-200 bg-amber-50 text-amber-600 dark:border-amber-800 dark:bg-amber-900 dark:text-amber-300' : 'border-slate-200 bg-white text-slate-400 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-400'}`}
+            title={doc.isFavorite ? 'Убрать из избранного' : 'Добавить в избранное'}
+            aria-label={doc.isFavorite ? 'Убрать из избранного' : 'Добавить в избранное'}
+          >
+            {doc.isFavorite ? <Heart size={16} fill="currentColor" /> : <HeartOff size={16} />}
+          </button>
+        </div>
+
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] font-semibold">
+          {doc.demo && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 uppercase tracking-[0.08em] text-amber-800 dark:bg-amber-900 dark:text-amber-100" title={doc.realClinic ? 'Клиника реальная, врачи и расписание вымышлены' : 'Вымышленная запись для проверки сценариев'}>
+              <FlaskConical size={11} aria-hidden="true" /> Демо
+            </span>
+          )}
+          {doc.realClinic && (
+            <span className="rounded-full bg-sky-50 px-2 py-0.5 text-sky-700 dark:bg-sky-900/50 dark:text-sky-200" title="Название, адрес и часы — из OpenStreetMap">Реальная клиника</span>
+          )}
+          {doc.openState === OPEN_STATE.OPEN && <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-100">Открыто</span>}
+          {doc.openState === OPEN_STATE.CLOSED && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-500 dark:bg-slate-700 dark:text-slate-300">Закрыто</span>}
+          {distanceLabel && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-600 dark:bg-slate-700 dark:text-slate-300">{distanceLabel}</span>}
+          {doc.travelSeconds != null && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-blue-700 dark:bg-blue-900 dark:text-blue-200" title={doc.travelApproximate ? 'Оценка по расстоянию: точное время ещё считается' : 'Время по дорогам, без учёта пробок'}>
+              <Timer size={11} aria-hidden="true" /> {doc.travelApproximate ? '≈ ' : ''}{Math.max(1, Math.round(doc.travelSeconds / 60))} мин
+            </span>
+          )}
+          {Number.isFinite(doc.consultPrice) && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">
+              <Wallet size={11} aria-hidden="true" /> от {doc.consultPrice.toLocaleString('ru-RU')} ₽
+            </span>
+          )}
+          {dmsBadge && (
+            <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 ${dmsBadge.tone === 'covered' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200' : 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-300'}`}>
+              <ShieldCheck size={11} aria-hidden="true" /> {dmsBadge.tone === 'covered' ? 'ДМС' : 'не по ДМС'}
+            </span>
+          )}
+        </div>
+
+        {/*
+          Кнопки — одной строкой при любой ширине панели: на узкой (планшет)
+          у «В маршрут» остаётся значок, подпись — в aria-label и подсказке.
+        */}
+        <div className="mt-2.5 flex items-stretch gap-1.5">
+          <button
+            type="button"
+            onClick={openDetails}
+            className="inline-flex min-w-0 flex-1 items-center justify-center gap-1 rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-300 hover:text-blue-700 dark:border-slate-600 dark:text-slate-200"
+            data-testid="place-card-details"
+          >
+            <span className="truncate">{doc.demo && isDoctorCard && demoState.booking ? 'Расписание' : 'Подробнее'}</span>
+          </button>
+          {doc.demo && isDoctorCard && demoState.booking && doc.doctorId && (
+            <button
+              type="button"
+              onClick={() => openBookingForDoc(doc)}
+              className="inline-flex min-w-0 flex-1 items-center justify-center gap-1 rounded-lg bg-violet-600 px-2 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-violet-700"
+              data-testid="card-book-button"
+            >
+              <CalendarCheck size={13} className="shrink-0" aria-hidden="true" /> <span className="truncate">Записаться</span>
+            </button>
+          )}
+          <div className="shrink-0">{renderRouteButton(doc, 'compact')}</div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderPlaceDetails = (doc) => {
     const isDoctorCard = doc.entityKind === 'doctor';
     const distanceLabel = doc.distanceKm == null ? 'Геолокация недоступна' : formatDistance(doc.distanceKm * 1000);
     const hasVisibleDescription = Boolean((doc.description || '').trim()) && !/данные из openstreetmap/i.test(String(doc.description));
-    const isScheduleOpen = expandedSchedules.has(doc.id);
+    // В окне подробностей график на неделю виден сразу — без лишнего нажатия.
+    const isScheduleOpen = true;
     const isState = doc.ownership === 'Государственная';
     const oms = omsHint(doc);
     const referralUrl = withReferral(doc.websiteUrl, 'card');
@@ -2832,15 +3382,10 @@ export default function App() {
     const pultHref = dmsProvider ? toTelHref(dmsProvider.pultPhone) : null;
 
     return (
-      <div
-        key={doc.id}
-        className={`card-fade-in rounded-2xl sm:rounded-3xl border bg-white p-3 sm:p-5 shadow-sm transition-all dark:bg-slate-800 dark:text-white ${isTarget ? 'border-blue-400 ring-2 ring-blue-100 dark:border-blue-500 dark:ring-blue-900' : isDoctorCard ? 'border-blue-100 hover:shadow-md dark:border-blue-900' : 'border-emerald-100 hover:shadow-md dark:border-emerald-900'
-          }`}
-      >
+      <div className="text-slate-800 dark:text-white" data-testid="place-details-body">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-lg font-extrabold text-slate-800 dark:text-white">{doc.name}</h3>
               <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.18em] ${isDoctorCard ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-100' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-100'}`}>
                 {isDoctorCard ? 'Врач' : 'Учреждение'}
               </span>
@@ -2911,6 +3456,10 @@ export default function App() {
             {verifiedLabel ? `Официальный сайт · проверено ${verifiedLabel}` : 'Проверено по официальному сайту'}
             <ExternalLink size={11} className="opacity-60" aria-hidden="true" />
           </a>
+        ) : doc.demo && doc.realClinic ? (
+          <p className="mt-3 text-[11px] leading-4 text-amber-700 dark:text-amber-300" data-testid="real-clinic-note">
+            Клиника реальная: название, адрес, точка и часы работы — из OpenStreetMap. {isDoctorCard ? 'Врач, его расписание и цены' : 'Врачи, расписание и цены'} — вымышленные, демонстрационные; запись в клинику не уходит, телефон клиники в демо не показываем.
+          </p>
         ) : doc.demo ? (
           <p className="mt-3 text-[11px] leading-4 text-amber-700 dark:text-amber-300">
             Демо-данные: вымышленная клиника для проверки сценариев. Сайт и телефон не настоящие.
@@ -2943,27 +3492,26 @@ export default function App() {
           <div className="flex items-center gap-2">
             <Clock size={16} className="shrink-0 text-slate-400 dark:text-slate-500" aria-hidden="true" />
             {doc.weekSchedule ? (
-              <button
-                type="button"
-                onClick={() => {
-                  if (!isScheduleOpen) track('result_open', { surface: 'list', rank: Math.min(index + 1, 500), ...placeFields(doc) });
-                  toggleSchedule(doc.id);
-                }}
-                aria-expanded={isScheduleOpen}
-                className="inline-flex items-center gap-1 text-left underline decoration-dotted underline-offset-4 transition-colors hover:text-blue-600 dark:hover:text-blue-400"
-              >
-                Сегодня: {doc.todayHours}
-                {isScheduleOpen ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
-              </button>
+              <span>Сегодня: {doc.todayHours}</span>
             ) : (
               <span className="text-slate-400 dark:text-slate-500">График не указан</span>
             )}
           </div>
           <div className="flex items-center gap-2">
             {isDoctorCard ? <TrendingUp size={16} className="shrink-0 text-slate-400 dark:text-slate-500" aria-hidden="true" /> : <Building2 size={16} className="shrink-0 text-slate-400 dark:text-slate-500" aria-hidden="true" />}
-            <span>{isDoctorCard ? `Стаж: ${doc.experience > 0 ? `${doc.experience} лет` : 'не указан'}` : `Тип: ${doc.facilityType || doc.specialty}`}</span>
+            <span>{isDoctorCard ? `Стаж: ${doc.experience > 0 ? `${doc.experience} ${pluralYears(doc.experience)}` : 'не указан'}` : `Тип: ${doc.facilityType || doc.specialty}`}</span>
           </div>
         </div>
+
+        {doc.demo && isDoctorCard && demoState.booking && doc.doctorId && doc.branchId && (
+          <DemoDoctorSchedule
+            doctorId={doc.doctorId}
+            branchId={doc.branchId}
+            planId={dmsPlan?.id || null}
+            patient={childrenOnly && doc.ageGroups?.includes('child') ? 'child' : null}
+            onPick={(slot) => openBookingForDoc(doc, slot)}
+          />
+        )}
 
         {/* Расписание на неделю — данные лежали в doc.schedule, но наружу
             выходил только сегодняшний день. */}
@@ -3100,9 +3648,19 @@ export default function App() {
           </div>
         )}
 
-        {(doc.telHref || referralUrl) && (
+        {(doc.telHref || referralUrl || (doc.demo && demoState.booking)) && (
           <div className="mt-3 flex flex-wrap gap-2">
-            {!isState && referralUrl && (
+            {doc.demo && isDoctorCard && demoState.booking && doc.doctorId && (
+              <button
+                type="button"
+                onClick={() => openBookingForDoc(doc)}
+                className="inline-flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-violet-700"
+                data-testid="card-book-button"
+              >
+                <CalendarCheck size={16} aria-hidden="true" /> Записаться (демо)
+              </button>
+            )}
+            {!isState && referralUrl && !(doc.demo && demoState.booking) && (
               <a
                 href={referralUrl}
                 target="_blank"
@@ -3261,16 +3819,39 @@ export default function App() {
                 <div className="h-1.5 w-14 rounded-full bg-slate-300 dark:bg-slate-600" />
               </div>
             )}
-            <header className="shrink-0 px-4 pb-3 pt-4">
+            {/*
+              Шапка подстраивается под ширину панели (контейнерные запросы,
+              SearchFilters.css): на узкой панели (планшет, 340 px) значок и
+              кнопки компактнее, и название не наезжает на кнопки.
+            */}
+            <header className="sidebar-header shrink-0 px-4 pb-3 pt-4">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2">
-                  <MapPin size={24} className="shrink-0 text-blue-600 dark:text-blue-400" aria-hidden="true" />
-                  <div>
-                    <h1 className="text-[23px] font-extrabold leading-none tracking-tight text-blue-600 dark:text-blue-400">МедКарта</h1>
+                  <MapPin size={24} className="sidebar-title-pin shrink-0 text-blue-600 dark:text-blue-400" aria-hidden="true" />
+                  <div className="min-w-0">
+                    <h1 className="sidebar-title truncate text-[23px] font-extrabold leading-none tracking-tight text-blue-600 dark:text-blue-400">МедКарта</h1>
                     <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Казань</p>
                   </div>
                 </div>
-                <div className="flex items-center gap-1">
+                <div className="sidebar-header-icons flex shrink-0 items-center gap-1">
+                  {(account.user || account.features.available) && (
+                    <button
+                      type="button"
+                      className="sidebar-icon-button relative"
+                      onClick={() => setIsAccountOpen(true)}
+                      aria-label={account.user ? `Личный кабинет: ${account.user.displayName}` : 'Войти в личный кабинет'}
+                      title={account.user ? account.user.displayName : 'Личный кабинет'}
+                      data-testid="account-button"
+                    >
+                      {account.user ? (
+                        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-blue-600 to-violet-600 text-[11px] font-bold text-white" aria-hidden="true">
+                          {accountInitials(account.user.displayName)}
+                        </span>
+                      ) : (
+                        <CircleUserRound size={20} aria-hidden="true" />
+                      )}
+                    </button>
+                  )}
                   {insurance && (
                     <button
                       type="button"
@@ -3282,6 +3863,22 @@ export default function App() {
                     >
                       <ShieldPlus size={19} aria-hidden="true" />
                       {dmsPlan && <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-emerald-500" aria-hidden="true" />}
+                    </button>
+                  )}
+                  {demoState.booking && (
+                    <button
+                      type="button"
+                      className="sidebar-icon-button relative"
+                      onClick={() => setIsMyBookingsOpen((current) => !current)}
+                      aria-label={`Мои демо-записи: ${myBookings.filter((item) => item.status === 'CONFIRMED').length}`}
+                      aria-expanded={isMyBookingsOpen}
+                      title="Мои демо-записи"
+                      data-testid="my-bookings-button"
+                    >
+                      <CalendarCheck size={19} aria-hidden="true" />
+                      {myBookings.some((item) => item.status === 'CONFIRMED') && (
+                        <span className="absolute -right-0.5 -top-0.5 rounded-full bg-violet-600 px-1 text-[10px] leading-4 text-white">{myBookings.filter((item) => item.status === 'CONFIRMED').length}</span>
+                      )}
                     </button>
                   )}
                   <button
@@ -3366,10 +3963,23 @@ export default function App() {
                 <div className="mb-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-100" role="note">
                   <FlaskConical size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
                   <p>
-                    <b>Демо-режим.</b> Частные клиники с пометкой «Демо», их цены и программы ДМС вымышлены — для проверки сценариев.{' '}
+                    <b>Демо-режим.</b> Врачи, расписание, цены и ДМС с пометкой «Демо» вымышлены; клиники — вымышленные и реальные частные (данные OSM).
+                    {demoState.booking && ' Запись демонстрационная — в клиники ничего не уходит.'}
+                    {!demoState.publicClinics && ' Госклиники временно скрыты.'}{' '}
                     <button type="button" onClick={disableDemo} className="font-semibold underline underline-offset-2">Выключить</button>
                   </p>
                 </div>
+              )}
+              {demoState.booking && isMyBookingsOpen && (
+                <MyBookingsPanel
+                  bookings={myBookings}
+                  onChange={(next, info) => {
+                    updateMyBookings(next);
+                    if (info?.cancelled) setBookingsRefresh((value) => value + 1);
+                  }}
+                  onRoute={routeToBooking}
+                  onClose={() => setIsMyBookingsOpen(false)}
+                />
               )}
               {insurance && isDmsPanelOpen && (
                 <DmsPanel
@@ -3383,7 +3993,14 @@ export default function App() {
                     setDmsPlanId(planId);
                     setIsDmsPanelOpen(false);
                     if (!planId) setDmsOnly(false);
-                    else showToast('Программа сохранена в этом браузере. Карточки отмечены по ней.', 'success');
+                    if (account.user) {
+                      account.setPlan(planId).then(
+                        () => planId && showToast('Программа сохранена в личном кабинете. Карточки отмечены по ней.', 'success'),
+                        (error) => error?.status !== 401 && showToast('Не удалось сохранить программу в кабинете — она сохранена в этом браузере.', 'warning'),
+                      );
+                    } else if (planId) {
+                      showToast('Программа сохранена в этом браузере. Карточки отмечены по ней.', 'success');
+                    }
                   }}
                 />
               )}
@@ -3401,7 +4018,7 @@ export default function App() {
                 onNearest={handleGoToNearest}
               />
               <div className="sidebar-results mt-1">
-                <h2 role="status" aria-live="polite">Найдено {sortedDoctors.length.toLocaleString('ru-RU')}</h2>
+                <h2 id="results-heading" role="status" aria-live="polite">Найдено {sortedDoctors.length.toLocaleString('ru-RU')}</h2>
                 <div className="sidebar-results-actions">
                   <label className="filter-select-wrap">
                     <span className="sr-only">Сортировка результатов</span>
@@ -3941,18 +4558,71 @@ export default function App() {
           </>
         )}
 
+        {isAccountOpen && (
+          <Suspense fallback={null}>
+            <AccountPanel
+              account={account}
+              insurance={insurance}
+              today={todayKey}
+              planId={dmsPlanId}
+              onSelectPlan={selectPlanFromAccount}
+              favorites={favoriteDetails}
+              onFocusFavorite={focusFavorite}
+              onRemoveFavorite={toggleFavorite}
+              onClose={() => setIsAccountOpen(false)}
+              isMobile={isMobile}
+            />
+          </Suspense>
+        )}
+
         {isAIAssistantMounted && (
           <Suspense fallback={null}>
             <AIAssistant
               isOpen={isAIAssistantOpen}
               onClose={() => setIsAIAssistantOpen(false)}
               onApplyTriage={handleApplyTriage}
+              picks={assistantPicks}
+              onFocusPick={focusPick}
+              onRoutePick={routePick}
+              onShowAllPicks={showAllPicks}
+              bookings={demoState.booking ? assistantBookings : null}
+              bookingOrigin={bookingOrigin}
+              bookingPlanId={dmsPlan?.id || null}
+              bookingsRefresh={bookingsRefresh}
+              onBookOption={openBooking}
+              onSelectPlan={choosePlanFromChat}
+              onRequestOrigin={requestBookingOrigin}
               isMobile={isMobile}
               avoidRoutePanel={!isMobile && routeTargets.length > 0 && !isRoutePanelCollapsed}
             />
           </Suspense>
         )}
       </main>
+
+      {detailsDoc && (
+        <PlaceDetailsModal
+          key={detailsDoc.id}
+          title={detailsDoc.name}
+          subtitle={detailsDoc.entityKind === 'doctor' ? detailsDoc.clinic : detailsDoc.facilityType || detailsDoc.specialty}
+          onClose={() => setDetailsId(null)}
+        >
+          {renderPlaceDetails(detailsDoc)}
+        </PlaceDetailsModal>
+      )}
+
+      {bookingTarget && (
+        <Suspense fallback={null}>
+          <BookingDialog
+            key={`${bookingTarget.doctorId}|${bookingTarget.branchId}|${bookingTarget.slotId || ''}`}
+            target={bookingTarget}
+            planId={dmsPlan?.id || null}
+            onClose={() => setBookingTarget(null)}
+            onBooked={handleBooked}
+            onCancelled={handleBookingCancelled}
+            onRoute={routeToBooking}
+          />
+        </Suspense>
+      )}
 
       <Toast toast={toast} onDismiss={dismissToast} />
     </div>

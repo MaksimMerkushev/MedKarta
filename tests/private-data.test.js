@@ -11,7 +11,11 @@ import { describe, it } from 'node:test';
 import { matchService, normalizePrice, SERVICES } from '../shared/services.js';
 import { flattenPrivateCatalog, validatePrivateCatalog } from '../shared/privateCatalog.js';
 import { coverageBadge, coverageFor, validateInsuranceData } from '../shared/dms.js';
-import { demoInsurance, demoPrivateCatalog } from '../data/demo/index.js';
+// Логика справочника и ДМС проверяется на прежнем ручном демо-наборе: в нём
+// собраны все режимы доступа и пограничные случаи. Новый генерируемый набор
+// проверяет tests/demo-data.test.js.
+import { demoInsurance } from './fixtures/legacy-demo/insurance.js';
+import { demoPrivateCatalog } from './fixtures/legacy-demo/private.js';
 import { extractConstraints } from '../backend/privacy/gateway.js';
 import { validatePlan } from '../backend/planner/validator.js';
 import { sanitizeAiAction } from '../shared/contract.js';
@@ -218,8 +222,10 @@ describe('Демо-набор на сервере', () => {
       process.env.DEMO_DATA = 'on';
       __resetCatalogCache();
       const demo = await loadCatalog();
-      assert.ok(demo.doctors.some((doctor) => doctor.id === 'demo-doc-valieva--demo-derma-center'));
-      assert.ok(demo.clinics.some((clinic) => clinic.id === 'demo-derma-center'));
+      const { demoCatalog } = await import('../data/demo/generated.js');
+      const doctor = demoCatalog.doctors[0];
+      assert.ok(demo.doctors.some((item) => item.id === `${doctor.id}--${doctor.branchIds[0]}`));
+      assert.ok(demo.clinics.some((clinic) => clinic.id === doctor.branchIds[0]));
     } finally {
       if (previous === undefined) delete process.env.DEMO_DATA;
       else process.env.DEMO_DATA = previous;

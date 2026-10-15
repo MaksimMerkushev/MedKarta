@@ -626,6 +626,7 @@ export const createEntityResolver = (catalog) => {
     }
 
     // 1. Клиники: жадное окно от длинного к короткому.
+    const deferredClinics = [];
     for (let start = 0; start < tokens.length; start += 1) {
       if (consumed.has(start)) continue;
 
@@ -673,7 +674,16 @@ export const createEntityResolver = (catalog) => {
           const quoted = /[«"„“]\s*$/u.test(before);
           const sentenceStart = token.start === 0 || /[.!?]\s*$/u.test(scanText.slice(0, token.start));
           const capitalized = /^\p{Lu}/u.test(token.raw);
-          if (!quoted && (!capitalized || sentenceStart)) continue;
+          /*
+           * «…после 16. Ясень или Береста»: с заглавной в начале предложения —
+           * не основание, но если рядом через «или»/запятую названа другая
+           * клиника, это перечисление клиник. Решается после прохода.
+           */
+          if (!quoted && capitalized && sentenceStart) {
+            deferredClinics.push({ start, token, bucket });
+            continue;
+          }
+          if (!quoted && !capitalized) continue;
         }
 
         links.push({
@@ -691,6 +701,25 @@ export const createEntityResolver = (catalog) => {
         start += size - 1;
         break;
       }
+    }
+
+    const LIST_GAP = /^\s*(?:,|или|либо)\s*(?:(?:в|во)\s+)?[«"]?\s*$/u;
+    for (const { start, token, bucket } of deferredClinics) {
+      if (consumed.has(start)) continue;
+      const clinicLinks = links.filter((link) => link.kind === ENTITY_KIND.CLINIC);
+      const listed = clinicLinks.some((link) => LIST_GAP.test(scanText.slice(token.end, link.start)) && link.start >= token.end)
+        || clinicLinks.some((link) => link.end <= token.start && LIST_GAP.test(scanText.slice(link.end, token.start)));
+      if (!listed) continue;
+      links.push({
+        kind: ENTITY_KIND.CLINIC,
+        start: token.start,
+        end: token.end,
+        ids: [...bucket],
+        ambiguous: bucket.size > 1,
+        confidence: 0.8,
+        matcher: 'clinic.ngram_listed',
+      });
+      consumed.add(start);
     }
 
     // 2. Врачи: по одному токену, с расширением до полного ФИО.

@@ -47,9 +47,22 @@ export const SERVICES = Object.freeze([
   ...consult('gastroenterologist', 'гастроэнтеролога', 'B01.004'),
   ...consult('traumatologist', 'травматолога-ортопеда', 'B01.050'),
   ...consult('dentist', 'стоматолога-терапевта', 'B01.065'),
+  ...consult('surgeon', 'хирурга', 'B01.057'),
+  ...consult('orthopedist', 'ортопеда', 'B01.050'),
+  ...consult('psychiatrist', 'психиатра', 'B01.035'),
   { id: 'diag.ultrasound.abdomen', name: 'УЗИ органов брюшной полости', specialty: null, kind: 'diagnostics', nomenclature: 'A04.16.001' },
   { id: 'diag.ecg', name: 'ЭКГ (регистрация электрокардиограммы)', specialty: 'cardiologist', kind: 'diagnostics', nomenclature: 'A05.10.006' },
   { id: 'lab.cbc', name: 'Общий анализ крови (развёрнутый)', specialty: null, kind: 'lab', nomenclature: 'B03.016.003' },
+  /*
+   * Процедуры у врача — для демо-расписания: у них своя длительность, и
+   * покрытие ДМС на них отличается от приёма. Код номенклатуры не указан:
+   * без сверки с источником подставлять его нельзя.
+   */
+  { id: 'proc.lor.tonsils', name: 'Промывание миндалин', specialty: 'lor', kind: 'procedure', nomenclature: null },
+  { id: 'proc.ophthalmologist.glasses', name: 'Подбор очков', specialty: 'ophthalmologist', kind: 'procedure', nomenclature: null },
+  { id: 'proc.dermatologist.dermatoscopy', name: 'Дерматоскопия', specialty: 'dermatologist', kind: 'procedure', nomenclature: null },
+  { id: 'proc.gynecologist.ultrasound', name: 'УЗИ органов малого таза', specialty: 'gynecologist', kind: 'procedure', nomenclature: null },
+  { id: 'proc.dentist.hygiene', name: 'Профессиональная гигиена полости рта', specialty: 'dentist', kind: 'procedure', nomenclature: null },
 ]);
 
 export const SERVICE_BY_ID = Object.freeze(Object.fromEntries(SERVICES.map((service) => [service.id, service])));

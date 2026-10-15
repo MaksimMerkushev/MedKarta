@@ -45,8 +45,12 @@ data/*.graph
 *.full.js
 data/*.full.js
 
-# Журнал аналитики и прочие данные сервера во время работы
+# Журнал аналитики, база личного кабинета и прочие данные сервера во время работы
 var/
+# База кабинета, если ACCOUNTS_DB_PATH указал её не в var/: в ней email и хэши паролей.
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
 
 # Снимки демо-источников сборщика (npm run data:collect) — не коммитим
 data/collected/demo-*.json

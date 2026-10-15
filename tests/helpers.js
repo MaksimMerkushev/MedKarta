@@ -61,7 +61,7 @@ export const makeRecordingPlanner = (respond) => {
   };
 };
 
-export const makeTestPipeline = ({ respond = null, catalog = null, vault = null, outboundMode = undefined } = {}) => {
+export const makeTestPipeline = ({ respond = null, catalog = null, vault = null, outboundMode = undefined, booking = undefined } = {}) => {
   const resolvedCatalog = catalog || fixtureCatalog();
   const resolvedVault = vault || makeVault();
   const { planner, sent } = makeRecordingPlanner(
@@ -84,6 +84,7 @@ export const makeTestPipeline = ({ respond = null, catalog = null, vault = null,
       logger,
       metrics,
       ...modeOption(outboundMode),
+      ...(booking ? { booking } : {}),
     }),
   };
 };

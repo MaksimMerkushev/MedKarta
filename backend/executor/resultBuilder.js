@@ -71,7 +71,6 @@ const buildReplyText = (execution, context) => {
   const parts = [];
   const { stops, notes } = execution;
   const found = stops.filter((stop) => stop.kind !== 'location');
-  const dmsOnly = execution.constraints?.dms_only === true;
   const travelLimit = Number.isInteger(execution.constraints?.max_travel_minutes)
     ? execution.constraints.max_travel_minutes
     : null;
@@ -115,13 +114,19 @@ const buildReplyText = (execution, context) => {
       break;
 
     case 'FIND_DOCTOR':
-      if ((travelLimit || dmsOnly) && found.length > 0 && !found.some((stop) => stop.token)) {
+      /*
+       * Поиск по профилю: лучших отбирает интерфейс — у него есть точка
+       * отправления, время в пути и программа ДМС, которых сервер не знает.
+       * Поэтому ответ не называет одного врача, а обещает подборку ниже.
+       */
+      if (found.length > 0 && !found.some((stop) => stop.token)) {
         const labels = [...new Set(found.map((stop) => stop.specialty).filter(Boolean))];
         parts.push(
-          `Показываю ${labels.length > 0 ? `врачей профиля: ${labels.join(', ')}` : 'подходящих врачей'}` +
+          `Подобрал ${labels.length > 0 ? `врачей профиля: ${labels.join(', ')}` : 'подходящих врачей'}` +
             (travelLimit
               ? ` — только тех, до кого не дольше ${travelLimit} мин пути от вашей точки на карте (без учёта пробок).`
-              : '.'),
+              : '.') +
+            ' Лучшие варианты — ниже.',
         );
         // Список в интерфейсе по часам приёма не сужается: расписание есть не
         // у всех врачей, и молча обещать «после 18:00» нельзя.
@@ -166,7 +171,7 @@ const buildReplyText = (execution, context) => {
    * Поэтому ответ не обещает «входит в ваш ДМС», а говорит, где это видно.
    */
   if (execution.constraints?.dms_only && ['FIND_DOCTOR', 'FIND_CLINIC', 'SEARCH_SERVICE'].includes(execution.action)) {
-    parts.push('Что входит в вашу программу ДМС, отмечу в списке — программу можно выбрать в «Мой ДМС», она хранится только в этом браузере.');
+    parts.push('Что входит в вашу программу ДМС, отмечу на карточках — программу выбирают в «Мой ДМС».');
   }
 
   if (notes.ambiguous.length > 0) {
@@ -271,10 +276,15 @@ export const buildUiAction = (execution, context = {}) => {
   // То же для ДМС: программа выбрана в браузере, фильтрует интерфейс.
   const travelLimited = Number.isInteger(execution.constraints?.max_travel_minutes) || execution.constraints?.dms_only === true;
 
+  /*
+   * Поиск по профилю больше не сужается до одного врача, выбранного сервером
+   * без учёта расстояния: интерфейс показывает весь профиль и сам отбирает
+   * три лучших под условия. Названный врач (метка из запроса) — по фамилии.
+   */
   if (execution.action === 'FIND_DOCTOR' && entities.length > 0) {
     const first = entities[0];
     draft.specialty = first.specialty || null;
-    draft.searchQuery = travelLimited && !first.token ? null : first.name || null;
+    draft.searchQuery = first.token ? first.name || null : null;
     draft.cardDisplayMode = 'doctor';
   }
 
@@ -294,7 +304,9 @@ export const buildUiAction = (execution, context = {}) => {
    * отработал успешно. Иначе пользователь, приславший номер СНИЛС, получал бы
    * обычный результат поиска и не узнал бы, что документы присылать не нужно.
    */
-  draft.replyText = [context.notice, buildReplyText(execution, context)].filter(Boolean).join(' ');
+  // Уточнение уже начинается с того же предупреждения («не присылайте номера документов») — второй раз не повторяем.
+  const reply = buildReplyText(execution, context);
+  draft.replyText = [context.notice && !String(reply || '').startsWith(context.notice) ? context.notice : null, reply].filter(Boolean).join(' ');
 
   /*
    * Финальная нормализация тем же санитайзером, что использует клиент.

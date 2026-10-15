@@ -3,10 +3,12 @@
  *
  * Автономный HTTP-сервер для развёртывания на собственном сервере.
  *
- * Отдаёт три вида ответов:
- *   /api/chat  — конвейер приватности (backend/api/chat.js);
- *   /api/route — маршрут по дорогам (backend/api/route.js);
- *   всё прочее — собранный фронтенд из dist/, если он есть.
+ * Отдаёт:
+ *   /api/chat    — конвейер приватности (backend/api/chat.js);
+ *   /api/route   — маршрут по дорогам (backend/api/route.js);
+ *   /api/account, /api/auth/* — личный кабинет (backend/api/account.js);
+ *   /api/demo/*  — демо-запись: подбор, слоты, запись (backend/api/demoBooking.js);
+ *   всё прочее   — собранный фронтенд из dist/, если он есть.
  *
  * Заголовки безопасности выставляются ЗДЕСЬ, а не в конфигурации хостинга:
  * раньше они жили только в vercel.json и после переезда перестали
@@ -20,8 +22,10 @@ import { pipeline } from 'node:stream';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 
+import accountHandler, { ACCOUNT_PATHS } from './api/account.js';
 import chatHandler from './api/chat.js';
 import configHandler from './api/config.js';
+import demoBookingHandler, { DEMO_BOOKING_PATHS } from './api/demoBooking.js';
 import eventsHandler from './api/events.js';
 import routeHandler from './api/route.js';
 import travelTimesHandler from './api/travelTimes.js';
@@ -209,6 +213,10 @@ const API_HANDLERS = new Map([
   ['/api/travel-times', travelTimesHandler],
   ['/api/events', eventsHandler],
   ['/api/config', configHandler],
+  // Личный кабинет: вход, программа ДМС, избранное (backend/api/account.js).
+  ...ACCOUNT_PATHS.map((apiPath) => [apiPath, accountHandler]),
+  // Демо-запись (только DEMO_DATA=on): подбор, слоты, запись, отмена.
+  ...DEMO_BOOKING_PATHS.map((apiPath) => [apiPath, demoBookingHandler]),
 ]);
 
 const apiPathOf = (url) => {

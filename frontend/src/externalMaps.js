@@ -28,6 +28,20 @@ const toPoint = (value) => {
 
 const fixed = (value) => Number(value).toFixed(6);
 
+/*
+ * Точки маршрута для внешних карт. Два врача в одном здании — одна точка:
+ * повтор координат давал в Яндексе и 2ГИС пустой отрезок «из дома в тот же дом».
+ */
+const routePoints = (targets) => {
+  const points = [];
+  for (const point of (targets || []).map(toPoint).filter(Boolean)) {
+    const last = points.at(-1);
+    if (last && fixed(last.lat) === fixed(point.lat) && fixed(last.lng) === fixed(point.lng)) continue;
+    points.push(point);
+  }
+  return points;
+};
+
 /**
  * Яндекс Карты: rtext=широта,долгота~широта,долгота, rtt — тип маршрута.
  * Без точки отправления строка начинается с «~»: Яндекс подставит текущее
@@ -38,7 +52,7 @@ const fixed = (value) => Number(value).toFixed(6);
  * @param {'auto'|'transit'|'foot'|'bike'} [mode]
  */
 export const buildYandexRouteUrl = (origin, targets, mode = 'auto') => {
-  const points = (targets || []).map(toPoint).filter(Boolean);
+  const points = routePoints(targets);
   if (points.length === 0) return null;
   const start = toPoint(origin);
   const rtext = [start ? `${fixed(start.lat)},${fixed(start.lng)}` : '', ...points.map((p) => `${fixed(p.lat)},${fixed(p.lng)}`)].join('~');
@@ -53,7 +67,7 @@ export const buildYandexRouteUrl = (origin, targets, mode = 'auto') => {
  * Пустая первая точка — «от моего местоположения».
  */
 export const build2gisRouteUrl = (origin, targets, mode = 'auto') => {
-  const points = (targets || []).map(toPoint).filter(Boolean);
+  const points = routePoints(targets);
   if (points.length === 0) return null;
   const start = toPoint(origin);
   const path = [start ? `${fixed(start.lng)},${fixed(start.lat)}` : '', ...points.map((p) => `${fixed(p.lng)},${fixed(p.lat)}`)].join('|');

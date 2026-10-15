@@ -47,7 +47,8 @@ const toPlanConstraints = (constraints = {}, isChild = false) => {
  * @returns {object} план в форме, которую возвращает planner/validator.js
  */
 export const planLocally = (context) => {
-  const constraints = toPlanConstraints(context.constraints, context.classification?.isChild);
+  // Для кого приём — по последней реплике, где это сказано («педиатр для сына» → «а теперь мне»).
+  const constraints = toPlanConstraints(context.constraints, context.booking ? context.booking.child : context.classification?.isChild);
   const selection = context.constraints?.selection || null;
 
   if (context.signals?.clear) {

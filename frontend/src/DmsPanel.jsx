@@ -88,6 +88,7 @@ export default function DmsPanel({ insurance, planId, today, onSave, onClose, on
             Действует с {formatDay(draftPlan.validFrom)} по {formatDay(draftPlan.validTo)}
             {expired && <span className="ml-1 font-semibold text-amber-700 dark:text-amber-300">— срок истёк</span>}
           </p>
+          {draftPlan.summary && <p>{draftPlan.summary}</p>}
           {draftPlan.insured === 'child' && (
             <p>Детская программа: отмечаются только детские врачи. Для себя выберите свою программу отдельно.</p>
           )}
@@ -127,7 +128,7 @@ export default function DmsPanel({ insurance, planId, today, onSave, onClose, on
 
       <p className="mt-3 text-[11px] leading-4 text-slate-500 dark:text-slate-400">
         Сохраняется только выбранная программа и только в этом браузере. Номер полиса, ФИО и место работы не нужны и никуда не отправляются.
-        {isDemo && ' Страховые и программы в демо-режиме вымышлены.'}
+        {isDemo && ' Страховые и программы в демо-режиме вымышлены: это не настоящее страховое покрытие.'}
       </p>
     </section>
   );

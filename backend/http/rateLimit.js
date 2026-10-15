@@ -241,6 +241,12 @@ const trustedProxies = () => {
   return configured.length > 0 ? new Set(configured) : LOOPBACK;
 };
 
+/** Пришёл ли запрос от нашего прокси: только тогда можно верить X-Forwarded-*. */
+export const isFromTrustedProxy = (req) => {
+  const socketAddress = (req.socket?.remoteAddress || '').toString().slice(0, 64).toLowerCase();
+  return trustedProxyHops() > 0 && trustedProxies().has(socketAddress);
+};
+
 export const getClientIp = (req) => {
   const socketAddress = (req.socket?.remoteAddress || 'unknown').toString().slice(0, 64);
   const hops = trustedProxyHops();
@@ -268,7 +274,14 @@ export const getClientIp = (req) => {
  *
  * @returns {{ allowed: boolean, retryAfterSeconds: number, remaining: number }}
  */
-export const checkRateLimit = createRateLimiter({ maxPerInstance: Number.POSITIVE_INFINITY });
+/*
+ * 40 реплик за 5 минут: кнопки уточнений под подбором («вечера», «в любой
+ * день») тоже уходят в чат репликой, и при 20 активный диалог с уточнениями
+ * упирался в «Слишком много запросов». Процессор по-прежнему ограничивает
+ * chatCpuLimiter, а деньги на модель — takeExternalBudget.
+ */
+export const CHAT_MAX_PER_IP = 40;
+export const checkRateLimit = createRateLimiter({ maxPerIp: CHAT_MAX_PER_IP, maxPerInstance: Number.POSITIVE_INFINITY });
 
 /**
  * Бюджет обращений к внешней модели на инстанс. Расходуется только когда

@@ -7,8 +7,12 @@
  * Тот же модуль переиспользуется на клиенте (defense in depth).
  */
 
+import { normalizeSearchRequest } from './demoSearch.js';
+
 export const LIMITS = {
-  MAX_MESSAGES: 12,
+  // Всего сообщений в истории (сервер отклоняет больше) и реплик пользователя, которые шлёт клиент.
+  MAX_MESSAGES: 40,
+  MAX_USER_TURNS: 20,
   MAX_MESSAGE_CHARS: 1000,
   MAX_REPLY_CHARS: 1500,
   MAX_FIELD_CHARS: 80,
@@ -133,6 +137,20 @@ const normalizeServices = (value) => {
   return services.length > 0 ? services : null;
 };
 
+/*
+ * Запрос строгого подбора демо-записи (backend/demo/chatBridge.js).
+ * Нормализуется тем же модулем, что и на сервере подбора: в интерфейс не
+ * попадает ни неизвестный ключ, ни строка произвольной длины.
+ */
+const sanitizeBooking = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const { request } = normalizeSearchRequest(value.request);
+  const summary = Array.isArray(value.summary)
+    ? value.summary.map((item) => cleanText(item, LIMITS.MAX_FIELD_CHARS)).filter(Boolean).slice(0, 20)
+    : [];
+  return { request, summary };
+};
+
 export const DEFAULT_REPLY =
   'Готово! Посмотрите на карту — я применил подходящие фильтры.';
 
@@ -181,6 +199,7 @@ export const sanitizeAiAction = (raw) => {
       ? source.maxTravelMinutes
       : null,
     dmsOnly: triState(source.dmsOnly) === true,
+    booking: sanitizeBooking(source.booking),
 
     replyText: cleanMultilineText(source.replyText, LIMITS.MAX_REPLY_CHARS) || DEFAULT_REPLY,
   };

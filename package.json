@@ -2,7 +2,7 @@
   "name": "medkarta",
   "private": true,
   "license": "UNLICENSED",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "type": "module",
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
@@ -23,6 +23,11 @@
     "test:hybrid": "PRIVACY_OUTBOUND_MODE=hybrid node --test tests/*.test.js",
     "test:security": "node --test tests/*.test.js && PRIVACY_OUTBOUND_MODE=hybrid node --test tests/*.test.js",
     "eval:privacy": "node scripts/privacy-eval.mjs",
+    "ai:check": "node scripts/ai-check.mjs",
+    "ai:bench": "node scripts/ai-bench.mjs",
+    "ai:trace": "node scripts/ai-trace.mjs",
+    "demo:generate": "node scripts/demo-generate.mjs",
+    "demo:reset": "node scripts/demo-reset.mjs",
     "preview": "vite preview",
     "audit:security": "npm audit --omit=dev",
     "prices:doctors": "node scripts/generate-doctor-service-prices.mjs",

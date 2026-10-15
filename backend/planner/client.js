@@ -138,6 +138,29 @@ export const isAllowedUpstreamUrl = (value) => {
   }
 };
 
+/*
+ * Глубина рассуждений для моделей, которые умеют рассуждать (OpenRouter:
+ * reasoning.effort). Не задано — параметр не отправляется: другие
+ * OpenAI-совместимые API могут его не знать.
+ */
+export const REASONING_EFFORTS = Object.freeze(['none', 'minimal', 'low', 'medium', 'high']);
+
+/**
+ * Тело запроса к модели. Одно на ассистента и на проверки (npm run ai:check),
+ * чтобы проверка проверяла ровно то, что отправляет ассистент.
+ */
+export const buildPlannerBody = ({ model, messages, reasoningEffort = null }) => {
+  const body = {
+    model,
+    messages,
+    response_format: { type: 'json_schema', json_schema: PLAN_JSON_SCHEMA },
+    temperature: 0,
+    max_tokens: 700,
+  };
+  if (REASONING_EFFORTS.includes(reasoningEffort)) body.reasoning = { effort: reasoningEffort };
+  return body;
+};
+
 export const createExternalPlanner = ({
   apiKey,
   url,
@@ -145,6 +168,7 @@ export const createExternalPlanner = ({
   timeoutMs = 20_000,
   fetchImpl = fetch,
   logger = null,
+  reasoningEffort = null,
 } = {}) => {
   const name = 'external';
 
@@ -170,13 +194,7 @@ export const createExternalPlanner = ({
       messages.push({ role: 'system', content: hintBlock });
     }
 
-    const body = {
-      model,
-      messages,
-      response_format: { type: 'json_schema', json_schema: PLAN_JSON_SCHEMA },
-      temperature: 0,
-      max_tokens: 700,
-    };
+    const body = buildPlannerBody({ model, messages, reasoningEffort });
 
     const serialized = JSON.stringify(body);
 
@@ -266,6 +284,9 @@ export const createExternalPlanner = ({
       if (error instanceof PlannerError) {
         throw error;
       }
+      // Код транспорта (proxy_auth, proxy_timeout, tls…) — без сообщения: в нём бывают адреса.
+      const code = typeof error?.code === 'string' && /^[a-z_]{2,32}$/i.test(error.code) ? error.code : 'unknown';
+      logger?.event('planner.transport_error', { provider: name, code });
       throw new PlannerError('planner transport error', PLANNER_ERROR.UPSTREAM);
     } finally {
       clearTimeout(timer);

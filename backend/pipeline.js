@@ -19,6 +19,7 @@ import { createEntityResolver } from './privacy/entityResolver.js';
 import { createPrivacyGateway } from './privacy/gateway.js';
 import { createStoreFromEnv, createTokenVault } from './storage/tokenVault.js';
 import { createExternalPlanner, PLANNER_ERROR } from './planner/client.js';
+import { createProxyFetch, parseProxyUrl } from './planner/proxyFetch.js';
 import { validatePlan } from './planner/validator.js';
 import { planLocally } from './planner/localPlanner.js';
 import { createCatalogRepository } from './executor/catalogRepository.js';
@@ -26,8 +27,25 @@ import { createPolicyEngine } from './executor/policyEngine.js';
 import { createExecutor } from './executor/actions.js';
 import { createRoutingProviderFromEnv } from './executor/routing.js';
 import { buildEmergencyAction, buildUiAction } from './executor/resultBuilder.js';
+import { bookingModeFromEnv, bookingReplyText, buildBookingRequest, summarizeBooking } from './demo/chatBridge.js';
+import { UNKNOWN_SPECIALTIES } from './privacy/unknownSpecialties.js';
+
+/* Реплика целиком — благодарность или «понятно», без нового запроса. */
+const THANKS_ONLY = /^(?:(?:ок|окей|хорошо|понятно|ясно|отлично|супер|класс|ага|угу)[\s,!.)]*)*(?:спасибо|спс|благодарю|thanks|спасибки)(?:\s+(?:большое|огромное|вам|за\s+помощь))*[\s,!.)🙏😊👍]*$|^(?:понятно|ясно|хорошо|ок|окей)[\s,!.]*$/u;
+import { SPECIALTY_CANON } from '../shared/specialties.js';
+import { getDemoCatalog } from './demo/catalog.js';
+import { demoNow } from './demo/time.js';
+import { publicClinicsHidden } from './demo/flags.js';
 import { logger as defaultLogger } from './observability/safeLogger.js';
 import { metrics as defaultMetrics } from './observability/metrics.js';
+
+/* Вопросы о найденном варианте посреди записи. */
+const QUESTION_PRICE = /(?<!\p{L})(?:сколько\s+(?:это\s+)?(?:стоит|стоить|будет\s+стоить)|какая\s+цена|почём|почем|стоимость|цена\s+при[её]ма)(?!\p{L})/u;
+const QUESTION_WHERE = /(?<!\p{L})(?:где\s+(?:это|находится|она|он|клиника|принимает)|какой\s+адрес|адрес\s+клиники)(?!\p{L})/u;
+const QUESTION_HOW = /(?<!\p{L})(?:как\s+(?:мне\s+)?(?:записаться|оформить)|что\s+дальше|а\s+дальше\s+что|что\s+нажать)(?!\p{L})/u;
+/* Реплика латиницей без кириллицы: «Need ENT doctor tomorrow». */
+const LATIN_ONLY = (text) => (text.match(/[a-z]/giu) || []).length >= 5 && !/\p{Script=Cyrillic}/u.test(text);
+const DOCTOR_WORDS = /(?<!\p{L})(?:врач\p{L}*|доктор\p{L}*|специалист\p{L}*|запис\p{L}*|запиш\p{L}*)(?!\p{L})/u;
 
 /**
  * @param {object} deps все зависимости инъектируются: это то, что позволяет
@@ -42,6 +60,12 @@ export const createPipeline = ({
   logger = defaultLogger,
   metrics = defaultMetrics,
   outboundMode = undefined,
+  /*
+   * Демо-запись: ответ на «нужен ЛОР завтра после 18:00» несёт запрос
+   * строгого подбора (action.booking), который интерфейс исполняет через
+   * /api/demo/search. now — «текущее» время демо (DEMO_NOW в тестах).
+   */
+  booking = { enabled: false, now: () => Date.now() },
 }) => {
   const resolver = createEntityResolver(catalog);
   const allowedServices = new Map(
@@ -235,6 +259,93 @@ export const createPipeline = ({
         notice: noticeFor(gate.reason),
       });
 
+      if (booking.enabled) {
+        // Справочник демо — для подписей названных врачей и клиник (кэшируется на процесс).
+        const index = await (booking.getIndex || getDemoCatalog)().catch(() => null);
+        const built = buildBookingRequest({ booking: gate.context.booking, execution, now: booking.now(), index });
+        if (built) {
+          action.booking = { request: built.request, summary: summarizeBooking(built) };
+          // Карта не должна противоречить подбору: ни лишнего маршрута, ни фильтра по исключённой клинике.
+          if (built.dropRoute) {
+            action.buildRoute = false;
+            action.targetStops = [];
+          }
+          if (built.dropPlaceFilter) {
+            action.searchQuery = null;
+            action.clinic = null;
+            action.targetStops = [];
+          }
+          action.replyText = [noticeFor(gate.reason), bookingReplyText({ ...built, booking: gate.context.booking })].filter(Boolean).join(' ');
+          metrics.increment('pipeline.booking_request');
+        } else if (execution.action === 'CLARIFY' && booking.publicHidden) {
+          // Не нашли — возможно, искали государственную клинику, которую демо скрывает.
+          action.replyText = `${action.replyText} В демо-режиме показываются только частные клиники (вымышленные и реальные с вымышленными врачами) — государственные временно скрыты.`;
+        }
+      }
+
+      /*
+       * Профиль, которого в справочнике нет («косметолог», «мануальный
+       * терапевт»): честное «такого врача нет» вместо общего «уточните» или,
+       * хуже, подбора по прежнему профилю. Похожий профиль — только словами.
+       */
+      const unknownSpecialty = gate.context.booking?.unknownSpecialty;
+      if (unknownSpecialty && UNKNOWN_SPECIALTIES[unknownSpecialty]) {
+        const { label, related } = UNKNOWN_SPECIALTIES[unknownSpecialty];
+        const note = `Врачей профиля «${label}» в справочнике МедКарты нет — показать или записать к такому врачу не могу, а подменять другим профилем без вашего согласия не буду.`;
+        const hint = related ? ` Похожий профиль, который есть, — ${SPECIALTY_CANON[related].toLowerCase()}: напишите, если он подойдёт.` : '';
+        if (action.booking) {
+          // Назван и профиль, который есть («косметолог или дерматолог»): подбор — только по нему.
+          action.replyText = `Врачей профиля «${label}» в справочнике МедКарты нет — подбираю только по профилю, который вы назвали вместе с ним. ${action.replyText}`;
+        } else if ((gate.context.booking?.specialties || []).length === 0) {
+          action.replyText = `${note}${hint}`;
+          action.specialty = null;
+          action.doctorProfile = null;
+          action.searchQuery = null;
+          action.buildRoute = false;
+          action.targetStops = [];
+        }
+      }
+
+      /*
+       * «Спасибо», «понятно, спасибо» — не новый запрос: подбор остаётся как
+       * был, а ответ — вежливое завершение, а не повтор «Ищу свободное время».
+       */
+      const lastUserText = [...(messages || [])].reverse().find((message) => message?.role === 'user')?.content || '';
+      const closing = String(lastUserText).toLowerCase().trim();
+
+      /*
+       * Вопрос не по теме посреди записи: честное «это не ко мне», а прежний
+       * запрос — как был (его условия gateway собрал без этой реплики).
+       */
+      if (gate.context.offTopic) {
+        // Не по теме с самого начала — и подбора нет: условий не было.
+        if (gate.context.offTopicOnly) {
+          delete action.booking;
+          action.buildRoute = false;
+          action.targetStops = [];
+        }
+        const kept = action.booking?.summary?.length ? ` Прежний запрос помню: ${action.booking.summary.join(', ')} — можно продолжать.` : '';
+        action.replyText = `С этим не подскажу: я помогаю найти врача, записаться и построить маршрут по Казани.${kept}`;
+      } else if (action.booking) {
+        /* Вопросы о найденном: цена, адрес, как записаться — ответ про подбор ниже, а не повтор «ищу». */
+        const answers = [
+          [QUESTION_PRICE, 'Цена приёма указана в каждом варианте ниже. Ограничить можно словами — например, «до 3000 ₽».'],
+          [QUESTION_WHERE, 'Адрес — в карточке варианта: «На карте» покажет клинику, «В маршрут» построит путь.'],
+          [QUESTION_HOW, 'Выберите время в варианте ниже и нажмите «Записаться» — запись подтверждаете вы.'],
+        ].filter(([pattern]) => pattern.test(closing)).map(([, text]) => text);
+        if (answers.length > 0) action.replyText = `${answers.join(' ')} ${action.replyText}`;
+      } else if (execution.action === 'CLARIFY' && !action.booking && LATIN_ONLY(closing)) {
+        // «Need ENT doctor tomorrow» — запросы понимаются только по-русски; честно и с примером.
+        action.replyText = 'Я понимаю запросы на русском языке. Напишите, например: «ЛОР завтра после 18» или «терапевт рядом по ДМС». / I understand requests in Russian only — e.g. «ЛОР завтра после 18».';
+      } else if (execution.action === 'CLARIFY' && (!gate.reason || gate.reason === 'nothing_to_plan') && !(gate.context.specialties || []).length && DOCTOR_WORDS.test(closing)) {
+        // «Хочу к врачу» без профиля — вопрос, а не общая справка.
+        action.replyText = 'К какому врачу записать? Назовите специалиста — например, «к терапевту», — или опишите, что беспокоит: подскажу профиль. Диагнозов не ставлю.';
+      }
+      // «Ок» в ответ на «искать без этого?» — согласие, а не прощание: ответ — новый подбор.
+      if (THANKS_ONLY.test(closing) && !gate.context.booking?.answered) {
+        action.replyText = `${/спасиб|спс|благодар|thanks/u.test(closing) ? 'Пожалуйста!' : 'Хорошо.'} Если нужно что-то поменять — день, время, цену или врача, — просто напишите: прежние условия я помню.`;
+      }
+
       metrics.observe('pipeline.latency_ms', Date.now() - started, { plan_source: planSource });
       logger.event('pipeline.done', {
         request_id: gate.requestId,
@@ -322,6 +433,25 @@ export const getDefaultPipeline = () => {
   return cached;
 };
 
+/*
+ * Ключ модели и способ до неё достучаться. С AI_PROXY_URL запрос к модели
+ * идёт через прокси (OpenRouter не принимает российские адреса). Если адрес
+ * прокси задан с ошибкой, внешняя модель выключается: отправлять запрос
+ * напрямую, в обход прокси, нельзя — ответит локальный планировщик.
+ */
+export const plannerTransportFromEnv = (env = process.env, logger = defaultLogger) => {
+  const apiKey = env.OPENROUTER_API_KEY || env.AI_API_KEY;
+  if (!env.AI_PROXY_URL) return { apiKey, fetchImpl: fetch };
+  try {
+    const proxy = parseProxyUrl(env.AI_PROXY_URL);
+    logger.event('planner.proxy', { status: 'enabled', provider: proxy.protocol });
+    return { apiKey, fetchImpl: createProxyFetch({ proxy }) };
+  } catch {
+    logger.warn('planner.proxy_invalid', { status: 'AI_PROXY_URL is invalid, external planner disabled' });
+    return { apiKey: undefined, fetchImpl: fetch };
+  }
+};
+
 const buildDefaultPipeline = async () => {
   const catalog = await loadCatalog();
   const vault = createTokenVault({ store: createStoreFromEnv() });
@@ -334,9 +464,10 @@ const buildDefaultPipeline = async () => {
     defaultLogger.warn('planner.default_upstream', { status: 'AI_UPSTREAM_URL not set' });
   }
   const planner = createExternalPlanner({
-    apiKey: process.env.OPENROUTER_API_KEY || process.env.AI_API_KEY,
+    ...plannerTransportFromEnv(),
     url: process.env.AI_UPSTREAM_URL || 'https://modelhub.my/v1/chat/completions',
     model: process.env.AI_MODEL || 'gpt-5.4-mini',
+    reasoningEffort: process.env.AI_REASONING_EFFORT || null,
     logger: defaultLogger,
   });
 
@@ -345,6 +476,7 @@ const buildDefaultPipeline = async () => {
     vault,
     planner,
     routing: await createRoutingProviderFromEnv(),
+    booking: { enabled: bookingModeFromEnv(), publicHidden: publicClinicsHidden(), now: () => demoNow() },
   });
 };
 

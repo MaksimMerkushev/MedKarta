@@ -158,7 +158,7 @@ const RULES = [
   { id: 'derma', weight: 3, stems: ['кож', 'сып', 'зуд', 'прыщ', 'родинк', 'экзем', 'псориаз', 'волос', 'ногт', 'шелушени'], specialties: ['dermatologist'] },
   { id: 'ophthalmo', weight: 3, stems: ['глаз', 'зрени', 'век', 'слезит', 'близорук', 'дальнозорк', 'ячмен'], specialties: ['ophthalmologist'] },
   { id: 'lor', weight: 3, stems: ['ухо', 'уши', 'ушн', 'горл', 'нос', 'насморк', 'гайморит', 'ангин', 'слух', 'миндалин', 'осиплост', 'храп'], specialties: ['lor', 'therapist'] },
-  { id: 'endo', weight: 3, stems: ['щитовидн', 'сахар', 'гормон', 'диабет', 'похудени'], specialties: ['endocrinologist', 'therapist'] },
+  { id: 'endo', weight: 3, stems: ['щитовидн', 'щитовидк', 'сахар', 'гормон', 'диабет', 'похудени'], specialties: ['endocrinologist', 'therapist'] },
   { id: 'gyneco', weight: 3, stems: ['беременн', 'менструа', 'цикл', 'гинеколог'], specialties: ['gynecologist'] },
   { id: 'uro', weight: 3, stems: ['почк', 'мочев', 'простат', 'мочеиспускани'], specialties: ['urologist', 'therapist'] },
   { id: 'ortho', weight: 2, stems: ['перелом', 'вывих', 'ушиб', 'сустав', 'колен', 'травм', 'связк', 'плеч'], specialties: ['traumatologist', 'orthopedist'] },
@@ -186,7 +186,13 @@ const RULES = [
  * токены в правила не попадают, иначе «Ближайший травмпункт» считался
  * описанием травмы и не уходил планировщику.
  */
-const NOT_A_COMPLAINT = /^(?:травмпункт|травм[ао]толог|эколог|экономи|экобез|рака[тк]|раков|ракурс|вичуг|спидометр)/u;
+const PHRASE_RULES = [
+  { id: 'gyneco_phrase', specialty: 'gynecologist', pattern: /(?<!\p{L})(?:по\s+)?женск\p{L}*\s+(?:дел|част|проблем|болезн)\p{L}*/u },
+  { id: 'uro_phrase', specialty: 'urologist', pattern: /(?<!\p{L})(?:по\s+)?мужск\p{L}*\s+(?:дел|част|проблем|болезн)\p{L}*/u },
+];
+
+// «Просто консультация» — не «простуда» и не «простата» (основа «прост» совпадала с обеими).
+const NOT_A_COMPLAINT = /^(?:травмпункт|травм[ао]толог|эколог|экономи|экобез|рака[тк]|раков|ракурс|вичуг|спидометр|прост(?:о|ой|ая|ое|ые|ого|ую|ым)?$)/u;
 
 /** Указатели на то, что речь идёт о ребёнке. */
 const CHILD_STEMS = ['ребенок', 'ребенк', 'дет', 'малыш', 'грудничк', 'сын', 'доч', 'подростк', 'младенц'];
@@ -319,6 +325,18 @@ export const classifySymptoms = (text) => {
     });
   }
 
+  /*
+   * Разговорные описания профиля, которых нет в словах-жалобах: «к врачу по
+   * женским делам», «по мужской части». Слово «женский» само по себе
+   * («врач женского пола», «женский врач» — может быть и о поле врача)
+   * профилем не считается — только с «делам/части/проблемам».
+   */
+  for (const rule of PHRASE_RULES) {
+    if (!rule.pattern.test(normalized)) continue;
+    matchedRules.push(rule.id);
+    scores.set(rule.specialty, (scores.get(rule.specialty) || 0) + 3);
+  }
+
   const isChild = CHILD_NORMALIZED.some((stem) => matchesStem(tokenStems, stem));
 
   // Ребёнку профильный приём — у педиатра; терапевт остаётся запасным вариантом.
@@ -347,6 +365,15 @@ export const classifySymptoms = (text) => {
   const strength = Math.min(1, top / 3);
   const confidence = Number((strength * (0.5 + 0.5 * dominance)).toFixed(3));
 
+  /*
+   * Два разных профиля с равным весом («болит голова и живот»): выбирать
+   * одного — гадать. Тогда ответ ассистента спрашивает, к кому записаться.
+   */
+  const specialists = ranked.filter(([specialty]) => specialty !== 'therapist');
+  const tied = specialists.length > 1 && specialists[0][1] === specialists[1][1]
+    ? specialists.slice(0, 2).map(([specialty]) => specialty)
+    : null;
+
   return {
     emergency: emergency ? { id: emergency.id } : null,
     hasMedicalText,
@@ -354,6 +381,7 @@ export const classifySymptoms = (text) => {
     confidence,
     isChild,
     matchedRules,
+    ...(tied ? { tied } : {}),
   };
 };
 

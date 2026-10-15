@@ -3,11 +3,19 @@
  * Этот код является интеллектуальной собственностью автора.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Bot, X, Send, Loader2 } from 'lucide-react';
+import { Bot, X, Send, Loader2, RotateCcw } from 'lucide-react';
 import { analyzeSymptoms } from './services/ai';
 import { LIMITS } from '@shared/contract.js';
+import TopPicks from './TopPicks';
+import DemoOffers from './DemoOffers';
+
+const bumpId = (ref) => {
+  ref.current += 1;
+  return ref.current;
+};
 
 const GREETING = {
+  id: 0,
   role: 'assistant',
   content:
     'Привет! 👋 Я ваш навигатор по МедКарте. Расскажите, какой специалист вам нужен или на что вы жалуетесь, и я помогу найти врача и построить маршрут.',
@@ -30,8 +38,27 @@ const friendlyError = (error) => {
   }
 };
 
-export default function AIAssistant({ isOpen, onClose, onApplyTriage, isMobile, avoidRoutePanel = false }) {
+export default function AIAssistant({
+  isOpen,
+  onClose,
+  onApplyTriage,
+  isMobile,
+  avoidRoutePanel = false,
+  picks = null,
+  onFocusPick,
+  onRoutePick,
+  onShowAllPicks,
+  bookings = null,
+  bookingOrigin = null,
+  bookingPlanId = null,
+  bookingsRefresh = 0,
+  onBookOption,
+  onSelectPlan,
+  onRequestOrigin,
+}) {
   const [messages, setMessages] = useState([GREETING]);
+  // У каждой реплики свой id: к ответу ассистента привязывается подборка «топ-3».
+  const nextIdRef = useRef(1);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef(null);
@@ -64,6 +91,20 @@ export default function AIAssistant({ isOpen, onClose, onApplyTriage, isMobile, 
   // размонтированного диалога.
   useEffect(() => () => abortRef.current?.abort(), []);
 
+  /*
+   * Ассистент держит контекст всей переписки: «а завтра?» дополняет прошлый
+   * запрос. Начать с чистого листа — этой кнопкой (или словами «давай
+   * заново»): прежние условия больше не учитываются.
+   */
+  const handleRestart = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setIsLoading(false);
+    setInputValue('');
+    setMessages([GREETING]);
+    inputRef.current?.focus();
+  }, []);
+
   const handleClose = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
@@ -94,14 +135,20 @@ export default function AIAssistant({ isOpen, onClose, onApplyTriage, isMobile, 
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [isOpen, handleClose]);
 
-  const handleSend = useCallback(async () => {
-    const userText = inputValue.trim().slice(0, LIMITS.MAX_MESSAGE_CHARS);
+  /*
+   * Реплика пользователя — набранная или ответ кнопкой под подбором
+   * («вечера», «в любой день»). Кнопка тоже пишет в историю: иначе выбор
+   * жил только в одном блоке подбора, и следующая реплика («а в пятницу?»)
+   * снова спрашивала «утра или вечера?» или возвращала снятое условие.
+   */
+  const sendText = useCallback(async (text, { fromInput = false } = {}) => {
+    const userText = String(text || '').trim().slice(0, LIMITS.MAX_MESSAGE_CHARS);
     if (!userText || isLoading) {
       return;
     }
 
-    setInputValue('');
-    const nextMessages = [...messages, { role: 'user', content: userText }];
+    if (fromInput) setInputValue('');
+    const nextMessages = [...messages, { id: bumpId(nextIdRef), role: 'user', content: userText }];
     setMessages(nextMessages);
     setIsLoading(true);
 
@@ -114,20 +161,23 @@ export default function AIAssistant({ isOpen, onClose, onApplyTriage, isMobile, 
         return;
       }
 
-      setMessages((prev) => [...prev, { role: 'assistant', content: result.replyText }]);
-      onApplyTriage?.(result);
+      const messageId = bumpId(nextIdRef);
+      setMessages((prev) => [...prev, { id: messageId, role: 'assistant', content: result.replyText }]);
+      onApplyTriage?.(result, { messageId });
     } catch (error) {
       if (controller.signal.aborted) {
         return;
       }
-      setMessages((prev) => [...prev, { role: 'assistant', content: friendlyError(error) }]);
+      setMessages((prev) => [...prev, { id: bumpId(nextIdRef), role: 'assistant', content: friendlyError(error) }]);
     } finally {
       if (abortRef.current === controller) {
         abortRef.current = null;
         setIsLoading(false);
       }
     }
-  }, [inputValue, isLoading, messages, onApplyTriage]);
+  }, [isLoading, messages, onApplyTriage]);
+
+  const handleSend = useCallback(() => sendText(inputValue, { fromInput: true }), [sendText, inputValue]);
 
   if (!isOpen) {
     return null;
@@ -138,17 +188,44 @@ export default function AIAssistant({ isOpen, onClose, onApplyTriage, isMobile, 
 
   const renderMessages = (bubbleClass) => (
     <div className="space-y-4">
-      {messages.map((msg, idx) => (
-        <div key={`${msg.role}-${idx}`} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-          <div
-            className={`max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-4 ${bubbleClass} leading-relaxed shadow-sm ${
-              msg.role === 'user'
-                ? 'bg-violet-600 text-white rounded-tr-sm'
-                : 'bg-slate-50 text-slate-700 border border-slate-100 rounded-tl-sm dark:bg-slate-700 dark:border-slate-600 dark:text-slate-200'
-            }`}
-          >
-            {msg.content}
+      {messages.map((msg) => (
+        <div key={msg.id}>
+          <div className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div
+              className={`max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-4 ${bubbleClass} leading-relaxed shadow-sm ${
+                msg.role === 'user'
+                  ? 'bg-violet-600 text-white rounded-tr-sm'
+                  : 'bg-slate-50 text-slate-700 border border-slate-100 rounded-tl-sm dark:bg-slate-700 dark:border-slate-600 dark:text-slate-200'
+              }`}
+            >
+              {msg.content}
+            </div>
           </div>
+          {msg.role === 'assistant' && bookings?.[msg.id] && (
+            <DemoOffers
+              booking={bookings[msg.id]}
+              origin={bookingOrigin}
+              planId={bookingPlanId}
+              refreshKey={bookingsRefresh}
+              compact={!isMobile}
+              autoScroll={msg.id === messages[messages.length - 1]?.id}
+              onSelectPlan={onSelectPlan}
+              onBook={onBookOption}
+              onFocus={(option) => onFocusPick?.({ lat: option.clinic.lat, lng: option.clinic.lng })}
+              onRequestOrigin={onRequestOrigin}
+              onAnswer={isLoading ? null : sendText}
+            />
+          )}
+          {msg.role === 'assistant' && !bookings?.[msg.id] && picks?.[msg.id] && (
+            <TopPicks
+              state={picks[msg.id]}
+              compact={!isMobile}
+              autoScroll={msg.id === messages[messages.length - 1]?.id}
+              onFocus={onFocusPick}
+              onRoute={onRoutePick}
+              onShowAll={() => onShowAllPicks?.(msg.id)}
+            />
+          )}
         </div>
       ))}
       {isLoading && (
@@ -187,14 +264,28 @@ export default function AIAssistant({ isOpen, onClose, onApplyTriage, isMobile, 
               </div>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={handleClose}
-            aria-label="Закрыть помощника"
-            className="flex h-10 w-10 items-center justify-center rounded-full text-slate-400 transition-colors active:bg-slate-100 dark:active:bg-slate-700"
-          >
-            <X size={22} aria-hidden="true" />
-          </button>
+          <div className="flex items-center gap-1">
+            {messages.length > 1 && (
+              <button
+                type="button"
+                onClick={handleRestart}
+                aria-label="Начать новый разговор"
+                title="Новый разговор: прежние условия не учитываются"
+                className="flex h-10 w-10 items-center justify-center rounded-full text-slate-400 transition-colors active:bg-slate-100 dark:active:bg-slate-700"
+                data-testid="ai-restart"
+              >
+                <RotateCcw size={19} aria-hidden="true" />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleClose}
+              aria-label="Закрыть помощника"
+              className="flex h-10 w-10 items-center justify-center rounded-full text-slate-400 transition-colors active:bg-slate-100 dark:active:bg-slate-700"
+            >
+              <X size={22} aria-hidden="true" />
+            </button>
+          </div>
         </div>
 
         <div
@@ -225,7 +316,7 @@ export default function AIAssistant({ isOpen, onClose, onApplyTriage, isMobile, 
               }}
               placeholder="Опишите симптомы..."
               disabled={isLoading}
-              className="w-full rounded-2xl border border-slate-200 bg-slate-50 pl-4 pr-14 py-3.5 text-[15px] outline-none transition-all focus:border-violet-400 focus:ring-2 focus:ring-violet-300 dark:border-slate-600 dark:bg-slate-900 dark:text-white"
+              className="w-full rounded-2xl border border-slate-200 bg-slate-50 pl-4 pr-14 py-3.5 text-[15px] text-slate-800 caret-violet-600 outline-none transition-all placeholder:text-slate-400 focus:border-violet-400 focus:ring-2 focus:ring-violet-300 dark:border-slate-600 dark:bg-slate-900 dark:text-white dark:caret-violet-300 dark:placeholder:text-slate-500"
             />
             <button
               type="button"
@@ -250,7 +341,7 @@ export default function AIAssistant({ isOpen, onClose, onApplyTriage, isMobile, 
   // Десктоп/планшет: popup
   return (
     <div
-      className="absolute bottom-20 right-6 z-[1050] w-[350px] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl transition-all dark:border-slate-700 dark:bg-slate-800"
+      className={`absolute bottom-20 right-6 z-[1050] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl transition-all dark:border-slate-700 dark:bg-slate-800 ${bookings ? 'w-[380px]' : 'w-[350px]'}`}
       // Открытая панель маршрута занимает правый верхний угол (320 px + отступы):
       // окно встаёт левее, а не поверх точек маршрута.
       style={avoidRoutePanel ? { right: 360 } : undefined}
@@ -269,17 +360,32 @@ export default function AIAssistant({ isOpen, onClose, onApplyTriage, isMobile, 
             </div>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={handleClose}
-          aria-label="Закрыть помощника"
-          className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700"
-        >
-          <X size={18} aria-hidden="true" />
-        </button>
+        <div className="flex items-center gap-0.5">
+          {messages.length > 1 && (
+            <button
+              type="button"
+              onClick={handleRestart}
+              aria-label="Начать новый разговор"
+              title="Новый разговор: прежние условия не учитываются"
+              className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100 hover:text-violet-600 dark:hover:bg-slate-700"
+              data-testid="ai-restart"
+            >
+              <RotateCcw size={16} aria-hidden="true" />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handleClose}
+            aria-label="Закрыть помощника"
+            className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700"
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
+        </div>
       </div>
 
-      <div className="h-[280px] overflow-y-auto p-4 scrollbar-thin" aria-live="polite">
+      {/* В режиме записи под ответом — карточки со временем приёма: окно выше. */}
+      <div className={`${bookings ? 'h-[480px] max-h-[62vh]' : 'h-[400px] max-h-[55vh]'} overflow-y-auto p-4 scrollbar-thin`} aria-live="polite">
         {renderMessages('py-2.5 text-[13px]')}
       </div>
 
@@ -303,7 +409,7 @@ export default function AIAssistant({ isOpen, onClose, onApplyTriage, isMobile, 
             }}
             placeholder="Опишите симптомы..."
             disabled={isLoading}
-            className="w-full rounded-xl border border-slate-200 bg-slate-50 pl-4 pr-10 py-2.5 text-[13px] outline-none transition-all focus:border-violet-400 focus:ring-2 focus:ring-violet-300 dark:border-slate-600 dark:bg-slate-900 dark:text-white"
+            className="w-full rounded-xl border border-slate-200 bg-slate-50 pl-4 pr-10 py-2.5 text-[13px] text-slate-800 caret-violet-600 outline-none transition-all placeholder:text-slate-400 focus:border-violet-400 focus:ring-2 focus:ring-violet-300 dark:border-slate-600 dark:bg-slate-900 dark:text-white dark:caret-violet-300 dark:placeholder:text-slate-500"
           />
           <button
             type="button"
