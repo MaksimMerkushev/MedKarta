@@ -593,3 +593,14 @@ describe('Сложные диалоги: контекст через 10+ реп�
     assert.equal(action.replyText.split('не присылайте номера документов').length, 2);
   });
 });
+
+describe('Лимит чата под диалог с уточнениями', () => {
+  it('40 реплик за 5 минут с адреса — кнопки уточнений тоже реплики', async () => {
+    const { checkRateLimit, CHAT_MAX_PER_IP } = await import('../backend/http/rateLimit.js');
+    assert.equal(CHAT_MAX_PER_IP, 40);
+    const ip = '203.0.113.77';
+    const results = Array.from({ length: 41 }, () => checkRateLimit(ip).allowed);
+    assert.equal(results.filter(Boolean).length, 40);
+    assert.equal(results[40], false);
+  });
+});
