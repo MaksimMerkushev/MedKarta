@@ -29,7 +29,7 @@ Do Not Track и Global Privacy Control уважаются: такие брауз
 
 Время в журнале — с точностью до минуты, день — по Казани. Файлы старше
 `ANALYTICS_RETENTION_DAYS` (180) удаляются; в сутки пишется не больше
-`ANALYTICS_MAX_EVENTS_PER_DAY` (200 000) событий.
+`ANALYTICS_MAX_EVENTS_PER_DAY` (50 000) событий.
 
 ## События
 
