@@ -122,7 +122,7 @@
 диаграммы. Каталог `docs/` готов к публикации на GitHub Pages (docsify):
 Settings → Pages → Deploy from a branch → папка `/docs`.
 
-## Команда MedKarta
+## Команда МедКарта
 
 **Варвара Демахина** — Co-founder, Business & Medical Development\
 Инициатор проекта, медицинское направление,
