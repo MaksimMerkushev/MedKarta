@@ -92,16 +92,23 @@
 
 Ссылки на исходный код — относительные (`../backend/server.js`): они работают
 при просмотре на GitHub. На сайте документации (GitHub Pages) такие ссылки
-ведут на файлы того же коммита `d9c0de6` в репозитории.
+ведут на файлы того же коммита `d9c0de6` в репозитории, а ссылки на файлы
+самой документации, кроме страниц (например, скрипты в `docs/tools/`), — на
+ветку `main`.
 
 ## Просмотр
 
 - **На GitHub** — откройте любой `.md` в каталоге `docs/`; диаграммы Mermaid
   GitHub рисует сам.
-- **Как сайт (GitHub Pages)** — каталог `docs/` содержит `index.html`
-  ([docsify](https://docsify.js.org)): Settings → Pages → Build and deployment →
-  Deploy from a branch → ветка с документацией, папка `/docs`.
+- **Как сайт** — <https://docs.navimed.tech> (GitHub Pages,
+  [docsify](https://docsify.js.org)): каталог `docs/` содержит `index.html`;
+  публикация — Settings → Pages → Build and deployment → Deploy from a branch →
+  ветка `main`, папка `/docs`. Адреса страниц — без «#», например
+  `docs.navimed.tech/09-routing-engine`; подробности —
+  [15-deployment.md](15-deployment.md).
 - **Локально** — любым статическим сервером из каталога `docs/`, например
   `python3 -m http.server 8000 --directory docs`, затем
-  `http://localhost:8000`. Скрипты docsify и Mermaid загружаются с CDN
+  `http://localhost:8000`. Внутренние страницы открывайте переходом с главной:
+  простой сервер не отдаёт `404.html`, поэтому обновление внутренней страницы
+  даёт ошибку 404. Скрипты docsify и Mermaid загружаются с CDN
   `cdn.jsdelivr.net`, поэтому нужен доступ в интернет.

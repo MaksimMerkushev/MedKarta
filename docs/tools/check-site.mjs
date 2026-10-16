@@ -2,7 +2,9 @@
  * Проверка перевода ссылок для сайта документации (docs/assets/site.js)
  * без браузера: каждая ссылка каждой страницы после перевода должна вести
  * на существующую страницу docs/, существующий файл сайта или файл
- * репозитория (по локальной копии).
+ * репозитория (по локальной копии). Заодно — что docs/404.html совпадает с
+ * docs/index.html: он открывает сайт при прямом заходе на внутреннюю
+ * страницу (адреса без «#»).
  *
  *   node docs/tools/check-site.mjs
  */
@@ -14,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const DOCS = path.join(ROOT, 'docs');
-const SITE = 'https://example.github.io/MedKarta/';
+const BLOB = /^https:\/\/github\.com\/MaksimMerkushev\/MedKarta\/blob\/([0-9a-f]{40}|main)\//;
 
 const sandbox = {};
 sandbox.globalThis = sandbox;
@@ -31,7 +33,7 @@ let checked = 0;
 let toGithub = 0;
 for (const file of walk(DOCS)) {
   const page = path.relative(DOCS, file).split(path.sep).join('/');
-  const out = rewriteLinks(fs.readFileSync(file, 'utf8'), page, SITE);
+  const out = rewriteLinks(fs.readFileSync(file, 'utf8'), page);
   let fence = false;
   for (const line of out.split('\n')) {
     if (/^\s*(```|~~~)/.test(line)) fence = !fence;
@@ -40,14 +42,18 @@ for (const file of walk(DOCS)) {
       const target = match[1].split('#')[0];
       if (!target) continue;
       checked += 1;
-      if (target.startsWith('https://github.com/MaksimMerkushev/MedKarta/blob/')) {
+      if (BLOB.test(target)) {
         toGithub += 1;
-        const repoPath = target.replace(/^https:\/\/github\.com\/MaksimMerkushev\/MedKarta\/blob\/[0-9a-f]{40}\//, '');
+        const repoPath = target.replace(BLOB, '');
         if (!fs.existsSync(path.join(ROOT, decodeURI(repoPath)))) errors.push(`${page}: нет в репозитории ${repoPath}`);
-      } else if (target.startsWith(SITE)) {
-        if (!fs.existsSync(path.join(DOCS, decodeURI(target.slice(SITE.length))))) errors.push(`${page}: нет файла сайта ${target}`);
       } else if (/^[a-z]+:/i.test(target)) {
         // внешняя ссылка
+      } else if (target.endsWith('/')) {
+        // Раздел: «/», «/adr/» (или «adr/» в _sidebar.md) — его README.md.
+        const dir = target.startsWith('/') ? target.slice(1) : path.posix.join(path.posix.dirname(page), target);
+        if (!fs.existsSync(path.join(DOCS, decodeURI(dir), 'README.md'))) errors.push(`${page}: нет раздела ${target}`);
+      } else if (target.startsWith('/')) {
+        if (!fs.existsSync(path.join(DOCS, decodeURI(target.slice(1))))) errors.push(`${page}: нет файла сайта ${target}`);
       } else if (target.endsWith('.md')) {
         if (!fs.existsSync(path.join(DOCS, decodeURI(target)))) errors.push(`${page}: нет страницы ${target}`);
       } else {
@@ -55,6 +61,10 @@ for (const file of walk(DOCS)) {
       }
     }
   }
+}
+
+if (fs.readFileSync(path.join(DOCS, '404.html'), 'utf8') !== fs.readFileSync(path.join(DOCS, 'index.html'), 'utf8')) {
+  errors.push('docs/404.html отличается от docs/index.html — скопируйте index.html в 404.html');
 }
 
 console.log(`Ссылок проверено: ${checked}, из них на GitHub: ${toGithub}`);

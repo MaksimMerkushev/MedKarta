@@ -164,16 +164,39 @@ sqlite3 var/accounts/medkarta.sqlite ".backup '/backup/accounts-$(date +%F).sqli
 
 ## Публикация документации (GitHub Pages)
 
-Каталог `docs/` готов к публикации как сайт на [docsify](https://docsify.js.org):
-`index.html` загружает docsify и Mermaid с CDN `cdn.jsdelivr.net`, файл
-`.nojekyll` отключает обработку Jekyll.
+Каталог `docs/` опубликован как сайт на [docsify](https://docsify.js.org):
+<https://docs.navimed.tech>. `index.html` загружает docsify и Mermaid с CDN
+`cdn.jsdelivr.net`, файл `.nojekyll` отключает обработку Jekyll.
 
-1. Отправьте ветку с документацией в GitHub (`git push`).
-2. В репозитории: **Settings → Pages → Build and deployment → Source: Deploy
-   from a branch**.
-3. Выберите ветку и папку **`/docs`**, нажмите Save.
-4. Через минуту-две сайт доступен по адресу вида
-   `https://<владелец>.github.io/<репозиторий>/`.
+1. В репозитории: **Settings → Pages → Build and deployment → Source: Deploy
+   from a branch**, ветка `main`, папка **`/docs`**, Save.
+2. В DNS домена — запись `CNAME docs → <владелец>.github.io` (без пути и
+   протокола).
+3. В **Settings → Pages → Custom domain** — `docs.navimed.tech`, Save. GitHub
+   хранит домен в файле `docs/CNAME`. Когда проверка DNS пройдёт и сертификат
+   будет выпущен, включите **Enforce HTTPS**.
+
+Адреса страниц — без «#» (режим `history` в docsify, настройка в
+[assets/site.js](assets/site.js)): `docs.navimed.tech/09-routing-engine`.
+Статический хостинг не знает таких адресов, поэтому прямой заход на
+внутреннюю страницу обслуживает `docs/404.html` — копия `index.html`, которая
+открывает ту же страницу. Следствия:
+
+- внутренние страницы GitHub отдаёт с кодом ответа 404: браузер показывает их
+  как обычно, но поисковики такие страницы не индексируют;
+- сайт рассчитан на корень домена: по адресу
+  `<владелец>.github.io/<репозиторий>/` без своего домена он в этом режиме
+  не работает;
+- после правки `index.html` скопируйте его в `404.html`; расхождение находит
+  `node docs/tools/check-site.mjs`;
+- старые адреса с «#» (`docs.navimed.tech/#/09-routing-engine`) переводятся
+  в новые автоматически.
+
+Если GitHub пишет «DNS check unsuccessful» (`InvalidDNSError`), а `dig`
+показывает правильную запись, — проверка GitHub не получает ответ от
+DNS-серверов домена. Так было, пока DNS `navimed.tech` обслуживали серверы
+Рег.ру; решение — перенос DNS домена в Cloudflare (записи в режиме «DNS
+only», регистрация домена осталась в Рег.ру).
 
 Ссылки на исходный код на сайте ведут на файлы коммита `d9c0de6` в
 репозитории GitHub; если репозиторий закрыт, они открываются только у тех,
