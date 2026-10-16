@@ -1,14 +1,22 @@
 /*
- * Плагин docsify для сайта документации МедКарты (GitHub Pages).
+ * Плагин docsify для сайта документации МедКарты (GitHub Pages,
+ * docs.navimed.tech).
+ *
+ * Адреса страниц — без «#»: docs.navimed.tech/09-routing-engine (режим
+ * history). Сайт должен открываться из корня домена; прямой заход на
+ * внутреннюю страницу обслуживает docs/404.html — копия index.html.
  *
  * В Markdown-файлах ссылки относительные — так они работают при просмотре
  * на GitHub. На сайте docsify их нужно перевести:
  *   - ссылки на исходный код вне docs/ (../backend/server.js) → файл на
  *     GitHub в документируемом коммите;
  *   - ссылки на другие страницы документации (../02-architecture.md из
- *     adr/) → путь от корня docs/, который понимает docsify;
+ *     adr/) → путь от корня docs/, который понимает docsify; README.md
+ *     раздела → адрес раздела («/», «/adr/»);
  *   - ссылки на не-Markdown файлы внутри docs/ (tools/check-docs.mjs) →
- *     прямой адрес файла на сайте.
+ *     файл на GitHub в ветке main: в режиме history docsify перехватывает
+ *     переходы внутри сайта и открыть такой файл сам не может;
+ *   - картинки внутри docs/ → путь от корня сайта.
  * Блоки ```mermaid превращаются в диаграммы.
  *
  * Функция rewriteLinks не зависит от браузера — её проверяет
@@ -17,6 +25,9 @@
 (function (root) {
   var REPOSITORY = 'https://github.com/MaksimMerkushev/MedKarta';
   var COMMIT = 'd9c0de6098105622d726be7e67224e962a5dd905';
+  // Файлы внутри docs/ (скрипты проверки, настройки сайта) появились после
+  // документируемого коммита — ссылки на них ведут в ветку main.
+  var DOCS_BRANCH = 'main';
 
   /** Нормализует путь «a/b/../c» → «a/c»; выход за корень сохраняет «../». */
   function normalize(path) {
@@ -37,10 +48,9 @@
   /**
    * @param {string} target ссылка из Markdown
    * @param {string} file путь текущей страницы от корня docs/ (например, adr/002.md)
-   * @param {string} siteBase адрес корня сайта (с завершающим «/»)
    * @returns {string} ссылка для docsify
    */
-  function rewriteTarget(target, file, siteBase) {
+  function rewriteTarget(target, file) {
     if (/^(?:[a-z][a-z0-9+.-]*:|#|\/)/i.test(target)) return target;
     var hashAt = target.indexOf('#');
     var pathPart = hashAt === -1 ? target : target.slice(0, hashAt);
@@ -52,12 +62,14 @@
       // Вне docs/: docs лежит в корне репозитория, поэтому «../» ведёт в корень.
       return REPOSITORY + '/blob/' + COMMIT + '/' + resolved.slice(3) + hash;
     }
+    if (/(?:^|\/)README\.md$/i.test(resolved)) return '/' + resolved.replace(/README\.md$/i, '') + hash;
     if (/\.md$/i.test(resolved)) return resolved + hash;
-    return siteBase + resolved;
+    if (/\.(?:png|jpe?g|gif|svg|webp)$/i.test(resolved)) return '/' + resolved;
+    return REPOSITORY + '/blob/' + DOCS_BRANCH + '/docs/' + resolved + hash;
   }
 
   /** Переписывает ссылки вне блоков кода. */
-  function rewriteLinks(markdown, file, siteBase) {
+  function rewriteLinks(markdown, file) {
     var fence = null;
     return markdown.split('\n').map(function (line) {
       var opener = line.match(/^\s*(```|~~~)/);
@@ -68,7 +80,7 @@
       }
       if (fence) return line;
       return line.replace(/(\]\()([^)\s]+)((?:\s+"[^"]*")?\))/g, function (all, open, target, close) {
-        return open + rewriteTarget(target, file, siteBase) + close;
+        return open + rewriteTarget(target, file) + close;
       });
     }).join('\n');
   }
@@ -82,12 +94,16 @@
 
   if (typeof window === 'undefined') return;
 
-  var siteBase = window.location.origin + window.location.pathname.replace(/[^/]*$/, '');
+  // Старые адреса с «#» (docs.navimed.tech/#/09-routing-engine) — в адрес без «#».
+  if (/^#\/./.test(window.location.hash)) {
+    window.history.replaceState(null, '', window.location.hash.slice(1));
+  }
 
   window.$docsify = {
     name: 'МедКарта',
     repo: REPOSITORY,
     homepage: 'README.md',
+    routerMode: 'history',
     loadSidebar: true,
     alias: { '/.*/_sidebar.md': '/_sidebar.md' },
     subMaxLevel: 2,
@@ -110,7 +126,7 @@
       function (hook, vm) {
         hook.beforeEach(function (markdown) {
           var file = (vm.route && vm.route.file) || 'README.md';
-          return rewriteLinks(markdown, file, siteBase);
+          return rewriteLinks(markdown, file);
         });
         hook.doneEach(function () {
           if (window.mermaid && typeof window.mermaid.run === 'function') {

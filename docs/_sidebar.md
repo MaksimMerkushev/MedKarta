@@ -1,4 +1,4 @@
-- [Главная](README.md)
+- [Главная](/)
 - Основной цикл
   - [01. Обзор проекта](01-project-overview.md)
   - [02. Архитектура](02-architecture.md)
@@ -21,8 +21,8 @@
 - Справочные материалы
   - [Трассируемость](traceability.md)
   - [Глоссарий](glossary.md)
-  - [Каталог диаграмм](diagrams/README.md)
-  - [Архитектурные решения](adr/README.md)
+  - [Каталог диаграмм](diagrams/)
+  - [Архитектурные решения](adr/)
 - Углублённые документы
   - [Privacy-архитектура](privacy-architecture.md)
   - [Проверка обезличивания](privacy-evaluation.md)
@@ -32,4 +32,4 @@
   - [Аналитика](analytics.md)
   - [Данные и сборщик](data-pipeline.md)
   - [Эксплуатация на VPS](deployment.md)
-  - [Устаревшая конфигурация](legacy/README.md)
+  - [Устаревшая конфигурация](legacy/)
