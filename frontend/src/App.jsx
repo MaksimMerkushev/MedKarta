@@ -1,5 +1,5 @@
 /*
- * © 2026 MedКарта Казань. Все права защищены.
+ * © 2026 МедКарта Казань. Все права защищены.
  * Этот код является интеллектуальной собственностью автора.
  */
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';

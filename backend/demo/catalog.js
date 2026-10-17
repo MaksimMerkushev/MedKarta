@@ -1,5 +1,5 @@
 /*
- * © 2026 MedКарта Казань. Все права защищены.
+ * © 2026 МедКарта Казань. Все права защищены.
  *
  * Доступ к статичной части демо-набора (data/demo/generated.js) и индексы
  * по ней: врачи, филиалы, услуги, цены. Набор не меняется во время работы
@@ -10,7 +10,7 @@ import { SPECIALTY_CANON } from '../../shared/specialties.js';
 
 /** Текст модуля data/demo/generated.js. */
 export const renderGeneratedModule = (catalog) => `/*
- * © 2026 MedКарта Казань. Все права защищены.
+ * © 2026 МедКарта Казань. Все права защищены.
  *
  * СГЕНЕРИРОВАНО: npm run demo:generate (backend/demo/generator.js, seed ${JSON.stringify(catalog.meta.seed)}).
  * Не править вручную — правки пропадут при следующей генерации.

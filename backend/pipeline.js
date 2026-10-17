@@ -1,5 +1,5 @@
 /*
- * © 2026 MedКарта Казань. Все права защищены.
+ * © 2026 МедКарта Казань. Все права защищены.
  *
  *   USER → API → PRIVACY GATEWAY → SANITIZED REQUEST → EXTERNAL LLM (planner)
  *        → SCHEMA VALIDATOR → POLICY ENGINE → EXECUTOR → справочник/маршруты
