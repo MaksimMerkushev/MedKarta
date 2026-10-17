@@ -14,11 +14,15 @@
 ## Конвейер
 
 Сборка — [backend/pipeline.js](../backend/pipeline.js), точка входа —
-[backend/api/chat.js](../backend/api/chat.js).
+[backend/api/chat.js](../backend/api/chat.js). Перед ней —
+[chatAccess.js](../backend/api/chatAccess.js): ассистент доступен только после
+входа в личный кабинет ([accounts.md](accounts.md)); в конвейер из кабинета
+ничего не передаётся.
 
 ```mermaid
 flowchart TD
-    in["POST /api/chat<br/>messages, sessionId"] --> val["validateChatMessages<br/>до 40 сообщений, текст до 1000 символов,<br/>последнее — от пользователя"]
+    in["POST /api/chat<br/>messages, sessionId"] --> acc["Вход в кабинет<br/>(cookie mk_session)"]
+    acc --> val["validateChatMessages<br/>до 40 сообщений, текст до 1000 символов,<br/>последнее — от пользователя"]
     val --> lim["Лимиты: 20 запросов за 5 мин,<br/>ведро CPU, предохранитель, очередь"]
     lim --> gw["Privacy Gateway<br/>разбор всех реплик пользователя"]
     gw --> dec{"Решение"}
@@ -47,6 +51,7 @@ flowchart TD
 
 | Шаг | Модуль | Что делает | Что при отказе |
 |---|---|---|---|
+| 0. Вход | [api/chatAccess.js](../backend/api/chatAccess.js) | действующая сессия кабинета (`CHAT_REQUIRES_ACCOUNT=off` — без неё) | 401 `login_required` / 503 `accounts_unavailable` |
 | 1. Приём | [api/chat.js](../backend/api/chat.js) | метод `POST`, `Origin`, лимит частоты, тело до 32 КБ, `validateChatMessages` | 405 / 403 / 429 / 413 / 400 |
 | 2. Разбор | [privacy/gateway.js](../backend/privacy/gateway.js) | детекторы, связывание со справочником, классификатор жалоб, условия, решение политики | сбой анализа → `local_only`, текст наружу не уходит |
 | 3. План | [planner/client.js](../backend/planner/client.js) или [localPlanner.js](../backend/planner/localPlanner.js) | JSON-план из перечислений | любой сбой внешнего пути → локальный план |

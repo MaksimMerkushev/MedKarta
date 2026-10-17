@@ -80,6 +80,7 @@
 | `ACCOUNTS_DB_PATH` | `var/accounts/medkarta.sqlite` | файл базы | [account.js](../backend/api/account.js) |
 | `ACCOUNTS_REGISTRATION` | выключено | `on` — открыть регистрацию (сначала юридическая подготовка, [accounts.md](accounts.md)) | [account.js](../backend/api/account.js) |
 | `COOKIE_SECURE` | автоматически | `on` / `off` — принудительно ставить или не ставить `Secure` | [account.js](../backend/api/account.js) |
+| `CHAT_REQUIRES_ACCOUNT` | включено | `off` — открыть ассистента гостям; по умолчанию он только для вошедших в кабинет | [chatAccess.js](../backend/api/chatAccess.js) |
 
 ## Аналитика
 

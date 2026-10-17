@@ -115,7 +115,14 @@
   кабинета и демо-записи — версия 2. Описано в [accounts.md](accounts.md),
   [13-data-model.md](13-data-model.md), [11-demo-booking.md](11-demo-booking.md)
   и [12-api-reference.md](12-api-reference.md); добавлен
-  `tests/personal-accounts.test.js`, всего 961 тест без графа дорог.
+  `tests/personal-accounts.test.js`.
+- Ассистент доступен только после входа в кабинет: гость видит
+  предупреждение, `/api/chat` без сессии — `401 login_required`
+  (`CHAT_REQUIRES_ACCOUNT=off` — открыть гостям). Описано в
+  [accounts.md](accounts.md), [06-ai-assistant.md](06-ai-assistant.md),
+  [12-api-reference.md](12-api-reference.md) и
+  [14-configuration.md](14-configuration.md); добавлен
+  `tests/chat-access.test.js`. Всего 966 тестов без графа дорог.
 
 ## Что не удалось проверить
 

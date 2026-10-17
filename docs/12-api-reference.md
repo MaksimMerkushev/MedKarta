@@ -25,7 +25,7 @@ OpenAPI-спецификация не приводится: запросы `/api
 
 | Метод | Путь | Назначение | Обработчик |
 |---|---|---|---|
-| POST | `/api/chat` | запрос к ассистенту | [chat.js](../backend/api/chat.js) |
+| POST | `/api/chat` | запрос к ассистенту (только после входа в кабинет) | [chat.js](../backend/api/chat.js), [chatAccess.js](../backend/api/chatAccess.js) |
 | POST | `/api/route` | маршрут по дорогам через 2–6 точек | [route.js](../backend/api/route.js) |
 | POST | `/api/travel-times` | время в пути от точки до многих | [travelTimes.js](../backend/api/travelTimes.js) |
 | POST | `/api/events` | события аналитики | [events.js](../backend/api/events.js) |
@@ -62,6 +62,10 @@ OpenAPI-спецификация не приводится: запросы `/api
 ## POST /api/chat
 
 Запрос к ассистенту. Подробно о конвейере — [06-ai-assistant.md](06-ai-assistant.md).
+
+Нужна действующая сессия личного кабинета (cookie `mk_session`); при
+`CHAT_REQUIRES_ACCOUNT=off` — не нужна. Из кабинета в конвейер ничего не
+передаётся.
 
 **Тело** (до 32 КБ):
 
@@ -162,6 +166,7 @@ Content-Type: application/json
 | Код | Тело | Когда |
 |---|---|---|
 | 204 | — | `OPTIONS` |
+| 401 | `{"error":"Ассистент доступен после входа в личный кабинет.","code":"login_required"}` | нет входа или сессия истекла |
 | 400 | `{"error":"Ожидается непустой массив messages."}` | пустой или не массив |
 | 400 | `{"error":"Слишком длинная история диалога."}` | больше 40 сообщений |
 | 400 | `{"error":"Последнее сообщение должно быть от пользователя."}` | |
@@ -171,6 +176,7 @@ Content-Type: application/json
 | 429 | `{"error":"Слишком много запросов. Попробуйте через минуту.","retryAfter":N}` | лимит запросов или процессорного времени |
 | 502 | `{"error":"Не удалось обработать запрос. Попробуйте ещё раз."}` | сбой конвейера |
 | 503 | `{"error":"Ассистент сейчас перегружен. Попробуйте через минуту.","code":"busy"}` | предохранитель или очередь |
+| 503 | `{"error":"Личный кабинет сейчас недоступен, поэтому ассистент тоже.","code":"accounts_unavailable"}` | кабинет выключен или нет `node:sqlite` |
 
 ---
 
@@ -340,6 +346,7 @@ Set-Cookie: mk_session=<token>; Path=/api; HttpOnly; SameSite=Lax; Max-Age=43199
     "available": true,
     "registration": false,
     "demo": true,
+    "chatRequiresAccount": true,
     "demoAccounts": [
       { "key": "anna", "displayName": "Анна (демо)", "note": "Программа Demo Standard, Демо-Страхование" },
       "…"

@@ -59,6 +59,7 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
 | [SearchFilters.jsx](../frontend/src/SearchFilters.jsx) | панель фильтров |
 | [DmsPanel.jsx](../frontend/src/DmsPanel.jsx) | «Мой ДМС»: страховая и программа |
 | [AccountPanel.jsx](../frontend/src/AccountPanel.jsx), [hooks/useAccount.js](../frontend/src/hooks/useAccount.js) | личный кабинет |
+| [ChatLoginNotice.jsx](../frontend/src/ChatLoginNotice.jsx) | предупреждение гостю вместо чата: ассистент только после входа |
 | [FeedbackWidgets.jsx](../frontend/src/FeedbackWidgets.jsx) | «Нашли, куда обратиться?», «Данные неверны» |
 | [ErrorBoundary.jsx](../frontend/src/ErrorBoundary.jsx) | понятный экран вместо белого при исключении |
 | [Toast.jsx](../frontend/src/Toast.jsx) | неблокирующие уведомления вместо `window.alert` |

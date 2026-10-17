@@ -59,7 +59,8 @@ flowchart TD
 
 - Сопоставление API — по **точному пути** (без строки запроса), а не по
   префиксу: `/api/routeXYZ` не попадает в обработчик `/api/route`.
-- Таблица путей собирается из обработчиков: `/api/chat`, `/api/route`,
+- Таблица путей собирается из обработчиков: `/api/chat` (за проверкой входа
+  в кабинет, [chatAccess.js](../backend/api/chatAccess.js)), `/api/route`,
   `/api/travel-times`, `/api/events`, `/api/config`, пути кабинета
   (`ACCOUNT_PATHS`) и демо-записи (`DEMO_BOOKING_PATHS`). Полный список —
   [12-api-reference.md](12-api-reference.md).
