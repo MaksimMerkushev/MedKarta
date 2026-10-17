@@ -14,8 +14,9 @@
  *
  * Сессия — случайный токен в cookie HttpOnly; SameSite=Lax; Path=/api, в базе
  * хранится только его SHA-256. Cookie mk_demo с теми же флагами связывает
- * браузер с его копиями демо-аккаунтов. С ассистентом кабинет не связан: в
- * /api/chat не уходят ни email, ни имя, ни программа ДМС, ни избранное.
+ * браузер с его копиями демо-аккаунтов. Ассистент доступен только после входа
+ * (chatAccess.js), но проверяется лишь факт входа: в конвейер /api/chat не
+ * уходят ни email, ни имя, ни программа ДМС, ни избранное.
  */
 
 import path from 'node:path';
@@ -36,6 +37,9 @@ const DEMO_OWNER_MAX_AGE_S = 30 * 24 * 60 * 60;
 const MAX_BODY_BYTES = 64 * 1024;
 
 const KNOWN_PLANS = new Set((demoInsurance?.plans || []).map((plan) => plan.id));
+
+/** Ассистент только для вошедших; CHAT_REQUIRES_ACCOUNT=off открывает его гостям. */
+export const chatRequiresAccount = () => process.env.CHAT_REQUIRES_ACCOUNT !== 'off';
 
 /*
  * Подбор паролей: 20 попыток входа и регистрации за 15 минут с адреса.
@@ -159,7 +163,11 @@ export const createAccountHandler = ({
   apiLimit = defaultApiLimit,
   demoLimit = defaultDemoLimit,
   failures = defaultFailures,
-  features = () => ({ registration: process.env.ACCOUNTS_REGISTRATION === 'on', demo: process.env.DEMO_DATA === 'on' }),
+  features = () => ({
+    registration: process.env.ACCOUNTS_REGISTRATION === 'on',
+    demo: process.env.DEMO_DATA === 'on',
+    chatRequiresAccount: chatRequiresAccount(),
+  }),
 } = {}) =>
   async function accountHandler(req, res) {
     // В dev-режиме Vite (connect) отрезает от req.url путь подключения — полный путь в originalUrl.

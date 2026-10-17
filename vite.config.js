@@ -10,6 +10,7 @@ const DATA = fileURLToPath(new URL('./data', import.meta.url))
 const NODE_MODULES = fileURLToPath(new URL('./node_modules', import.meta.url))
 
 const CHAT_HANDLER_URL = new URL('./backend/api/chat.js', import.meta.url)
+const CHAT_ACCESS_URL = new URL('./backend/api/chatAccess.js', import.meta.url)
 const ROUTE_HANDLER_URL = new URL('./backend/api/route.js', import.meta.url)
 const TRAVEL_TIMES_HANDLER_URL = new URL('./backend/api/travelTimes.js', import.meta.url)
 const EVENTS_HANDLER_URL = new URL('./backend/api/events.js', import.meta.url)
@@ -35,7 +36,7 @@ const devApiPlugin = (env) => ({
   name: 'medkarta-dev-api',
   apply: 'serve',
   configureServer(server) {
-    for (const key of ['OPENROUTER_API_KEY', 'AI_API_KEY', 'AI_UPSTREAM_URL', 'AI_MODEL', 'AI_PROXY_URL', 'AI_REASONING_EFFORT', 'ALLOWED_ORIGINS', 'PRIVACY_TOKEN_SECRET', 'ANALYTICS', 'ANALYTICS_DIR', 'DEMO_DATA', 'ACCOUNTS', 'ACCOUNTS_DB_PATH', 'ACCOUNTS_REGISTRATION', 'COOKIE_SECURE', 'DEMO_BOOKING', 'DEMO_BOOKING_DB_PATH', 'DEMO_NOW', 'PUBLIC_CLINICS']) {
+    for (const key of ['OPENROUTER_API_KEY', 'AI_API_KEY', 'AI_UPSTREAM_URL', 'AI_MODEL', 'AI_PROXY_URL', 'AI_REASONING_EFFORT', 'ALLOWED_ORIGINS', 'PRIVACY_TOKEN_SECRET', 'ANALYTICS', 'ANALYTICS_DIR', 'DEMO_DATA', 'ACCOUNTS', 'ACCOUNTS_DB_PATH', 'ACCOUNTS_REGISTRATION', 'COOKIE_SECURE', 'CHAT_REQUIRES_ACCOUNT', 'DEMO_BOOKING', 'DEMO_BOOKING_DB_PATH', 'DEMO_NOW', 'PUBLIC_CLINICS']) {
       if (env[key] && !process.env[key]) {
         process.env[key] = env[key]
       }
@@ -56,10 +57,11 @@ const devApiPlugin = (env) => ({
     /*
      * Кабинет и демо-запись держат открытую базу SQLite (stateful): их модули
      * грузятся один раз, без сброса кеша, иначе каждый запрос открывал бы новое
-     * соединение с базой.
+     * соединение с базой. Проверка входа перед чатом (gateUrl) — тоже: она
+     * читает ту же базу кабинета.
      */
-    for (const [mount, handlerUrl, label, stateful = false] of [
-      ['/api/chat', CHAT_HANDLER_URL, 'чата'],
+    for (const [mount, handlerUrl, label, stateful = false, gateUrl = null] of [
+      ['/api/chat', CHAT_HANDLER_URL, 'чата', false, CHAT_ACCESS_URL],
       ['/api/route', ROUTE_HANDLER_URL, 'маршрута'],
       ['/api/travel-times', TRAVEL_TIMES_HANDLER_URL, 'времени в пути'],
       ['/api/events', EVENTS_HANDLER_URL, 'аналитики'],
@@ -86,6 +88,10 @@ const devApiPlugin = (env) => ({
           return
         }
         try {
+          if (gateUrl) {
+            const { chatAccessGate } = await import(gateUrl.href)
+            if (!(await chatAccessGate(req, res))) return
+          }
           const { default: handler } = await import(stateful ? handlerUrl.href : `${handlerUrl.href}?t=${Date.now()}`)
           await handler(req, res)
         } catch (error) {

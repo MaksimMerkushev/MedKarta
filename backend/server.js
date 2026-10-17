@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 
 import accountHandler, { ACCOUNT_PATHS } from './api/account.js';
 import chatHandler from './api/chat.js';
+import { withChatAccess } from './api/chatAccess.js';
 import configHandler from './api/config.js';
 import demoBookingHandler, { DEMO_BOOKING_PATHS } from './api/demoBooking.js';
 import eventsHandler from './api/events.js';
@@ -188,7 +189,8 @@ const sendFile = async (req, res, filePath, stats, status = 200) => {
  * «/api/route» запрос на «/api/routeXYZ» тоже уходил бы в обработчик.
  */
 const API_HANDLERS = new Map([
-  ['/api/chat', chatHandler],
+  // Ассистент — только после входа в личный кабинет (api/chatAccess.js).
+  ['/api/chat', withChatAccess(chatHandler)],
   ['/api/route', routeHandler],
   ['/api/travel-times', travelTimesHandler],
   ['/api/events', eventsHandler],
