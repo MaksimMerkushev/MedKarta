@@ -57,10 +57,7 @@ const main = async () => {
 
   for (const source of selected) {
     const vars = version && sourceIds.length > 0 ? { version } : {};
-    /*
-     * Сбой одного источника не останавливает остальные: раньше одна битая
-     * страница обрывала весь прогон, и следующие источники не проверялись.
-     */
+    // Сбой одного источника не останавливает остальные.
     let report;
     try {
       report = await collectSource({ source, fetcher, store, vars, dryRun });

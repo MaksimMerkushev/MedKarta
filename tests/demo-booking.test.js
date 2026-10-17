@@ -128,7 +128,6 @@ describe('Демо-запись: хранилище', { skip: !DatabaseSync && '
     assert.equal(store.getSlot(slot.id).status, 'FREE');
     const again = store.cancel({ number: booking.number, cancelToken: booking.cancelToken });
     assert.equal(again.alreadyCancelled, true);
-    // Освобождённое время снова можно занять.
     assert.equal(store.book({ slotId: slot.id, idempotencyKey: KEY(13) }).status, 'CONFIRMED');
   });
 

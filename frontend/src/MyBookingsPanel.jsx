@@ -12,10 +12,8 @@ export default function MyBookingsPanel({ bookings, onChange, onRoute, onClose }
   const [statuses, setStatuses] = useState({});
   const [busyNumber, setBusyNumber] = useState(null);
   const [error, setError] = useState(null);
-  /*
-   * Статус в подписи: запись, отменённую в окне записи, панель должна
-   * перепроверить, а не показывать прежний ответ сервера «подтверждена».
-   */
+  // Статус входит в подпись: запись, отменённую в окне записи, нужно
+  // перепроверить, а не показывать прежнее «подтверждена».
   const signature = bookings.map((item) => `${item.number}:${item.status}`).join(',');
 
   useEffect(() => {

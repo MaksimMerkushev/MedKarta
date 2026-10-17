@@ -22,7 +22,7 @@ const scrypt = (password, salt, { N, r, p, keylen }) =>
 
 /*
  * Не больше двух расчётов scrypt одновременно и не больше 32 в очереди.
- * Каждый — ~60 мс и 16 МБ; без потолка поток входов со многих адресов занимал
+ * Каждый — ~60 мс и 16 МБ; без потолка поток входов со многих адресов занял бы
  * все потоки libuv, которыми пользуются и отдача файлов, и gzip.
  */
 const MAX_PARALLEL = 2;
@@ -92,10 +92,8 @@ export const verifyPassword = async (password, stored) => {
   return timingSafeEqual(actual, expected) && typeof stored === 'string' && stored.length > 0;
 };
 
-/*
- * Самые частые пароли из утечек — их подбирают первыми. Список короткий
- * намеренно: это отсечение очевидного, а не замена лимитам.
- */
+// Самые частые пароли из утечек — их подбирают первыми. Список короткий:
+// это отсечение очевидного, а не замена лимитам.
 const COMMON_PASSWORDS = new Set([
   'password', 'password1', 'password123', 'qwertyui', 'qwerty123', 'qwertyuiop', '1q2w3e4r', '1q2w3e4r5t', 'q1w2e3r4',
   'iloveyou', 'abcdefgh', 'abc12345', 'asdfghjk', 'zxcvbnm1', 'zaq12wsx', 'admin123', 'welcome1', 'letmein1',

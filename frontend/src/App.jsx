@@ -82,17 +82,15 @@ import { useDebouncedValue } from './hooks/useDebouncedValue';
 import { isBoolean, isPlanIdOrNull, isStringIdArray, useLocalStorageState } from './hooks/useLocalStorageState';
 import { useAccount } from './hooks/useAccount';
 
-// Помощник и его зависимости грузятся отдельным чанком: большинство сессий
-// открывается ради карты, а не чата, — нет смысла тянуть его в первый байт.
+// Помощник грузится отдельным чанком: большинство сессий открывают ради карты, а не чата.
 const AIAssistant = lazy(() => import('./AIAssistant'));
 const AccountPanel = lazy(() => import('./AccountPanel'));
 const BookingDialog = lazy(() => import('./BookingDialog'));
 
 delete L.Icon.Default.prototype._getIconUrl;
 
-// L.divIcon вставляет строку через innerHTML. Даже если сейчас сюда приходят
-// только константы, значения приводим к безопасному виду — чтобы будущая
-// правка не превратила это в точку внедрения разметки.
+// L.divIcon вставляет строку через innerHTML: значения приводятся к безопасному
+// виду, даже если сейчас сюда приходят только константы.
 const SAFE_COLOR = /^#[0-9a-f]{3,8}$/i;
 const sanitizeColor = (value) => (SAFE_COLOR.test(String(value)) ? String(value) : '#3b82f6');
 const sanitizeLabel = (value) => {
@@ -233,8 +231,7 @@ const mapClinicsToFacilities = (payload) => {
     const clinicDoctors = Array.isArray(clinic.doctors) && clinic.doctors.length > 0 ? clinic.doctors : [null];
 
     clinicDoctors.forEach((doctor, index) => {
-      // Клиника без списка врачей — это карточка самой клиники, а не
-      // «Врач клиники №1»: раньше так назывались карточки КОРЛ и МКДЦ.
+      // Клиника без списка врачей — карточка самой клиники, а не «Врач клиники №1».
       const doctorName = doctor?.full_name || (doctor ? `Врач клиники №${index + 1}` : clinicTitle);
       const specialty = doctor?.specialty || clinic.facility_type || 'Специалист';
       const website = clinic.website || '';
@@ -256,8 +253,8 @@ const mapClinicsToFacilities = (payload) => {
         hours: hoursRaw,
         phone,
         website,
-        // Без повторов: specialty по умолчанию равна типу учреждения, и
-        // карточка показывала «Клиника» дважды (и дублирующиеся ключи React).
+        // Без повторов: specialty по умолчанию равна типу учреждения (иначе
+        // «Клиника» дважды и дублирующиеся ключи React).
         services: [...new Set([clinic.facility_type, specialty].filter(Boolean))],
         features: {
           onlineBooking: Boolean(booking || website),
@@ -279,7 +276,6 @@ const mapClinicsToFacilities = (payload) => {
   return facilities.filter((item) => typeof item.lat === 'number' && typeof item.lng === 'number');
 };
 
-// Initial map view reset (once)
 const InitialCenterMap = ({ location }) => {
   const map = useMap();
   const doneRef = useRef(false);
@@ -294,20 +290,17 @@ const InitialCenterMap = ({ location }) => {
   return null;
 };
 
-// Animate map transition to coordinates
 /*
- * Открытое окно маркера и панель маршрута. Если окно уже открыто, а панель
- * появляется (нажали «в маршрут» прямо в окне), окно оставалось под ней.
- * Здесь окну задаётся отступ справа и оно заново вписывается в видимую часть.
+ * Окно маркера, открытое до появления панели маршрута («в маршрут» прямо в
+ * окне), получает отступ справа и заново вписывается в видимую часть карты.
  */
 const PopupPanGuard = ({ rightPadding }) => {
   const map = useMap();
   const popupRef = useRef(null);
   const paddingRef = useRef(rightPadding);
 
-  // Параметры окна react-leaflet задаёт один раз, при создании маркера, —
-  // тогда маршрута ещё не было. Поэтому отступ выставляется при каждом
-  // открытии окна и при каждом изменении панели.
+  // react-leaflet задаёт параметры окна один раз, при создании маркера, поэтому
+  // отступ выставляется при каждом открытии окна и изменении панели.
   const fit = useCallback((popup) => {
     if (!popup?.isOpen()) return;
     popup.options.autoPanPaddingBottomRight = L.point(paddingRef.current, 24);
@@ -359,15 +352,10 @@ const FlyToPoint = ({ target, onDone, offsetRatio = 0 }) => {
 };
 
 /*
- * Стабильные позиции и иконки маркеров.
- *
- * react-leaflet вызывает marker.setLatLng(), как только массив позиции —
- * НОВЫЙ объект, даже с теми же числами. Внутри кластера это «переезд»
- * маркера: он снимается с карты и ставится заново, а открытое окно
- * закрывается. Из-за этого окно со списком врачей закрывалось от любого
- * действия в нём — сердечко, «в маршрут», — и найденного врача приходилось
- * искать заново. Поэтому один и тот же массив на одни и те же координаты,
- * и одна и та же иконка на один и тот же номер в маршруте.
+ * Стабильные позиции и иконки маркеров. react-leaflet вызывает setLatLng() на
+ * каждый новый массив позиции, даже с теми же числами; в кластере маркер при
+ * этом переставляется и открытое окно закрывается (например, от сердечка в
+ * нём). Поэтому на одни координаты — один массив, на один номер — одна иконка.
  */
 const markerPositions = new Map();
 const stablePosition = (key, lat, lng) => {
@@ -466,13 +454,11 @@ const RoutingMachine = ({ originLocation, routeTargets, travelMode, routeData, s
   const map = useMap();
   const layerRef = useRef(null);
   /*
-   * Повторный запрос при неизменном наборе точек. Многие действия
-   * интерфейса сбрасывают результат (setRouteData(null)) — выбор того же
-   * транспорта, «к моему местоположению», перестановка точек одной клиники,
-   * — но ключ маршрута при этом не меняется, и эффект не перезапускался:
-   * панель вечно показывала «Строим маршрут...». Теперь сброшенный
-   * результат без запроса в полёте означает «построй заново»; так же
-   * работает кнопка «Повторить».
+   * Повтор при неизменном наборе точек. Многие действия сбрасывают результат
+   * (setRouteData(null)), не меняя ключ маршрута: выбор того же транспорта,
+   * перестановка точек одной клиники. Сброшенный результат без запроса в
+   * полёте означает «построй заново», иначе панель вечно показывает «Строим
+   * маршрут...». Так же работает «Повторить».
    */
   const [attempt, setAttempt] = useState(0);
   const inFlightRef = useRef(false);
@@ -511,17 +497,16 @@ const RoutingMachine = ({ originLocation, routeTargets, travelMode, routeData, s
     let cancelled = false;
     let timedOut = false;
     inFlightRef.current = true;
-    // Без предела ожидания зависший сервер оставлял «Строим маршрут...» навсегда.
+    // Без предела ожидания зависший сервер оставит «Строим маршрут...» навсегда.
     const timer = setTimeout(() => {
       timedOut = true;
       controller.abort();
     }, ROUTE_TIMEOUT_MS);
 
     /*
-     * Маршрут строит НАШ сервер (backend/routing), а не сторонний сервис.
-     * Раньше координаты пользователя и всех точек уходили на публичный
-     * демо-сервер OSRM — при том что языковой модели мы отдаём @HOME вместо
-     * адреса. Теперь координаты дальше нашего бекенда не идут.
+     * Маршрут строит наш сервер (backend/routing), а не сторонний сервис:
+     * координаты пользователя и точек дальше бэкенда не уходят (языковая
+     * модель и так получает @HOME вместо адреса).
      */
     const draw = async () => {
       try {
@@ -536,8 +521,8 @@ const RoutingMachine = ({ originLocation, routeTargets, travelMode, routeData, s
         if (cancelled) return;
 
         if (!response.ok) {
-          // Прямую между точками НЕ рисуем: линия через дома и реку выглядит
-          // как маршрут и вводит в заблуждение. Показываем причину отказа.
+          // Прямую между точками не рисуем: линия через дома и реку выглядит
+          // как маршрут. Показываем причину отказа.
           const failure = await response.json().catch(() => null);
           if (cancelled) return;
           clear();
@@ -605,13 +590,12 @@ const RoutingMachine = ({ originLocation, routeTargets, travelMode, routeData, s
       controller.abort();
       clear();
     };
-    // routeKey намеренно заменяет собой список зависимостей: он и есть
-    // огрублённый снимок входных данных.
+    // routeKey заменяет список зависимостей: это огрублённый снимок входных данных.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [map, routeKey, attempt]);
 
-  // Объявлен ПОСЛЕ эффекта запроса: если ключ сменился в том же рендере,
-  // запрос уже в полёте, и повтор не нужен.
+  // Объявлен после эффекта запроса: если ключ сменился в том же рендере,
+  // запрос уже в полёте и повтор не нужен.
   useEffect(() => {
     if (routeData === null && !inFlightRef.current && originLocation && routeTargets?.length > 0) {
       setAttempt((value) => value + 1);
@@ -633,11 +617,9 @@ const normalizeClinicKey = (value) =>
     .trim();
 
 /*
- * Охват дня: начало первого интервала и конец последнего — для сортировки
- * и фильтра «вечерний приём». Для «открыто сейчас» охват не годится: у
- * «09:00-12:30,13:00-17:30» он закрывает обеденный перерыв. Там
- * используются сами интервалы (scheduleIntervals из shared/openingHours.js:
- * круглосуточно, переход через полночь, перерывы).
+ * Охват дня (начало первого интервала — конец последнего) — для сортировки и
+ * фильтра «вечерний приём». Для «открыто сейчас» он не годится: у
+ * «09:00-12:30,13:00-17:30» закрывает перерыв, там нужны сами интервалы.
  */
 const scheduleTextToRange = (value) => {
   const intervals = scheduleIntervals(value);
@@ -648,29 +630,21 @@ const scheduleTextToRange = (value) => {
   };
 };
 
-// Расписание бывает трёх видов, и раньше два последних не различались.
-// 487 объектов из OpenStreetMap приходят с schedule: null — графика попросту
-// нет в данных. Старая логика возвращала для них false, и карточка показывала
-// красное «Закрыто», противореча собственной строке «График уточняется».
-// OPEN_STATE.UNKNOWN отделяет «точно закрыто» от «мы не знаем».
+// У многих объектов из OpenStreetMap графика в данных нет (schedule: null):
+// UNKNOWN отделяет «точно закрыто» от «не знаем», чтобы не показывать «Закрыто».
 const OPEN_STATE = { OPEN: 'open', CLOSED: 'closed', UNKNOWN: 'unknown' };
 
-/*
- * Расписание учреждений из OSM восстанавливается из исходной строки часов:
- * импорт закрывал субботу и воскресенье у 293 учреждений из 327 с часами,
- * включая «Mo-Su» и круглосуточные. См. shared/openingHours.js.
- */
+// Расписание учреждений из OSM восстанавливается из исходной строки часов:
+// импортированное по дням теряет выходные даже у «Mo-Su» и круглосуточных.
 const withOsmSchedule = (item) => {
   const parsed = parseOpeningHours(item.hours);
   return parsed ? { ...item, schedule: parsed } : item;
 };
 
 /*
- * Часы работы в справочнике — казанские. Раньше «открыто сейчас» считалось
- * по часовому поясу устройства: у пользователя с ноутбуком на другом поясе
- * клиники открывались и закрывались со сдвигом. Возвращается Date, у которого
- * getDay/getHours/getMinutes дают московское время, — только для сравнения
- * с расписанием, не для хранения.
+ * Часы в справочнике — казанские, поэтому «открыто сейчас» считается не по поясу
+ * устройства. kazanWallClock возвращает Date, у которого getDay/getHours/getMinutes
+ * дают московское время, — только для сравнения с расписанием, не для хранения.
  */
 const MOSCOW_CLOCK = (() => {
   try {
@@ -782,16 +756,14 @@ const buildWeekSchedule = (schedule, now) => {
 // tel: не переносит пробелы и скобки — в ссылку идёт только «+» и цифры,
 // а на экране остаётся человекочитаемый вид из данных.
 const toTelHref = (phone) => {
-  // «+» допустим только в начале номера: из «…//+7 843…» раньше получалось «tel:5+7843…».
-  // Несколько номеров через «;» — звоним по первому (раньше цифры склеивались в один «номер»).
+  // Несколько номеров через «;» — звоним по первому; «+» допустим только в начале
+  // (иначе из «…//+7 843…» получится «tel:5+7843…»).
   const raw = String(phone || '').split(/[;,]/)[0].trim();
   const digits = raw.replace(/\D/g, '');
   if (digits.length < 6 || digits.length > 15) return null;
   return `tel:${raw.startsWith('+') ? '+' : ''}${digits}`;
 };
 
-// Ссылка из данных считается недоверенной: разрешаем только http(s),
-// чтобы исключить javascript: и data: в href.
 /** Enter и пробел на элементе с role="button" — как клик, для клавиатуры. */
 const activateOnKey = (action) => (event) => {
   if (event.key === 'Enter' || event.key === ' ') {
@@ -800,6 +772,8 @@ const activateOnKey = (action) => (event) => {
   }
 };
 
+// Ссылка из данных считается недоверенной: разрешаем только http(s),
+// чтобы исключить javascript: и data: в href.
 const toSafeUrl = (value) => {
   const raw = String(value || '').trim();
   if (!raw) return null;
@@ -830,9 +804,9 @@ const formatPriceRange = (entry) => {
 // --- Внешние карты, запись и время в пути ---------------------------------
 
 /*
- * Средние городские скорости для оценки «по прямой», пока сервер считает
- * настоящее время в пути (или если он недоступен). Те же значения, что
- * у серверного запасного провайдера; поправка на извилистость улиц — 1,3.
+ * Оценка по прямой, пока сервер считает время в пути (или если он недоступен).
+ * Скорости — как у серверной оценки по прямой (backend/executor/routing.js);
+ * поправка на извилистость улиц 1,3 добавляется только здесь.
  */
 const FALLBACK_SPEED_KMH = { driving: 28, bike: 14, foot: 4.5 };
 const DETOUR_FACTOR = 1.3;
@@ -862,10 +836,9 @@ const STALE_AFTER_DAYS = 60;
 // --- Состояние в адресной строке -----------------------------------------
 
 /*
- * Фильтры живут в URL, чтобы ссылку можно было переслать или сохранить.
- * Параметры из адресной строки — недоверенный ввод: значения из перечислений
- * сверяются со списком, числа зажимаются в диапазон, строки обрезаются.
- * Дальше их всё равно фильтрует справочник, но проверять надо на входе.
+ * Фильтры живут в URL, чтобы ссылку можно было переслать. Параметры адресной
+ * строки — недоверенный ввод: перечисления сверяются со списком, числа
+ * зажимаются в диапазон, строки обрезаются.
  */
 const URL_KEYS = {
   q: 'q',
@@ -890,12 +863,10 @@ const FLAG_KEYS = ['open', 'fav', 'weekend', 'evening', 'online', 'wheelchair', 
 const DMS_PLAN_STORAGE_KEY = 'medkarta.dms.plan';
 
 /*
- * Кабинет и данные этого браузера.
  *   GUEST_STASH_KEY   — избранное и ДМС гостя, отложенные на время входа в
- *                       демо-аккаунт: демо не должен их забирать, а после
- *                       выхода они возвращаются.
- *   ACCOUNT_OWNED_KEY — «избранное и ДМС в localStorage сейчас принадлежат
- *                       аккаунту». Если сессия кончилась, пока сайт был
+ *                       демо-аккаунт; после выхода они возвращаются.
+ *   ACCOUNT_OWNED_KEY — избранное и ДМС в localStorage сейчас принадлежат
+ *                       аккаунту: если сессия кончилась, пока сайт был
  *                       закрыт, при следующем открытии их нужно убрать.
  */
 const GUEST_STASH_KEY = 'medkarta.guest-stash';
@@ -1125,7 +1096,7 @@ export default function App() {
   // Откуда пришёл последний поиск: от ассистента, из ссылки или из фильтров.
   const searchSourceRef = useRef({ source: INITIAL_URL_STATE.q || INITIAL_URL_STATE.doctorProfile ? 'url' : 'filters', at: Date.now() });
   // Избранное и тема читаются из localStorage через валидатор: испорченное или
-  // подменённое значение раньше роняло приложение на favorites.includes(...).
+  // подменённое значение иначе роняет приложение на favorites.includes(...).
   const [favorites, setFavorites] = useLocalStorageState(FAVORITES_STORAGE_KEY, [], isStringIdArray);
   // Сохранённый список мог разрастись повторами (или быть подменён):
   // он пересохраняется при каждом нажатии на сердечко.
@@ -1140,11 +1111,10 @@ export default function App() {
   const { toast, showToast, dismiss: dismissToast } = useToast();
 
   /*
-   * Личный кабинет. Пока пользователь не вошёл, избранное и программа ДМС
-   * живут в этом браузере, как и раньше. После входа источник правды —
-   * аккаунт: избранное браузера сливается с ним, программа берётся из него.
-   * Демо-аккаунт — исключение: он общий для всех зрителей, поэтому данные
-   * гостя в него не переносятся, а откладываются и возвращаются после выхода.
+   * До входа избранное и программа ДМС живут в браузере; после входа источник
+   * правды — аккаунт (избранное браузера сливается с ним, программа берётся из
+   * него). Демо-аккаунт общий для всех зрителей: данные гостя в него не
+   * переносятся, а откладываются и возвращаются после выхода.
    */
   const favoritesRef = useRef(favorites);
   const dmsPlanIdRef = useRef(dmsPlanId);
@@ -1241,7 +1211,7 @@ export default function App() {
 
   const [isAIAssistantOpen, setIsAIAssistantOpen] = useState(false);
   // После первого открытия ассистент остаётся смонтированным и прячется, а не
-  // уничтожается: иначе каждое закрытие стирало переписку.
+  // уничтожается: иначе каждое закрытие стирает переписку.
   const [isAIAssistantMounted, setIsAIAssistantMounted] = useState(false);
   const toggleAIAssistant = useCallback(() => {
     setIsAIAssistantMounted(true);
@@ -1268,7 +1238,7 @@ export default function App() {
   const pendingPicksRef = useRef(null);
   const [picksTick, setPicksTick] = useState(0);
   const [buildRouteTrigger, setBuildRouteTrigger] = useState(false);
-  const [targetStopsTrigger, setTargetStopsTrigger] = useState(null); // Apply processing results to UI state
+  const [targetStopsTrigger, setTargetStopsTrigger] = useState(null);
 
   // Справочники в ref: handleApplyTriage не должен пересоздаваться на каждый
   // пересчёт списков, иначе AIAssistant перерисовывается впустую.
@@ -1295,16 +1265,14 @@ export default function App() {
         return { ...Object.fromEntries(kept), [meta.messageId]: { status: 'pending' } };
       });
     }
-    // === МАРШРУТ ===
-    // «Сбрось маршрут и фильтры» — это и то и другое. Раньше при обоих
-    // флагах маршрут оставался на месте.
+    // «Сбрось маршрут и фильтры» сбрасывает и то и другое.
     if (result.clearRoute) {
       setRouteTargets([]);
       setRouteData(null);
       setIsRouteStarted(false);
     }
 
-    // === СБРОС ФИЛЬТРОВ (НЕ трогает маршрут!) ===
+    // Сброс фильтров маршрут не трогает.
     if (result.clearFilters) {
       setSearchQuery('');
       setIsSearchFocused(false);
@@ -1330,16 +1298,13 @@ export default function App() {
       setSortBy('recommendation');
     }
 
-    // === ТЁМНАЯ ТЕМА ===
     if (result.darkMode === true) setIsDarkMode(true);
     if (result.darkMode === false) setIsDarkMode(false);
 
-    // === РЕЖИМ ПЕРЕДВИЖЕНИЯ ===
     if (result.travelMode && ['driving', 'foot', 'bike'].includes(result.travelMode)) {
       setTravelMode(result.travelMode);
     }
 
-    // === ФИЛЬТРЫ ===
     if (result.ownership && ['Государственная', 'Частная'].includes(result.ownership)) {
       setSelectedOwnership(result.ownership);
     }
@@ -1403,23 +1368,19 @@ export default function App() {
       }
     }
 
-    // === СОРТИРОВКА ===
     if (SORT_MODES.includes(result.sortMode)) {
       setSortBy(result.sortMode);
     }
 
-    // Если только clearRoute/clearFilters без дополнительных действий — выходим
     if ((result.clearRoute || result.clearFilters) && !result.specialty && !result.service && !result.searchQuery && !result.buildRoute && !result.targetStops?.length) {
       return;
     }
 
-    // Complex routing
     if (result.targetStops && result.targetStops.length > 0) {
       setTimeout(() => setTargetStopsTrigger(result.targetStops), 100);
       return;
     }
 
-    // === ПОИСК ===
     // searchQuery — универсальный поиск (по клинике, адресу, врачу и т.д.)
     const isGenericRouteQuery = (value) => {
       if (!value || typeof value !== 'string') {
@@ -1442,7 +1403,6 @@ export default function App() {
       setSearchQuery(result.service);
     }
 
-    // === ПОСТРОИТЬ МАРШРУТ ===
     if (result.buildRoute && !result.clearRoute && !result.clearFilters) {
       const candidates = enrichedDoctorsRef.current.filter((doc) => {
         const specialtyMatch = result.specialty
@@ -1468,8 +1428,8 @@ export default function App() {
         return [...prev, bestMatch];
       });
     }
-    // Сеттеры useState стабильны; перечислены явно, чтобы правило
-    // exhaustive-deps не считало их пропущенными зависимостями.
+    // Сеттеры useState стабильны; setIsDarkMode — из useLocalStorageState,
+    // поэтому exhaustive-deps требует указать его явно.
   }, [setIsDarkMode]);
 
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768);
@@ -1557,9 +1517,8 @@ export default function App() {
   useEffect(() => {
     pendingSidebarWidthRef.current = sidebarWidth;
     if (sidebarRef.current) {
-      // На планшете ширина фиксирована (340): раньше сюда попадала ширина
-      // с десктопа, CSS обрезал её до 360, и после сворачивания на −340
-      // оставалась полоса в 20 пикселей.
+      // На планшете ширина фиксирована (340): с шириной от десктопа CSS обрезает
+      // её до 360, и после сворачивания на −340 остаётся полоса в 20 пикселей.
       sidebarRef.current.style.width = `${isTablet ? 340 : sidebarWidth}px`;
     }
   }, [sidebarWidth, isTablet]);
@@ -1617,12 +1576,10 @@ export default function App() {
     }
 
     let watchId;
-    // Была ли хоть одна успешная позиция. После неё единичный таймаут или
-    // «позиция недоступна» (в помещении — обычное дело) не должны
-    // переносить пользователя в центр Казани и пересчитывать все расстояния.
+    // После первой успешной позиции единичный таймаут или «позиция недоступна»
+    // (в помещении — обычное дело) не переносят пользователя в центр Казани.
     let hadFix = false;
     const fallbackTimer = window.setTimeout(() => {
-      // Use fallback location on timeout
       setUserLocation(defaultLocation);
       setLocationError(true);
       setIsLocationReady(true);
@@ -1636,8 +1593,8 @@ export default function App() {
         const next = [position.coords.latitude, position.coords.longitude];
         setUserLocation((prev) => {
           // watchPosition срабатывает несколько раз в секунду, а каждая новая
-          // ссылка пересчитывала расстояния до всех ~1000 объектов.
-          // Игнорируем дрожание меньше ~5 метров.
+          // ссылка пересчитывает расстояния до всех объектов: дрожание меньше
+          // ~5 метров игнорируется.
           if (prev && Math.abs(prev[0] - next[0]) < 0.00005 && Math.abs(prev[1] - next[1]) < 0.00005) {
             return prev;
           }
@@ -1731,10 +1688,9 @@ export default function App() {
               .map((entry) => ({ service: entry?.service, label: formatPriceRange(entry) }))
               .filter((entry) => entry.service && entry.label)
           : EMPTY_SERVICES;
-        // Часть источников (OSM, ClinicsData) может прийти без features/services —
-        // раньше это роняло рендер на doc.features.children.
+        // Часть источников (OSM, ClinicsData) приходит без features/services.
         // «Детский ЛОР», «Педиатр», «Детская поликлиника» — детский приём,
-        // даже если в источнике флаг не проставлен (а он не проставлен ни у кого).
+        // даже если в источнике флаг не проставлен.
         const features = { ...(doc.features || {}), children: isPediatricRecord(doc) };
         const services = Array.isArray(doc.services) ? doc.services : EMPTY_SERVICES;
 
@@ -1749,9 +1705,7 @@ export default function App() {
           : doc.verifiedAt;
         const missingSince = check?.status === 'missing' && typeof check.checkedAt === 'string' ? check.checkedAt : null;
 
-        // Бейджи раньше дублировали друг друга: врач со стажем 20+ получал
-        // сразу «Опытный врач» и «Высший стаж», а с рейтингом 4.9 — ещё
-        // «Топ-врач» и «Популярный». Оставляем по одному, самому сильному.
+        // По одному, самому сильному бейджу на признак (стаж, рейтинг).
         const trustBadges = [];
         if (entityKind === 'doctor') {
           if (doc.experience >= 20) trustBadges.push('Высший стаж');
@@ -1793,8 +1747,7 @@ export default function App() {
     [activeOrigin, now, sourceFacilities],
   );
 
-  // Set вместо массива: раньше на каждую из ~1000 записей выполнялся
-  // линейный favorites.includes(), то есть O(записи × избранное).
+  // Set, а не favorites.includes() на каждую запись: иначе O(записи × избранное).
   const favoriteIds = useMemo(() => new Set(favorites), [favorites]);
 
   const enrichedDoctors = useMemo(
@@ -1832,8 +1785,8 @@ export default function App() {
   const dmsFilterActive = dmsOnly && Boolean(dmsPlan);
 
   /*
-   * Покрытие считается в браузере: программа никуда не отправляется,
-   * а справочник ДМС — публичный (какие клиники входят в какую программу).
+   * Покрытие считается в браузере по публичному справочнику ДМС (какие клиники
+   * входят в какую программу); для этого расчёта программа на сервер не уходит.
    */
   const dmsAnnotatedDoctors = useMemo(() => {
     if (!insurance || !dmsPlan) return enrichedDoctors;
@@ -1904,8 +1857,8 @@ export default function App() {
     serviceSetRef.current = new Set(allServices);
   }, [districts, clinics, facilityTypes, doctorProfiles, allServices]);
 
-  // Индекс подсказок строится ОДИН раз на набор данных. Раньше эта Map на
-  // несколько тысяч ключей пересобиралась на каждое нажатие клавиши.
+  // Индекс подсказок (Map на несколько тысяч ключей) строится один раз на набор
+  // данных, а не на каждое нажатие клавиши.
   const suggestionIndex = useMemo(() => {
     const unique = new Map();
     const add = (value, type) => {
@@ -1986,7 +1939,6 @@ export default function App() {
       const matchesOwnership = selectedOwnership === 'all' || doc.ownership === selectedOwnership;
       const matchesRating = doc.rating >= minRating;
       const matchesExperience = doc.experience >= minExperience;
-      // Скобки расставлены явно: без них тернарник читался как (a || b) ? true : c.
       const matchesDistance = maxDistance === 0 || doc.distanceKm == null || doc.distanceKm <= maxDistance;
       const matchesOpen = !openOnly || doc.openNow;
       const matchesFavorites = !favoritesOnly || doc.isFavorite;
@@ -2047,9 +1999,9 @@ export default function App() {
   ]);
 
   /*
-   * Фильтр «не дольше N минут». Точка отправления должна быть настоящей:
-   * если геолокации нет и точку не выбрали вручную, «20 минут от центра
-   * Казани» ничего не значат, и фильтр не применяется (форма это объясняет).
+   * Фильтр «не дольше N минут» — только от настоящей точки отправления: без
+   * геолокации и ручной точки «20 минут от центра Казани» ничего не значат, и
+   * фильтр не применяется (форма это объясняет).
    */
   const travelOriginKnown = isManualOrigin || !locationError;
   const travelFilterActive = maxTravelMinutes > 0 && travelOriginKnown && Boolean(activeOrigin);
@@ -2190,9 +2142,8 @@ export default function App() {
 
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
-  // Отражаем фильтры в адресной строке через replaceState: ссылку можно
-  // переслать или сохранить, но история браузера не засоряется — иначе
-  // каждое движение ползунка добавляло бы запись, и «Назад» не работал бы.
+  // Фильтры — в адресной строке через replaceState: иначе каждое движение
+  // ползунка добавляет запись в историю, и «Назад» не работает.
   const urlQuery = useMemo(
     () =>
       buildUrlQuery({
@@ -2271,8 +2222,8 @@ export default function App() {
     }
   }, [urlQuery, showToast]);
 
-  // Раньше пагинация не сбрасывалась при смене фильтра: после «показать ещё»
-  // новый поиск сразу отдавал сотни карточек и подвешивал прокрутку.
+  // Пагинация сбрасывается при смене фильтра: иначе после «показать ещё» новый
+  // поиск сразу отдаёт сотни карточек и подвешивает прокрутку.
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
   }, [
@@ -2414,9 +2365,8 @@ export default function App() {
         reasons: pickReasons(doc, { travelMode, childrenOnly }),
       })),
     };
-    // Состояние меняется вне тела эффекта — как и в остальных эффектах файла.
-    // Таймер не отменяется при перерисовке: ожидание уже снято, и без него
-    // подборка навсегда осталась бы «подбираю…».
+    // Состояние меняется вне тела эффекта. Таймер не отменяется при перерисовке:
+    // ожидание уже снято, и без него подборка навсегда останется «подбираю…».
     setTimeout(() => setAssistantPicks((current) => ({ ...current, [pending.messageId]: snapshot })), 0);
     return undefined;
     // Снимок зависит от выдачи и условий на момент ответа; перечислять всё,
@@ -2532,21 +2482,17 @@ export default function App() {
     return sortedDoctors.find((doc) => doc.id === detailsId) || dmsAnnotatedDoctors.find((doc) => doc.id === detailsId) || null;
   }, [detailsId, sortedDoctors, dmsAnnotatedDoctors]);
   // Сколько записей фильтр «Открытые сейчас» прячет не потому, что они закрыты,
-  // а потому, что графика нет в данных. Молча терять половину базы нечестно.
+  // а потому, что графика нет в данных, — это показывается пользователю.
   const unknownScheduleCount = enrichedDoctors.filter((doc) => doc.openState === OPEN_STATE.UNKNOWN).length;
-  // Только действительно открытые сейчас: раньше при отсутствии открытых
-  // кнопка молча вела в ближайшее закрытое место или место без графика.
+  // Только открытые сейчас: если таких нет — null, а не ближайшее закрытое
+  // место или место без графика.
   const nearestOpenDoctor = useMemo(() => {
     const byDistance = [...enrichedDoctors].sort((a, b) => (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity));
     return byDistance.find((doc) => doc.openNow) || null;
   }, [enrichedDoctors]);
   const doctorCards = useMemo(() => sortedDoctors.filter((item) => item.entityKind === 'doctor'), [sortedDoctors]);
 
-  /*
-   * Ссылка вида ?doc=<id> раньше разбиралась и тут же терялась: параметр
-   * читался, но нигде не использовался и пропадал из адреса. Теперь карта
-   * летит к этому врачу или учреждению, а список сужается до него.
-   */
+  // Ссылка ?doc=<id>: карта летит к этому врачу или учреждению, список сужается до него.
   const deepLinkHandledRef = useRef(false);
   useEffect(() => {
     if (deepLinkHandledRef.current || !INITIAL_URL_STATE.focus || enrichedDoctors.length === 0) return;
@@ -2590,11 +2536,8 @@ export default function App() {
         }
       });
 
-      /*
-       * Честно говорим, сколько точек реально добавлено. Раньше ответ
-       * ассистента «построил маршрут: 3 точки» мог сопровождаться пустым
-       * маршрутом (точек нет в данных карты) или молча обрезанным до пяти.
-       */
+      // Сообщаем, сколько точек реально добавлено: часть может не найтись на
+      // карте или не поместиться в MAX_ROUTE_STOPS.
       const room = Math.max(0, MAX_ROUTE_STOPS - routeTargets.length);
       const fresh = foundTargets.filter((ft) => !routeTargets.some((t) => t.id === ft.id));
       const added = Math.min(fresh.length, room);
@@ -2638,7 +2581,6 @@ export default function App() {
     }
   }, [buildRouteTrigger, targetStopsTrigger, enrichedDoctors, sortedDoctors, routeTargets, showToast]);
 
-  // Toggle favorite status
   const toggleFavorite = useCallback((id) => {
     const adding = !favoritesRef.current.includes(id);
     setFavorites((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
@@ -2818,8 +2760,7 @@ export default function App() {
       return;
     }
     if (routeTargets.length > 0) {
-      // Не затираем собранный маршрут: добавляем точку, как кнопка
-      // «В маршрут» у карточки. Раньше три точки молча заменялись одной.
+      // Не затираем собранный маршрут: добавляем точку, как кнопка «В маршрут» у карточки.
       handleRouteClick(nearestOpenDoctor);
       setIsFollowingUser(false);
       return;
@@ -2831,14 +2772,9 @@ export default function App() {
   };
 
   /*
-   * Ссылки «Как добраться» в Яндекс Карты и 2ГИС. МедКарта подбирает, куда
-   * обратиться; вести до двери — с пробками, автобусами и голосом — лучше
-   * умеют навигаторы.
-   *
-   * Точка отправления передаётся всегда — та же, от которой построен наш
-   * маршрут: геолокация или красный маркер, перетащенный вручную. Раньше без
-   * геолокации она не передавалась, и Яндекс спрашивал «Откуда?», а маршрут
-   * в навигаторе расходился с маршрутом на нашей карте.
+   * Ссылки «Как добраться» в Яндекс Карты и 2ГИС. Точка отправления передаётся
+   * всегда — та же, от которой построен наш маршрут (геолокация или красный
+   * маркер): иначе навигатор спрашивает «Откуда?» и маршрут расходится с нашим.
    */
   const renderExternalRouteLinks = (targets, { doc = null, label = 'Как добраться:', className = '' } = {}) => {
     if (!targets || targets.length === 0) return null;
@@ -2847,7 +2783,7 @@ export default function App() {
     const links = [
       { provider: 'yandex', mode, text: 'Яндекс Карты' },
       { provider: '2gis', mode, text: '2ГИС' },
-      // Общественного транспорта в нашем движке нет — честно отправляем туда, где он есть.
+      // Общественного транспорта в нашем движке нет — для него ведём в Яндекс.
       { provider: 'yandex', mode: 'transit', text: 'На транспорте', icon: Bus },
     ];
     return (
@@ -2889,9 +2825,8 @@ export default function App() {
   const removeFromRoute = useCallback((docId) => {
     setRouteTargets(prev => prev.filter(t => t.id !== docId));
     setRouteData(null);
-    // Убрали последнюю точку — режим «маршрут начат» заканчивается. Иначе
-    // карта продолжала прятать все маркеры, кроме точек маршрута, которых
-    // уже нет, а панель с кнопками исчезала: вернуть маркеры было нечем.
+    // Убрали последнюю точку — режим «маршрут начат» заканчивается: иначе карта
+    // прячет все маркеры, а панели, чтобы их вернуть, уже нет.
     if (routeTargets.every((target) => target.id === docId)) {
       setIsRouteStarted(false);
     }
@@ -2919,9 +2854,8 @@ export default function App() {
     e.preventDefault();
     /*
      * Индекс берётся из состояния, а не из перетаскиваемого текста: на список
-     * можно бросить любой текст со страницы — например, выделенный номер
-     * «+7 (843)…», — и parseInt превращал его в индекс. Индекс за пределами
-     * списка вставлял в маршрут undefined, и приложение падало.
+     * можно бросить любой текст со страницы (например, «+7 (843)…»), и
+     * parseInt даст индекс за пределами списка.
      */
     const sourceIdx = draggedTargetIndex;
 
@@ -2964,20 +2898,18 @@ export default function App() {
 
   const markerNodes = useMemo(() => {
     const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 390;
-    // Группируем врачей и клиники по координатам, чтобы избежать наложения
-    // десятков одинаковых маркеров друг на друга (что вызывало черный ореол из теней)
+    // Группировка по координатам: десятки маркеров друг на друге дают чёрный
+    // ореол из теней.
     const groupsMap = new Map();
 
     sortedDoctors.forEach((doc) => {
       const routeIndex = routeTargets.findIndex((t) => t.id === doc.id);
       const isRouteTarget = routeIndex !== -1;
 
-      // Если пользователь нажал "Начать маршрут" — скрываем все остальные маркеры
       if (routeStarted && !isRouteTarget) {
         return;
       }
 
-      // Если маршрут не начат — применяем обычный фильтр по типу карточки
       if (!routeStarted && cardDisplayMode !== 'all' && doc.entityKind !== cardDisplayMode) {
         return;
       }
@@ -2996,7 +2928,7 @@ export default function App() {
 
     return Array.from(groupsMap.values()).map((group) => {
       const { key, lat, lng, items } = group;
-      // Если среди специалистов точки есть точка маршрута — маркер должен быть красным маршрутным
+      // Есть точка маршрута среди врачей группы — маркер маршрутный.
       const targetItem = items.find((it) => it.isRouteTarget);
       const isRouteTarget = Boolean(targetItem);
       const routeIndex = targetItem ? targetItem.routeIndex : -1;
@@ -3005,7 +2937,6 @@ export default function App() {
       const isGovernment = items.some((it) => /государ/i.test(String(it.ownership || '')));
       const ownershipIcon = isGovernment ? blueArrowIcon : violetArrowIcon;
 
-      // Приоритет иконки: Маршрут -> Избранное -> Государственная/Частная
       const icon = isRouteTarget
         ? routeIconFor(routeIndex + 1)
         : hasFavorite
@@ -3028,11 +2959,9 @@ export default function App() {
           eventHandlers={{ popupopen: () => track('result_open', { surface: 'map', ...placeFields(primary) }) }}
         >
           <Popup
-            // На телефоне окно не шире экрана: раньше CSS ограничивал обёртку
-            // 280 px при содержимом 300 px, и поиск, сердечки и счётчики
-            // вылезали за край. Высоту держат полосы прокрутки внутри списка
-            // (PlaceDoctorList); maxHeight самого окна не используется —
-            // с ним прокрутка списка пальцем сдвигала карту.
+            // На телефоне окно не шире экрана. Высоту держат полосы прокрутки
+            // внутри списка (PlaceDoctorList), а не maxHeight окна: с ним
+            // прокрутка списка пальцем сдвигает карту.
             maxWidth={isMobile ? Math.min(320, viewportWidth - 48) : isSingle ? 300 : 360}
             minWidth={isMobile ? Math.min(260, viewportWidth - 64) : isSingle ? 240 : 300}
             // Открытая панель маршрута (справа) не должна закрывать окно.
@@ -3040,12 +2969,9 @@ export default function App() {
             autoPanPaddingBottomRight={!isMobile && routeTargets.length > 0 ? [360, 24] : [24, 24]}
           >
             {/*
-              Клик внутри окна не должен доходить до карты. Leaflet отличает
-              клик по окну от клика по карте, поднимаясь по DOM от цели события.
-              Но React успевает перерисовать список раньше, чем событие доходит
-              до карты: нажатая кнопка (сердечко, «в маршрут») уже удалена из
-              DOM, Leaflet не находит окно среди её предков, считает это кликом
-              по карте и закрывает окно. Останавливаем всплытие здесь.
+              Клик внутри окна не должен доходить до карты: React успевает убрать
+              нажатую кнопку (сердечко, «в маршрут») из DOM, Leaflet не находит
+              окно среди её предков, считает это кликом по карте и закрывает окно.
             */}
             <div
               className={`${isSingle ? 'min-w-[240px] max-w-[300px]' : 'w-full'} pb-1 dark:text-white`}
@@ -3145,7 +3071,6 @@ export default function App() {
     setCustomOrigin(null);
     setIsFollowingUser(true); // Включаем для синей иконки кнопки
     setRouteData(null);
-    // Плавный перелёт к текущему местоположению
     setFlyToTarget(userLocation);
   };
 
@@ -3267,11 +3192,8 @@ export default function App() {
     );
   };
 
-  /*
-   * Краткая карточка списка: кто, где, сколько ехать, цена, ДМС — и
-   * действия. Всё остальное (график на неделю, цены, контакты, ссылки на
-   * карты, расписание демо-врача) — в окне «Подробнее».
-   */
+  // Краткая карточка списка: кто, где, сколько ехать, цена, ДМС и действия;
+  // остальное — в окне «Подробнее».
   const renderListingCard = (doc, index = 0) => {
     const isTarget = routeTargets.some((t) => t.id === doc.id);
     const isDoctorCard = doc.entityKind === 'doctor';
@@ -3437,8 +3359,7 @@ export default function App() {
           </div>
         )}
 
-        {/* Пометка о происхождении данных: запись взята с официального сайта
-            учреждения, и на неё можно перейти и проверить самому. */}
+        {/* Запись взята с официального сайта учреждения — ссылка, чтобы проверить самому. */}
         {toSafeUrl(doc.sourceUrl) ? (
           <a
             href={toSafeUrl(doc.sourceUrl)}
@@ -3513,8 +3434,7 @@ export default function App() {
           />
         )}
 
-        {/* Расписание на неделю — данные лежали в doc.schedule, но наружу
-            выходил только сегодняшний день. */}
+        {/* Расписание на неделю из doc.schedule. */}
         {isScheduleOpen && doc.weekSchedule && (
           <div className="mt-3 overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-700">
             <table className="w-full text-sm">
@@ -3541,7 +3461,7 @@ export default function App() {
           </div>
         )}
 
-        {/* Цены: диапазоны лежали в servicePrices и никогда не показывались. */}
+        {/* Цены: диапазоны из servicePrices. */}
         {doc.servicePrices.length > 0 && (
           <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/60">
             <div className="mb-2 inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
@@ -3563,8 +3483,7 @@ export default function App() {
 
         <div className="mt-4 flex flex-wrap gap-2">
           {isDoctorCard ? (
-            // Пустой бейдж «Рейтинг: н/д» стоял почти на половине карточек и
-            // ничего не сообщал — теперь его просто нет.
+            // Без рейтинга бейджа нет: «Рейтинг: н/д» ничего не сообщает.
             doc.rating > 0 && (
               <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700 dark:bg-amber-900 dark:text-amber-200">
                 <Star size={13} className="inline-block -translate-y-[1px]" fill="currentColor" /> {doc.rating}
@@ -3602,8 +3521,8 @@ export default function App() {
         {hasVisibleDescription && <p className="mt-4 text-sm leading-6 text-slate-600 dark:text-slate-400">{doc.description}</p>}
 
         {/*
-          ДМС: покрытие выбранной программой. Считается в браузере, программа
-          никуда не отправляется. Через пульт — кнопка звонка на пульт.
+          ДМС: покрытие выбранной программой, считается в браузере.
+          «Через пульт» — кнопка звонка на пульт страховой.
         */}
         {dmsBadge && dmsBadge.tone === 'covered' && (
           <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-3 text-xs leading-5 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-100">
@@ -3628,10 +3547,7 @@ export default function App() {
           </p>
         )}
 
-        {/*
-          Переход к записи. Своей записи у МедКарты нет: ведём туда, где
-          записываются, и честно говорим, как это устроено по ОМС.
-        */}
+        {/* Своей записи у МедКарты нет: ведём туда, где записываются, с пояснением по ОМС. */}
         {oms && (
           <div className="mt-4 rounded-2xl border border-blue-100 bg-blue-50/60 p-3 text-xs leading-5 text-slate-600 dark:border-blue-900 dark:bg-blue-950/30 dark:text-slate-300">
             <p>{oms.text}</p>
@@ -3793,9 +3709,8 @@ export default function App() {
             </button>
           )}
           {/*
-            На телефоне панель — «шторка» с position: fixed. Раньше у неё были
-            и relative, и fixed; Tailwind выводит .relative позже, он побеждал,
-            и шторка вставала в поток вверху экрана, а карта сжималась до нуля.
+            На телефоне панель — «шторка» с position: fixed и без relative:
+            Tailwind выводит .relative позже, и он перебил бы fixed.
           */}
           <aside
             ref={sidebarRef}
@@ -4050,8 +3965,8 @@ export default function App() {
                 )}
                 {sortedDoctors.length === 0 ? (
                   <div className="rounded-3xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-400">
-                    {/* Пустое состояние теперь называет конкретную причину:
-                        общее «ослабьте фильтры» не подсказывает, какой снять. */}
+                    {/* Пустое состояние называет конкретную причину: общее
+                        «ослабьте фильтры» не подсказывает, какой снять. */}
                     {favoritesOnly && favoritesCount === 0 ? (
                       <>
                         <p className="font-semibold text-slate-700 dark:text-slate-300">В избранном пока пусто</p>
@@ -4343,9 +4258,9 @@ export default function App() {
           <div
             className={`route-panel-slide-in absolute z-[1000] flex flex-col overflow-hidden border border-slate-100 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-800 ${isMobile ? 'left-2 right-2 rounded-2xl' : 'right-6 top-6 w-80 rounded-3xl'}`}
             /*
-             * Высота ограничена: с пятью точками панель уходила за нижний край
-             * окна, и «Начать маршрут», время и «Очистить» становились
-             * недоступны. Снизу оставлено место под кнопки ИИ и геолокации.
+             * Высота ограничена, чтобы с пятью точками «Начать маршрут» и
+             * «Очистить» не уходили за нижний край; снизу — место под кнопки
+             * ИИ и геолокации.
              */
             style={isMobile ? { bottom: 'calc(80px + env(safe-area-inset-bottom, 0px))', maxHeight: '55vh' } : { maxHeight: 'calc(100% - 184px)' }}
           >
@@ -4479,8 +4394,7 @@ export default function App() {
         <MapContainer center={activeOrigin} zoom={13} className="h-full w-full" zoomControl attributionControl={false}>
           {/*
             Подпись «© OpenStreetMap» обязательна по лицензии ODbL и правилам
-            использования тайлов. Раньше она была отключена целиком; теперь
-            стоит там, где её не закрывают панели и нижнее меню.
+            использования тайлов; стоит там, где её не закрывают панели и меню.
           */}
           <AttributionControl position={isMobile ? 'topright' : 'bottomleft'} prefix={false} />
           <PopupPanGuard rightPadding={!isMobile && routeTargets.length > 0 && !isRoutePanelCollapsed ? 360 : 24} />

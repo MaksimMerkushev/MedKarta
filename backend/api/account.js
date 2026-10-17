@@ -12,13 +12,9 @@
  *   POST   /api/auth/demo          — вход в демо-аккаунт (если DEMO_DATA=on)
  *   POST   /api/auth/logout        — выход
  *
- * Сессия — случайный токен в cookie HttpOnly; SameSite=Lax; Path=/api. В базе
- * хранится только SHA-256 от него. Изменяющие запросы принимаются только
- * как JSON со своей страницы: форма с чужого сайта не может ни прислать
- * application/json без предварительного запроса, ни приложить cookie.
- *
- * С ассистентом кабинет не связан: в /api/chat не уходят ни email, ни имя,
- * ни программа ДМС, ни избранное.
+ * Сессия — случайный токен в cookie HttpOnly; SameSite=Lax; Path=/api, в базе
+ * хранится только его SHA-256. С ассистентом кабинет не связан: в /api/chat
+ * не уходят ни email, ни имя, ни программа ДМС, ни избранное.
  */
 
 import path from 'node:path';
@@ -86,9 +82,9 @@ export const parseCookies = (header) => {
 };
 
 /*
- * Secure у cookie. В продакшене (NODE_ENV=production, так в unit-файле) —
- * всегда: сайт работает только по HTTPS. Иначе — по самому соединению или
- * по X-Forwarded-Proto, но только от нашего прокси: этот заголовок пишет кто угодно.
+ * Secure у cookie: при NODE_ENV=production — всегда, сайт работает только по
+ * HTTPS. Иначе — по соединению или по X-Forwarded-Proto, но только от нашего
+ * прокси: этот заголовок может прислать кто угодно.
  */
 const isSecureRequest = (req) => {
   if (process.env.COOKIE_SECURE === 'on') return true;
@@ -110,10 +106,9 @@ export const sessionCookie = (req, token, expiresAt) => {
 };
 
 /*
- * Защита от подделки запроса (CSRF) — в три слоя: SameSite=Lax у cookie,
- * обязательный Content-Type: application/json (с чужого сайта такой запрос
- * требует предварительного разрешения, которого мы не даём) и проверка
- * Origin / Sec-Fetch-Site.
+ * CSRF — в три слоя: SameSite=Lax у cookie, обязательный Content-Type:
+ * application/json (с чужого сайта такой запрос требует предварительного
+ * разрешения, которого мы не даём) и проверка Origin / Sec-Fetch-Site.
  */
 const isTrustedWrite = (req) => {
   if (!verifyOrigin(req)) return false;
@@ -299,9 +294,9 @@ export const createAccountHandler = ({
   };
 
 /*
- * Сервис по умолчанию: SQLite-файл в var/accounts/. Открывается при первом
- * запросе к кабинету; если node:sqlite нет (Node < 22.13) или ACCOUNTS=off,
- * кабинет выключен, а остальной сайт работает.
+ * SQLite-файл в var/accounts/ открывается при первом запросе к кабинету. Без
+ * node:sqlite (Node < 22.13) или при ACCOUNTS=off кабинет выключен, а
+ * остальной сайт работает.
  */
 let defaultService;
 

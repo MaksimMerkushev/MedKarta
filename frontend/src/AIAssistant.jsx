@@ -21,8 +21,7 @@ const GREETING = {
     'Привет! 👋 Я ваш навигатор по МедКарте. Расскажите, какой специалист вам нужен или на что вы жалуетесь, и я помогу найти врача и построить маршрут.',
 };
 
-// Технические подробности наружу не показываем: пользователю нужен понятный текст,
-// а детали ошибки остаются в консоли сервера.
+// Пользователю — понятный текст; технические детали остаются в журнале сервера.
 const friendlyError = (error) => {
   switch (error?.code) {
     case 'timeout':
@@ -77,8 +76,7 @@ export default function AIAssistant({
     }
   }, [isOpen, isMobile]);
 
-  // Пока идёт запрос, поле ввода отключено, и фокус уходил на <body>:
-  // после ответа приходилось снова щёлкать в поле. Возвращаем его.
+  // На время запроса поле отключено и фокус уходит на <body>; после ответа возвращаем его.
   const wasLoadingRef = useRef(false);
   useEffect(() => {
     if (wasLoadingRef.current && !isLoading && isOpen && !isMobile) {
@@ -91,11 +89,8 @@ export default function AIAssistant({
   // размонтированного диалога.
   useEffect(() => () => abortRef.current?.abort(), []);
 
-  /*
-   * Ассистент держит контекст всей переписки: «а завтра?» дополняет прошлый
-   * запрос. Начать с чистого листа — этой кнопкой (или словами «давай
-   * заново»): прежние условия больше не учитываются.
-   */
+  // Ассистент держит контекст всей переписки («а завтра?» дополняет прошлый
+  // запрос); перезапуск, как и «давай заново», сбрасывает прежние условия.
   const handleRestart = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
@@ -119,11 +114,8 @@ export default function AIAssistant({
 
     const onKeyDown = (event) => {
       if (event.key !== 'Escape') return;
-      /*
-       * Esc в чужом поле ввода относится к нему: в строке поиска им
-       * закрывают подсказки. Раньше слушатель на window закрывал чат из
-       * любого места страницы, а закрытие стирало переписку.
-       */
+      // Esc в чужом поле ввода относится к нему (в строке поиска закрывает
+      // подсказки), а закрытие чата стирает переписку.
       const target = event.target instanceof Element ? event.target : null;
       const insideAssistant = Boolean(target?.closest('[aria-label="AI-помощник МедКарты"]'));
       const editableElsewhere = Boolean(target?.closest('input, textarea, select, [contenteditable="true"]')) && !insideAssistant;
@@ -136,10 +128,9 @@ export default function AIAssistant({
   }, [isOpen, handleClose]);
 
   /*
-   * Реплика пользователя — набранная или ответ кнопкой под подбором
-   * («вечера», «в любой день»). Кнопка тоже пишет в историю: иначе выбор
-   * жил только в одном блоке подбора, и следующая реплика («а в пятницу?»)
-   * снова спрашивала «утра или вечера?» или возвращала снятое условие.
+   * Ответ кнопкой под подбором («вечера», «в любой день») тоже пишется в
+   * историю: иначе следующая реплика («а в пятницу?») снова спрашивает
+   * «утра или вечера?» или возвращает снятое условие.
    */
   const sendText = useCallback(async (text, { fromInput = false } = {}) => {
     const userText = String(text || '').trim().slice(0, LIMITS.MAX_MESSAGE_CHARS);
@@ -240,7 +231,6 @@ export default function AIAssistant({
     </div>
   );
 
-  // Мобильный: полноэкранный режим
   if (isMobile) {
     return (
       <div
@@ -338,7 +328,6 @@ export default function AIAssistant({
     );
   }
 
-  // Десктоп/планшет: popup
   return (
     <div
       className={`absolute bottom-20 right-6 z-[1050] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl transition-all dark:border-slate-700 dark:bg-slate-800 ${bookings ? 'w-[380px]' : 'w-[350px]'}`}

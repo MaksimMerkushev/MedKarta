@@ -1,12 +1,9 @@
 /*
  * © 2026 MedКарта Казань. Все права защищены.
  *
- * Прогон набора через настоящий конвейер и подсчёт утечек.
- *
- * Внешняя модель подменяется заглушкой, которая записывает всё, что ушло бы
- * в сеть, и отвечает пустым планом. Проверяется ровно то, что покинуло бы
- * сервер: реплики и блок подсказок (системный промпт статичен и данных не
- * содержит).
+ * Прогон набора через настоящий конвейер и подсчёт утечек. Модель подменяется
+ * заглушкой: она записывает всё, что покинуло бы сервер (реплики и блок подсказок;
+ * системный промпт статичен и данных не содержит), и отвечает пустым планом.
  */
 
 import { normalizeRu } from '../../backend/privacy/normalize.js';
@@ -255,7 +252,6 @@ export const createRecordingPipeline = async ({ modules, outboundMode = undefine
   };
 };
 
-/** Прогоняет примеры и возвращает результаты по каждому. */
 export const evaluateSamples = async (runner, samples, { onProgress = () => {} } = {}) => {
   const results = [];
   for (const [index, item] of samples.entries()) {
@@ -318,7 +314,6 @@ const coverageSummary = (list) => {
   return out;
 };
 
-/** Сводные цифры по результатам. */
 export const summarize = (results) => {
   const groups = new Map();
   const add = (key, result) => {

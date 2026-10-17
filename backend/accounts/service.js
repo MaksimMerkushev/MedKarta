@@ -14,10 +14,8 @@ import { hashPassword, PasswordBusyError, passwordProblem, verifyPassword } from
 export const ACCOUNT_LIMITS = Object.freeze({
   SESSION_TTL_MS: 30 * 24 * 60 * 60 * 1000,
   MAX_SESSIONS_PER_USER: 10,
-  /*
-   * Демо-аккаунт открывают сразу многие (зал на питче): потолок «10 входов»
-   * выкидывал бы зрителей друг у друга. Зато демо-сессия живёт 12 часов.
-   */
+  // Демо-аккаунт открывают сразу многие (зал на питче): потолок «10 входов»
+  // выкидывал бы зрителей друг у друга. Взамен демо-сессия короче.
   DEMO_SESSION_TTL_MS: 12 * 60 * 60 * 1000,
   MAX_DEMO_SESSIONS: 2000,
   MAX_FAVORITES: 500,
@@ -89,12 +87,12 @@ export const normalizeEmail = (value) => (typeof value === 'string' ? value.trim
 export const cleanDisplayName = (value) =>
   (typeof value === 'string' ? value.replace(CONTROL, '').replace(/\s+/gu, ' ').trim().slice(0, ACCOUNT_LIMITS.MAX_NAME) : '');
 
+const HAS_CONTROL = new RegExp(CONTROL.source, 'u');
+
 /*
  * id в избранном — строка или целое число, как в справочнике. Хранится как
  * JSON, чтобы число вернулось числом: интерфейс сравнивает id строго.
  */
-const HAS_CONTROL = new RegExp(CONTROL.source, 'u');
-
 export const encodeItemId = (value) => {
   if (Number.isSafeInteger(value) && value >= 0) return JSON.stringify(value);
   if (typeof value !== 'string') return null;
@@ -181,9 +179,9 @@ export const createAccountService = ({ store, isKnownPlan = () => false, now = (
 
       const passwordHash = await hashPassword(password).catch(busy);
       if (store.getUserByEmail(address)) {
-        // Тот же ответ, что и при успехе, нельзя: пользователь ждёт вход. Но
-        // и «email занят» раскрывает, кто зарегистрирован. Компромисс MVP —
-        // честное сообщение; при открытой регистрации — подтверждение по почте.
+        // «email занят» раскрывает, кто зарегистрирован, но ответить как при
+        // успехе нельзя: пользователь ждёт вход. При открытой регистрации
+        // нужно подтверждение по почте.
         fail('email_taken', 409, 'С этим email уже есть аккаунт — войдите.');
       }
       const user = store.createUser({ id: newId(), email: address, displayName: name, passwordHash, now: now() });

@@ -1,26 +1,14 @@
 /*
  * © 2026 MedКарта Казань. Все права защищены.
  *
- * Адаптер внешнего планировщика.
+ * Граница сети: единственный модуль сервера, отправляющий запросы к модели.
+ * Контракт — generate(request: SanitizedPlannerRequest), сигнатуры со строкой
+ * нет; такой запрос создаёт только privacy/gateway.js, так что сырой ввод сюда
+ * не попадает.
  *
- * ГРАНИЦА СЕТИ. Это единственный модуль проекта, который делает исходящий
- * запрос к модели. Его контракт намеренно узкий:
- *
- *     generate(request: SanitizedPlannerRequest) -> PlanResult
- *
- * Сигнатуры generate(prompt: string) не существует. Передать сюда сырой ввод
- * нельзя: SanitizedPlannerRequest умеет создавать только privacy/gateway.js.
- * Это переносит требование «санитизируй перед отправкой» из документации
- * в систему типов.
- *
- * ВТОРОЙ ПРЕДОХРАНИТЕЛЬ. Прямо перед fetch тело запроса ещё раз прогоняется
- * через детекторы. Если в нём обнаружено хоть что-то чувствительное, запрос
- * НЕ отправляется. Это защищает от ошибки в самом Gateway: два независимых
- * механизма должны отказать одновременно, чтобы данные ушли наружу.
- *
- * ОШИБКИ И FALLBACK. Резервный провайдер получает ТОТ ЖЕ SanitizedPlannerRequest.
- * Сценария «не получилось с санитизированным — отправим оригинал» не существует,
- * потому что оригинала на этом уровне просто нет.
+ * Перед fetch пользовательская часть запроса ещё раз проходит детекторы и
+ * закрытый словарь; при любой находке запрос не отправляется. Так данные
+ * уходят наружу, только если одновременно ошиблись Gateway и эта проверка.
  */
 
 import { isSanitizedPlannerRequest } from '../privacy/models.js';
@@ -47,13 +35,10 @@ export const PLANNER_ERROR = Object.freeze({
 });
 
 /**
- * Выходной предохранитель.
+ * Выходной предохранитель: пустой список — необходимое условие отправки.
+ * Плейсхолдеры (@DOCTOR_A) детекторы сущностями не считают.
  *
- * Возвращает список видов сущностей, найденных в теле запроса. Пустой список —
- * необходимое условие отправки. Плейсхолдеры (@DOCTOR_A) детекторами не
- * распознаются как сущности, поэтому ложных срабатываний на них нет.
- *
- * @param {string} serialized тело запроса целиком
+ * @param {string} serialized проверяемый текст запроса (без системного промпта)
  * @returns {string[]} виды найденных сущностей
  */
 export const assertOutboundSafe = (serialized) => {
@@ -64,10 +49,8 @@ export const assertOutboundSafe = (serialized) => {
 };
 
 /*
- * Предел размера ответа модели. План — это несколько сотен байт JSON;
- * ответ в 300 МБ раньше целиком читался в память (response.json()) и лишь
- * потом отбрасывался как слишком большой: четыре таких ответа поднимали
- * память процесса до 3 ГБ.
+ * План — несколько сотен байт JSON. Ответ читается потоком с потолком, а не
+ * целиком через response.json(): иначе огромный ответ раздувает память процесса.
  */
 export const MAX_RESPONSE_BYTES = 256 * 1024;
 
@@ -103,8 +86,8 @@ const readJsonLimited = async (response, limit) => {
 };
 
 /**
- * Базовый интерфейс. Реализации обязаны принимать SanitizedPlannerRequest
- * и возвращать { raw, usage } — разбор и валидация выполняются отдельно.
+ * Реализации принимают SanitizedPlannerRequest и возвращают { raw, usage };
+ * разбор и валидация — отдельно.
  */
 export class PlannerClient {
   // eslint-disable-next-line no-unused-vars
@@ -113,17 +96,6 @@ export class PlannerClient {
   }
 }
 
-/**
- * Клиент внешнего провайдера (OpenRouter-совместимый chat/completions).
- *
- * @param {object} config
- * @param {string} config.apiKey
- * @param {string} config.url
- * @param {string} config.model
- * @param {number} [config.timeoutMs]
- * @param {Function} [config.fetchImpl]
- * @param {{event: Function}} [config.logger] безопасный логгер
- */
 /**
  * Ключ уходит только по HTTPS. Обычный HTTP допускается лишь для модели,
  * запущенной на этой же машине (localhost).
@@ -139,9 +111,8 @@ export const isAllowedUpstreamUrl = (value) => {
 };
 
 /*
- * Глубина рассуждений для моделей, которые умеют рассуждать (OpenRouter:
- * reasoning.effort). Не задано — параметр не отправляется: другие
- * OpenAI-совместимые API могут его не знать.
+ * OpenRouter: reasoning.effort. Не задано — параметр не отправляется:
+ * другие OpenAI-совместимые API могут его не знать.
  */
 export const REASONING_EFFORTS = Object.freeze(['none', 'minimal', 'low', 'medium', 'high']);
 
@@ -161,6 +132,17 @@ export const buildPlannerBody = ({ model, messages, reasoningEffort = null }) =>
   return body;
 };
 
+/**
+ * Клиент внешнего провайдера (OpenRouter-совместимый chat/completions).
+ *
+ * @param {object} config
+ * @param {string} config.apiKey
+ * @param {string} config.url
+ * @param {string} config.model
+ * @param {number} [config.timeoutMs]
+ * @param {Function} [config.fetchImpl]
+ * @param {{event: Function}} [config.logger] безопасный логгер
+ */
 export const createExternalPlanner = ({
   apiKey,
   url,
@@ -174,7 +156,7 @@ export const createExternalPlanner = ({
 
   const generate = async (request) => {
     if (!isSanitizedPlannerRequest(request)) {
-      // Не «предупреждение», а отказ: это признак ошибки в коде вызывающего.
+      // Отказ, а не предупреждение: это ошибка в коде вызывающего.
       throw new PlannerError(
         'Внешний планировщик принимает только SanitizedPlannerRequest',
         PLANNER_ERROR.NOT_SANITIZED,
@@ -204,11 +186,9 @@ export const createExternalPlanner = ({
       request.toWireMessages().map((message) => message.content).join('\n') + '\n' + hintBlock,
     );
     const leaked = assertOutboundSafe(payloadUnderTest);
-    /*
-     * Третий предохранитель — закрытый словарь. Детекторы ищут известное;
-     * эта проверка пропускает только известное. Gateway уже применил её,
-     * здесь она повторяется независимо от того, каким путём собран текст.
-     */
+    // Закрытый словарь: детекторы ищут известное опасное, словарь пропускает
+    // только известное безопасное. Повтор проверки Gateway — независимо от
+    // того, каким путём собран текст.
     const tokens = request.placeholders.map((item) => item.token);
     for (const texts of [request.toWireMessages().map((message) => message.content), [hintBlock]]) {
       const vocabulary = checkClosedVocabulary(texts, tokens);
@@ -229,10 +209,7 @@ export const createExternalPlanner = ({
       const response = await fetchImpl(url, {
         method: 'POST',
         signal: controller.signal,
-        /*
-         * Редирект апстрима не выполняется: 307 заставлял fetch повторить POST
-         * со всем телом запроса на другой хост.
-         */
+        // Без редиректов: на 307 fetch повторил бы POST с телом и ключом на другой хост.
         redirect: 'error',
         headers: {
           'Content-Type': 'application/json',
@@ -242,13 +219,10 @@ export const createExternalPlanner = ({
       });
 
       if (!response.ok) {
-        /*
-         * Тело ошибки апстрима НЕ логируется и НЕ пересылается.
-         * Многие провайдеры возвращают в ошибке фрагмент исходного запроса —
-         * запись такого тела в логи свела бы на нет всю работу Gateway.
-         */
+        // Тело ошибки не логируется и не пересылается: провайдеры часто
+        // возвращают в нём фрагмент запроса.
         logger?.event('planner.upstream_error', { status: response.status, provider: name });
-        // Непрочитанное тело держало сокет открытым: после серии 429 копились соединения.
+        // Непрочитанное тело держит сокет: после серии 429 копятся соединения.
         try {
           await response.body?.cancel();
         } catch {
@@ -297,10 +271,8 @@ export const createExternalPlanner = ({
 };
 
 /**
- * Цепочка провайдеров с общим входом.
- *
- * Все провайдеры получают ОДИН И ТОТ ЖЕ SanitizedPlannerRequest. Возможности
- * «повторить с исходным текстом» не предусмотрено конструкцией.
+ * Все провайдеры цепочки получают один и тот же SanitizedPlannerRequest:
+ * повтора с исходным текстом нет по построению.
  */
 export const createFallbackPlanner = (planners, { logger = null } = {}) => ({
   name: 'fallback',

@@ -63,7 +63,7 @@ describe('Потолок времени в пути из текста', () => {
   it('извлекается и не путается с часами приёма', () => {
     assert.deepEqual(extractConstraints(TARGET_QUERY), { availableAfter: '18:00', maxTravelMinutes: 20 });
     assert.deepEqual(extractConstraints('терапевт до 30 минут езды'), { maxTravelMinutes: 30 });
-    // «до 20» без минут — по-прежнему время работы.
+    // «до 20» без минут — время работы, а не время в пути.
     assert.deepEqual(extractConstraints('приём до 20'), { availableBefore: '20:00' });
   });
 
@@ -131,7 +131,7 @@ describe('Целевой запрос через конвейер', () => {
 
     assert.equal(action.maxTravelMinutes, 20);
     assert.equal(action.isChild, true);
-    // «от дома» — точка отсчёта, а не цель: раньше план сводился к поиску учреждений.
+    // «от дома» — точка отсчёта, а не цель, иначе план сводится к поиску учреждений.
     assert.equal(action.specialty, 'Детский ЛОР');
     assert.doesNotMatch(action.replyText, /учреждений не нашлось/);
   });

@@ -1,17 +1,9 @@
 /*
  * © 2026 MedКарта Казань. Все права защищены.
  *
- * Сборщик данных с отслеживанием изменений.
- *
- *   источник → загрузка → разбор → сравнение с прошлым снимком
- *            → безопасные изменения применяются сами
- *            → рискованные — в очередь ручной проверки
- *            → снимок с датой проверки
- *
- * Что считается рискованным, решает classifyChange. Главная защита —
- * от тихой порчи справочника: врач «пропал», потому что сайт поменял
- * вёрстку; цена «выросла втрое», потому что парсер взял не ту ячейку.
- * Такие изменения человек видит до того, как их увидит пользователь.
+ * Сборщик данных: загрузка → разбор → сравнение с прошлым снимком. Безопасные
+ * изменения применяются сами, рискованные (classifyChange) идут на ручную проверку —
+ * защита от тихой порчи справочника, когда сайт сменил вёрстку или парсер взял не ту ячейку.
  */
 
 import { createHash } from 'node:crypto';
@@ -27,17 +19,14 @@ export const PRICE_AUTO_TOLERANCE = 0.2;
 export const MASS_CHANGE_SHARE = 0.5;
 
 /*
- * Сами применяются только часы работы. Телефон и сайт раньше тоже менялись
- * без человека, и подменённая (или взломанная) страница клиники могла
- * поставить свой номер и свою ссылку на кнопку «Записаться на сайте»
- * рядом с отметкой «официальный сайт». Теперь это решает человек.
+ * Сами применяются только часы работы: подменённая страница клиники не должна
+ * без человека менять телефон и ссылку кнопки «Записаться на сайте».
  */
 const CLINIC_AUTO_FIELDS = new Set(['hours']);
 
 /*
- * Потолки на один источник. Страница с восемью тысячами «врачей» раньше
- * целиком попадала в справочник и в бандл, который скачивает каждый
- * посетитель. Больше — значит, разбор взял не то; прогон уходит на проверку.
+ * Потолки на один источник (справочник попадает в бандл каждого посетителя).
+ * Больше — значит, разбор взял не то; прогон уходит на проверку.
  */
 export const MAX_DOCTORS_PER_SOURCE = 400;
 export const MAX_PRICES_PER_SOURCE = 1_500;
@@ -47,16 +36,14 @@ export const kazanDay = (date) => new Date(date.getTime() + 3 * 3600 * 1000).toI
 
 const hash = (value) => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 
-/** Разбор страницы выбранными парсерами. */
 export const extractRecords = (body, parsers = ['jsonld', 'price-table']) => {
   const records = { clinic: null, doctors: [], prices: [], unmatched: [] };
   if (parsers.includes('jsonld')) {
     const { clinic, doctors } = parseJsonLd(body);
     records.clinic = clinic;
     /*
-     * Врачи с одинаковым ключом имени («Иванова Мария» и «ИВАНОВА  мария»):
-     * берётся первый. Раньше второй молча заменял первого, и строка ниже по
-     * странице переписывала специальность настоящего врача.
+     * Дубли по ключу имени («Иванова Мария» и «ИВАНОВА  мария»): берётся первый,
+     * чтобы строка ниже по странице не переписала специальность настоящего врача.
      */
     const seen = new Set();
     records.doctors = doctors.filter((doctor) => {
@@ -155,9 +142,7 @@ export const diffRecords = (previous = EMPTY_RECORDS, next = EMPTY_RECORDS) => {
   return changes;
 };
 
-/**
- * Решение по одному изменению: 'auto' — применить, 'review' — человеку.
- */
+/** Решение по одному изменению: 'auto' — применить, 'review' — человеку. */
 export const classifyChange = (change) => {
   switch (change.kind) {
     case 'clinic':
@@ -171,9 +156,8 @@ export const classifyChange = (change) => {
       if (change.change === 'added') return { decision: 'auto' };
       if (change.change === 'removed') return { decision: 'review', reason: 'услуга пропала из прайса' };
       /*
-       * Сдвиг считается от последней цены, одобренной человеком, а не от
-       * последней применённой. Иначе цену можно было «дотянуть» ступеньками
-       * по 19 %: 1000 → 2386 за пять прогонов без единой проверки.
+       * Сдвиг — от последней цены, одобренной человеком, а не от применённой:
+       * иначе цену можно «дотянуть» ступеньками по 19 % без единой проверки.
        */
       const before = priceValue(change.baseline ?? change.before);
       const after = priceValue(change.after);
@@ -197,10 +181,7 @@ export const isMassChange = (previous, changes) => {
   const count = (kind, change) => changes.filter((item) => item.kind === kind && item.change === change).length;
   const removedDoctors = count('doctor', 'removed');
   const removedPrices = count('price', 'removed');
-  /*
-   * Массовые ДОБАВЛЕНИЯ — тоже признак поломки или подмены: раньше считались
-   * только пропажи, и тысячи выдуманных врачей применялись автоматически.
-   */
+  // Массовые добавления — тоже признак поломки разбора или подмены страницы.
   const addedDoctors = count('doctor', 'added');
   const addedPrices = count('price', 'added');
   return (previous.doctors.length >= 3 && removedDoctors / previous.doctors.length > MASS_CHANGE_SHARE)
@@ -210,8 +191,6 @@ export const isMassChange = (previous, changes) => {
 };
 
 /**
- * Применяет изменения к записям снимка.
- *
  * @param {object} records
  * @param {object[]} changes
  * @param {{reviewed?: boolean}} [options] reviewed — изменения одобрил человек:
@@ -219,9 +198,8 @@ export const isMassChange = (previous, changes) => {
  */
 export const applyChanges = (records, changes, { reviewed = false } = {}) => {
   /*
-   * Карты вместо поиска по массиву на каждое изменение: восемь тысяч
-   * изменений раньше применялись двадцать секунд (квадратичная сложность).
-   * Map сохраняет порядок вставки — порядок записей в снимке не меняется.
+   * Map вместо поиска по массиву на каждое изменение (иначе квадратичная
+   * сложность); порядок вставки сохраняется — порядок записей в снимке тоже.
    */
   const doctors = new Map(records.doctors.map((doctor) => [nameKey(doctor.name), { ...doctor }]));
   const prices = new Map(records.prices.map((price) => [price.serviceId, { ...price }]));
@@ -320,8 +298,7 @@ export const collectSource = async ({ source, fetcher, store, now = new Date(), 
 
   /*
    * Новый источник не попадает в справочник, пока человек не посмотрел
-   * первый снимок: один пункт очереди «подтвердите источник». Раньше всё,
-   * что было на странице в момент заведения, применялось без проверки.
+   * первый снимок: один пункт очереди «подтвердите источник».
    */
   if (bootstrap) {
     const item = { kind: 'source', key: 'source', change: 'added', field: 'approval', after: { doctors: records.doctors.length, prices: records.prices.length, clinic: records.clinic?.name || '' } };
@@ -339,7 +316,7 @@ export const collectSource = async ({ source, fetcher, store, now = new Date(), 
       etag: fetched.etag || null,
       lastModified: fetched.lastModified || null,
       contentHash,
-      // Снимки, заведённые до проверки источников, считаются одобренными.
+      // Снимок без поля approved (старого формата) считается одобренным.
       approved: bootstrap ? false : previous.approved ?? true,
       records: applyChanges(base, auto),
     });

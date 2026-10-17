@@ -31,7 +31,7 @@ import { logger } from '../observability/safeLogger.js';
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const MAX_BODY_BYTES = 16 * 1024;
 
-/* Подбор считает время в пути — дороже записи; запись — реже. */
+/* Подбор считает время в пути — дороже чтения; запись — реже всего. */
 const defaultSearchLimit = createRateLimiter({ maxPerIp: 120, maxPerInstance: Number.POSITIVE_INFINITY });
 const defaultReadLimit = createRateLimiter({ maxPerIp: 600, maxPerInstance: Number.POSITIVE_INFINITY });
 const defaultWriteLimit = createRateLimiter({ maxPerIp: 60, maxPerInstance: Number.POSITIVE_INFINITY });
@@ -73,10 +73,6 @@ const isTrustedWrite = (req) => {
   return /^application\/json\b/i.test(String(req.headers['content-type'] || ''));
 };
 
-/**
- * Сервис демо-записи: индекс набора, хранилище и подбор.
- * @param {object} deps
- */
 export const createDemoBookingService = ({ index, store, getEngine, now }) => {
   const search = createDemoSearch({ index, store, getEngine, now });
 
@@ -106,7 +102,7 @@ export const createDemoBookingService = ({ index, store, getEngine, now }) => {
 
 let defaultService;
 
-/** Сервис по умолчанию: включён при DEMO_DATA=on и наличии node:sqlite. */
+/** Сервис по умолчанию: включён при DEMO_DATA=on, DEMO_BOOKING≠off и наличии node:sqlite. */
 export const getDefaultDemoBookingService = () => {
   if (defaultService === undefined) {
     defaultService = (async () => {
