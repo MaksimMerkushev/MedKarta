@@ -78,6 +78,9 @@ export const useAccount = ({ onSignedIn, onSignedOut, onGuest } = {}) => {
     }
   }, [signedOut]);
 
+  // Сервер не узнал сессию в другом месте (например, ассистент ответил 401) — выходим здесь.
+  const expire = useCallback(() => signedOut('expired'), [signedOut]);
+
   const login = useCallback(async (credentials) => signedIn(await loginAccount(credentials)), [signedIn]);
   const register = useCallback(async (form) => signedIn(await registerAccount(form)), [signedIn]);
   const loginDemo = useCallback(async (key) => signedIn(await loginDemoAccount(key)), [signedIn]);
@@ -108,5 +111,5 @@ export const useAccount = ({ onSignedIn, onSignedOut, onGuest } = {}) => {
     return payload.favorites;
   }, [guarded]);
 
-  return { ...state, login, register, loginDemo, logout, removeAccount, setPlan, syncFavorites };
+  return { ...state, login, register, loginDemo, logout, expire, removeAccount, setPlan, syncFavorites };
 };

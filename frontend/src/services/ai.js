@@ -122,7 +122,10 @@ export const analyzeSymptoms = async (chatMessages, { signal } = {}) => {
   }
 
   if (!response.ok) {
-    const code = response.status === 429 ? 'rate_limit' : response.status === 503 ? 'unavailable' : 'server';
+    // 401 — нет входа в кабинет: ассистент только для вошедших (backend/api/chatAccess.js).
+    const code = response.status === 401 ? 'login_required'
+      : payload?.code === 'accounts_unavailable' ? 'accounts_unavailable'
+        : response.status === 429 ? 'rate_limit' : response.status === 503 ? 'unavailable' : 'server';
     throw new AiError(payload?.error || 'Ошибка при обращении к ИИ.', {
       code,
       status: response.status,

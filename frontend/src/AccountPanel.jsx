@@ -434,7 +434,7 @@ const UserView = ({ account, insurance, today, planId, onSelectPlan, favorites, 
   );
 };
 
-export default function AccountPanel({ account, insurance, today, planId, onSelectPlan, favorites, onFocusFavorite, onRemoveFavorite, onClose, isMobile }) {
+export default function AccountPanel({ account, insurance, today, planId, onSelectPlan, favorites, onFocusFavorite, onRemoveFavorite, onClose, isMobile, intro = null }) {
   const [busy, setBusy] = useState(false);
   const closeRef = useRef(null);
 
@@ -484,7 +484,7 @@ export default function AccountPanel({ account, insurance, today, planId, onSele
           ) : (
             <div className="mt-2 pr-8">
               <h2 className="text-[21px] font-extrabold leading-tight">Личный кабинет</h2>
-              <p className="mt-1 text-[13px] leading-5 text-white/80">Программа ДМС и избранные врачи — с вами на любом устройстве.</p>
+              <p className="mt-1 text-[13px] leading-5 text-white/80">{intro || 'Программа ДМС и избранные врачи — с вами на любом устройстве.'}</p>
             </div>
           )}
         </header>

@@ -32,6 +32,10 @@ const friendlyError = (error) => {
       return 'Слишком много запросов подряд. Давайте сделаем небольшую паузу и продолжим 🙏';
     case 'unavailable':
       return 'Сервис временно недоступен. Мы уже работаем над этим!';
+    case 'login_required':
+      return 'Сессия личного кабинета закончилась — войдите снова, чтобы продолжить разговор.';
+    case 'accounts_unavailable':
+      return 'Личный кабинет сейчас недоступен, поэтому ассистент тоже. Попробуйте позже.';
     default:
       return 'Что-то пошло не так. Попробуйте ещё раз через пару секунд 🔄';
   }
@@ -54,6 +58,7 @@ export default function AIAssistant({
   onBookOption,
   onSelectPlan,
   onRequestOrigin,
+  onLoginRequired,
 }) {
   const [messages, setMessages] = useState([GREETING]);
   // У каждой реплики свой id: к ответу ассистента привязывается подборка «топ-3».
@@ -160,13 +165,15 @@ export default function AIAssistant({
         return;
       }
       setMessages((prev) => [...prev, { id: bumpId(nextIdRef), role: 'assistant', content: friendlyError(error) }]);
+      // Сервер не узнал вход (сессия истекла или стёрта) — интерфейс выходит из кабинета.
+      if (error?.code === 'login_required') onLoginRequired?.();
     } finally {
       if (abortRef.current === controller) {
         abortRef.current = null;
         setIsLoading(false);
       }
     }
-  }, [isLoading, messages, onApplyTriage]);
+  }, [isLoading, messages, onApplyTriage, onLoginRequired]);
 
   const handleSend = useCallback(() => sendText(inputValue, { fromInput: true }), [sendText, inputValue]);
 

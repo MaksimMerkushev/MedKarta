@@ -86,6 +86,7 @@ import { useAccount } from './hooks/useAccount';
 // Помощник грузится отдельным чанком: большинство сессий открывают ради карты, а не чата.
 const AIAssistant = lazy(() => import('./AIAssistant'));
 const AccountPanel = lazy(() => import('./AccountPanel'));
+const ChatLoginNotice = lazy(() => import('./ChatLoginNotice'));
 const BookingDialog = lazy(() => import('./BookingDialog'));
 
 delete L.Icon.Default.prototype._getIconUrl;
@@ -1218,9 +1219,47 @@ export default function App() {
   // После первого открытия ассистент остаётся смонтированным и прячется, а не
   // уничтожается: иначе каждое закрытие стирает переписку.
   const [isAIAssistantMounted, setIsAIAssistantMounted] = useState(false);
+  /*
+   * Ассистент — только для вошедших в кабинет (сервер проверяет то же,
+   * backend/api/chatAccess.js). Гость вместо чата видит предупреждение с
+   * кнопкой входа; после входа из него чат открывается сам.
+   */
+  const [isChatNoticeOpen, setIsChatNoticeOpen] = useState(false);
+  const [chatAfterSignIn, setChatAfterSignIn] = useState(false);
+  const canUseAssistant = account.status === 'user' || account.features.chatRequiresAccount === false;
   const toggleAIAssistant = useCallback(() => {
+    if (isAIAssistantOpen) {
+      setIsAIAssistantOpen(false);
+      return;
+    }
+    if (!canUseAssistant) {
+      setIsChatNoticeOpen(true);
+      return;
+    }
     setIsAIAssistantMounted(true);
-    setIsAIAssistantOpen((current) => !current);
+    setIsAIAssistantOpen(true);
+  }, [isAIAssistantOpen, canUseAssistant]);
+  const signInForAssistant = useCallback(() => {
+    setIsChatNoticeOpen(false);
+    setChatAfterSignIn(true);
+    setIsAccountOpen(true);
+  }, []);
+  const closeAccountPanel = useCallback(() => {
+    setIsAccountOpen(false);
+    setChatAfterSignIn(false);
+  }, []);
+  useEffect(() => {
+    if (account.status !== 'user' || !chatAfterSignIn) return;
+    setChatAfterSignIn(false);
+    setIsAccountOpen(false);
+    setIsAIAssistantMounted(true);
+    setIsAIAssistantOpen(true);
+  }, [account.status, chatAfterSignIn]);
+  // Ассистент ответил «нет входа»: сессия истекла или стёрта — выходим из кабинета и здесь.
+  const handleAssistantLoginRequired = useCallback(() => {
+    if (accountRef.current?.status === 'user') accountRef.current.expire?.();
+    setIsAIAssistantOpen(false);
+    setIsChatNoticeOpen(true);
   }, []);
   const [isRoutePanelCollapsed, setIsRoutePanelCollapsed] = useState(false);
   /*
@@ -1255,6 +1294,8 @@ export default function App() {
    */
   useEffect(() => {
     accountSwitchRef.current = () => {
+      setIsAIAssistantOpen(false);
+      setIsChatNoticeOpen(false);
       setAssistantPicks({});
       setAssistantBookings({});
       setAssistantEpoch((value) => value + 1);
@@ -4536,8 +4577,9 @@ export default function App() {
               favorites={favoriteDetails}
               onFocusFavorite={focusFavorite}
               onRemoveFavorite={toggleFavorite}
-              onClose={() => setIsAccountOpen(false)}
+              onClose={closeAccountPanel}
               isMobile={isMobile}
+              intro={chatAfterSignIn ? 'Войдите, чтобы поговорить с ассистентом: переписка будет только вашей.' : null}
             />
           </Suspense>
         )}
@@ -4560,8 +4602,21 @@ export default function App() {
               onBookOption={openBooking}
               onSelectPlan={choosePlanFromChat}
               onRequestOrigin={requestBookingOrigin}
+              onLoginRequired={handleAssistantLoginRequired}
               isMobile={isMobile}
               avoidRoutePanel={!isMobile && routeTargets.length > 0 && !isRoutePanelCollapsed}
+            />
+          </Suspense>
+        )}
+
+        {isChatNoticeOpen && (
+          <Suspense fallback={null}>
+            <ChatLoginNotice
+              canSignIn={account.features.available}
+              hasDemo={Boolean(account.features.demo && account.features.demoAccounts?.length)}
+              onSignIn={signInForAssistant}
+              onClose={() => setIsChatNoticeOpen(false)}
+              isMobile={isMobile}
             />
           </Suspense>
         )}
