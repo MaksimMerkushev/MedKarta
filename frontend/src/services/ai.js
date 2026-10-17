@@ -34,6 +34,15 @@ const getSessionId = () => {
   }
 };
 
+/** Новый диалог после входа или выхода: прежний идентификатор не переходит к другому аккаунту. */
+export const resetAssistantSession = () => {
+  try {
+    sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  } catch {
+    // Без хранилища идентификатор и так новый на каждый запрос.
+  }
+};
+
 export class AiError extends Error {
   constructor(message, { code = 'unknown', status = 0 } = {}) {
     super(message);

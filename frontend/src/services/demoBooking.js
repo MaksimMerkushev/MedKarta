@@ -2,7 +2,7 @@
  * © 2026 МедКарта Казань. Все права защищены.
  *
  * Демо-запись. Логика — на сервере (/api/demo/*); здесь запросы и номера
- * своих записей в этом браузере. Симуляция: ничего не уходит в клиники,
+ * записей гостя в этом браузере (записи кабинета хранит сервер). Симуляция: ничего не уходит в клиники,
  * страховые и МИС; персональных данных пациента в записи нет — только слот
  * и программа ДМС.
  */
@@ -101,6 +101,9 @@ export const createBooking = ({ slotId, holdToken, idempotencyKey, planId }) =>
 
 export const cancelBooking = ({ number, cancelToken }) =>
   request('/api/demo/bookings/cancel', { method: 'POST', body: { number, cancelToken } });
+
+/** Записи вошедшего пользователя (сессия — в cookie). */
+export const fetchAccountBookings = ({ signal } = {}) => request('/api/demo/bookings/mine', { signal });
 
 export const lookupBookings = (items) =>
   request('/api/demo/bookings/lookup', {

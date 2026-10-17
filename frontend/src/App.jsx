@@ -67,7 +67,8 @@ import { fetchServerConfig, loadDemoData, readDemoPreference, setDemoPreference 
 import MyBookingsPanel from './MyBookingsPanel';
 import PlaceDetailsModal from './PlaceDetailsModal';
 import DemoDoctorSchedule from './DemoDoctorSchedule';
-import { readMyBookings, toStoredBooking, writeMyBookings } from './services/demoBooking';
+import { fetchAccountBookings, readMyBookings, toStoredBooking, writeMyBookings } from './services/demoBooking';
+import { resetAssistantSession } from './services/ai';
 import { coverageBadge, coverageFor, findPlan, findProvider } from '@shared/dms.js';
 import { track } from './services/analytics';
 import { buildExternalRouteUrl, EXTERNAL_MODE_BY_TRAVEL_MODE } from './externalMaps';
@@ -1119,6 +1120,8 @@ export default function App() {
   const favoritesRef = useRef(favorites);
   const dmsPlanIdRef = useRef(dmsPlanId);
   const accountRef = useRef(null);
+  // Сброс данных, которые не должны переходить к другому владельцу (задаётся ниже).
+  const accountSwitchRef = useRef(null);
   useEffect(() => {
     favoritesRef.current = favorites;
   }, [favorites]);
@@ -1127,6 +1130,7 @@ export default function App() {
   }, [dmsPlanId]);
 
   const handleSignedIn = useCallback((payload, origin) => {
+    if (origin === 'login') accountSwitchRef.current?.();
     const remote = Array.isArray(payload.favorites) ? payload.favorites : [];
     const remotePlan = payload.user?.dmsPlanId || null;
     const local = favoritesRef.current;
@@ -1181,6 +1185,7 @@ export default function App() {
 
   const handleSignedOut = useCallback((reason) => {
     // На общем устройстве после выхода не должно оставаться чужих данных.
+    accountSwitchRef.current?.();
     const restored = releaseAccountData();
     if (reason === 'expired') {
       showToast('Сессия кабинета закончилась — войдите снова. Избранное и ДМС сохранены в аккаунте.', 'warning');
@@ -1232,13 +1237,52 @@ export default function App() {
   const [bookingTarget, setBookingTarget] = useState(null);
   // Окно подробностей карточки: в списке — кратко, всё остальное — здесь.
   const [detailsId, setDetailsId] = useState(null);
-  const [myBookings, setMyBookings] = useState(() => readMyBookings());
+  // Записи кабинета хранит сервер, записи гостя — этот браузер (см. эффекты ниже).
+  const [myBookings, setMyBookings] = useState(EMPTY_LIST);
   const [bookingsRefresh, setBookingsRefresh] = useState(0);
   const [isMyBookingsOpen, setIsMyBookingsOpen] = useState(false);
+  // Ключ окна ассистента: после входа или выхода переписка начинается заново.
+  const [assistantEpoch, setAssistantEpoch] = useState(0);
   const pendingPicksRef = useRef(null);
   const [picksTick, setPicksTick] = useState(0);
   const [buildRouteTrigger, setBuildRouteTrigger] = useState(false);
   const [targetStopsTrigger, setTargetStopsTrigger] = useState(null);
+
+  /*
+   * Вход и выход меняют владельца данных: переписка с ассистентом, подборки
+   * под ней, открытое окно записи и номер диалога для сервера не переходят
+   * к другому аккаунту или к гостю.
+   */
+  useEffect(() => {
+    accountSwitchRef.current = () => {
+      setAssistantPicks({});
+      setAssistantBookings({});
+      setAssistantEpoch((value) => value + 1);
+      setBookingTarget(null);
+      pendingPicksRef.current = null;
+      resetAssistantSession();
+    };
+  }, []);
+
+  // Чьи записи показывать: «user:<email>», «guest» или «loading» (пока неизвестно — никаких).
+  const bookingsOwner = account.status === 'user' ? `user:${account.user?.email || ''}` : account.status;
+  useEffect(() => {
+    if (bookingsOwner === 'guest') setMyBookings(readMyBookings());
+    else setMyBookings(EMPTY_LIST);
+  }, [bookingsOwner]);
+  useEffect(() => {
+    if (!bookingsOwner.startsWith('user:') || !demoState.booking) return undefined;
+    const controller = new AbortController();
+    fetchAccountBookings({ signal: controller.signal })
+      .then((payload) => {
+        if (controller.signal.aborted) return;
+        setMyBookings((payload?.bookings || []).map(toStoredBooking).filter(Boolean));
+      })
+      .catch(() => {
+        // Нет связи или сессия кончилась: список кабинета просто не обновился.
+      });
+    return () => controller.abort();
+  }, [bookingsOwner, bookingsRefresh, demoState.booking]);
 
   // Справочники в ref: handleApplyTriage не должен пересоздаваться на каждый
   // пересчёт списков, иначе AIAssistant перерисовывается впустую.
@@ -2649,9 +2693,10 @@ export default function App() {
    */
   const bookingOrigin = isManualOrigin && customOrigin ? customOrigin : isLocationReady && !locationError ? userLocation : null;
 
+  // В браузере хранятся только записи гостя; список кабинета обновляется с сервера.
   const updateMyBookings = useCallback((next) => {
     setMyBookings(next);
-    writeMyBookings(next);
+    if (accountRef.current?.status !== 'user') writeMyBookings(next);
   }, []);
 
   const openBooking = useCallback((option, slot, patient = null) => {
@@ -2687,14 +2732,21 @@ export default function App() {
 
   const handleBooked = useCallback((booking) => {
     const stored = toStoredBooking(booking);
-    if (stored) updateMyBookings([stored, ...myBookings.filter((item) => item.number !== stored.number)]);
+    if (stored) {
+      // Запись без владельца (гость или сессия успела кончиться) — номер и код отмены остаются в браузере.
+      if (!booking.owned) writeMyBookings([stored, ...readMyBookings().filter((item) => item.number !== stored.number)]);
+      setMyBookings((current) => [stored, ...current.filter((item) => item.number !== stored.number)]);
+    }
     setBookingsRefresh((value) => value + 1);
-  }, [myBookings, updateMyBookings]);
+  }, []);
 
   const handleBookingCancelled = useCallback((booking) => {
-    updateMyBookings(myBookings.map((item) => (item.number === booking.number ? { ...item, status: 'CANCELLED' } : item)));
+    const markCancelled = (items) => items.map((item) => (item.number === booking.number ? { ...item, status: 'CANCELLED' } : item));
+    setMyBookings(markCancelled);
+    const local = readMyBookings();
+    if (local.some((item) => item.number === booking.number)) writeMyBookings(markCancelled(local));
     setBookingsRefresh((value) => value + 1);
-  }, [myBookings, updateMyBookings]);
+  }, []);
 
   /** Маршрут к клинике записи — тем же движком, что и обычный маршрут. */
   const routeToBooking = useCallback((booking) => {
@@ -3888,6 +3940,7 @@ export default function App() {
               {demoState.booking && isMyBookingsOpen && (
                 <MyBookingsPanel
                   bookings={myBookings}
+                  inAccount={account.status === 'user'}
                   onChange={(next, info) => {
                     updateMyBookings(next);
                     if (info?.cancelled) setBookingsRefresh((value) => value + 1);
@@ -4492,6 +4545,7 @@ export default function App() {
         {isAIAssistantMounted && (
           <Suspense fallback={null}>
             <AIAssistant
+              key={assistantEpoch}
               isOpen={isAIAssistantOpen}
               onClose={() => setIsAIAssistantOpen(false)}
               onApplyTriage={handleApplyTriage}
