@@ -130,7 +130,7 @@ N-е значение с конца `X-Forwarded-For`. IPv6 считается �
 | `POST /api/travel-times` | 90 за 5 мин | то же ведро, что у маршрутов; 85 % | 32 КБ |
 | `POST /api/events` | 120 за 5 мин; 1500 событий в сутки | — | 8 КБ, до 20 событий |
 | `/api/demo/search` | 120 за 5 мин | — | 16 КБ |
-| `/api/demo/slots`, `/api/demo/bookings/lookup` | 600 за 5 мин | — | 16 КБ |
+| `/api/demo/slots`, `/api/demo/bookings/lookup`, `/api/demo/bookings/mine` | 600 за 5 мин | — | 16 КБ |
 | прочие `/api/demo/*` | 60 за 5 мин | — | 16 КБ |
 | `/api/auth/login`, `/api/auth/register` | 20 за 15 мин; 10 неудачных входов на email за 15 мин | scrypt: 2 расчёта одновременно, очередь 32 | 64 КБ |
 | `/api/auth/demo` | 200 за 15 мин | — | 64 КБ |

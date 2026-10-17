@@ -37,6 +37,7 @@ OpenAPI-спецификация не приводится: запросы `/api
 | GET | `/api/demo/slots` | расписание демо-врача | [demoBooking.js](../backend/api/demoBooking.js) |
 | POST | `/api/demo/hold`, `/api/demo/release` | удержание слота | [demoBooking.js](../backend/api/demoBooking.js) |
 | POST | `/api/demo/bookings`, `/api/demo/bookings/cancel`, `/api/demo/bookings/lookup` | запись, отмена, статус | [demoBooking.js](../backend/api/demoBooking.js) |
+| GET | `/api/demo/bookings/mine` | записи вошедшего пользователя | [demoBooking.js](../backend/api/demoBooking.js) |
 
 Неизвестный путь под `/api/` — `404 {"error":"Not found"}`.
 
@@ -305,7 +306,7 @@ Content-Type: application/json
 | `POST /api/account/favorites` | `{action: "add" \| "remove" \| "merge", ids: [...]}` | `{favorites}` | 300 за 5 мин |
 | `POST /api/auth/login` | `{email, password}` | `{user, favorites, features}` + cookie | 20 за 15 мин |
 | `POST /api/auth/register` | `{email, password, displayName, consent: true}` | `201` + cookie; при выключенной регистрации — `403` | 20 за 15 мин |
-| `POST /api/auth/demo` | `{account: "anna" \| "family" \| "kids" \| "basic"}` | демо-сессия на 12 часов; при выключенном демо — `403` | 200 за 15 мин |
+| `POST /api/auth/demo` | `{account: "anna" \| "family" \| "kids" \| "basic"}` | демо-сессия на 12 часов в копии профиля этого браузера + cookie `mk_demo` (30 дней); при выключенном демо — `403` | 200 за 15 мин |
 | `POST /api/auth/logout` | `{}` | `{user: null, …}`, cookie стирается | 300 за 5 мин |
 
 `features` — `{available, registration, demo, demoAccounts}`; в
@@ -510,10 +511,14 @@ Set-Cookie: mk_session=<token>; Path=/api; HttpOnly; SameSite=Lax; Max-Age=43199
     "clinic": { "id": "demo-real-budzdorov", "name": "Будь здоров", "branchName": "ул. Нариманова", "phone": null, "real": true, "…": "…" },
     "service": { "id": "consult.lor.first", "name": "Приём оториноларинголога (ЛОР) первичный", "durationMinutes": 30 },
     "price": 2950,
-    "coverage": null
+    "coverage": null,
+    "owned": false
   }
 }
 ```
+
+`owned: true` — запись сделана после входа и привязана к аккаунту; иначе
+номер и `cancelToken` хранит браузер.
 
 ### POST /api/demo/bookings/cancel
 
@@ -524,6 +529,11 @@ Set-Cookie: mk_session=<token>; Path=/api; HttpOnly; SameSite=Lax; Max-Age=43199
 
 `{items: [{number, cancelToken}, …]}` (до 20) → `{bookings: [...]}`; для
 неизвестной пары — `{number, found: false}`.
+
+### GET /api/demo/bookings/mine
+
+Записи вошедшего пользователя, новые сверху, до 50: `{bookings: [...]}` в том
+же виде, что ответ записи, с `cancelToken`. Без входа — `401`.
 
 **Коды ошибок записи** (`{error, code}`): `bad_request` 400;
 `slot_not_found`, `booking_not_found` 404; `slot_taken`, `slot_held`,

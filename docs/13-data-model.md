@@ -112,10 +112,14 @@ CREATE TABLE users (
   display_name  TEXT NOT NULL,
   password_hash TEXT,            -- scrypt$N$r$p$соль$хэш; у демо-аккаунтов NULL
   dms_plan_id   TEXT,
-  demo_key      TEXT UNIQUE,
+  demo_key      TEXT UNIQUE,     -- устарел (общие демо-аккаунты), не заполняется
   created_at    INTEGER NOT NULL,
-  updated_at    INTEGER NOT NULL
+  updated_at    INTEGER NOT NULL, -- у демо-копии — время последнего входа
+  demo_template TEXT,            -- схема 2: ключ демо-профиля (anna, family, …)
+  demo_owner    TEXT             -- схема 2: SHA-256 от cookie браузера mk_demo
 );
+CREATE UNIQUE INDEX users_demo_copy ON users(demo_template, demo_owner) WHERE demo_template IS NOT NULL;
+CREATE INDEX users_demo_seen ON users(updated_at) WHERE demo_template IS NOT NULL;
 CREATE TABLE sessions (
   token_hash TEXT PRIMARY KEY,   -- SHA-256 от токена из cookie
   user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -131,7 +135,10 @@ CREATE TABLE favorites (
 ```
 
 Срок сессии — 30 дней, демо-сессии — 12 часов; не больше 10 сессий на
-пользователя (на демо-аккаунт — до 2000), избранного — до 500 записей ([service.js](../backend/accounts/service.js), `ACCOUNT_LIMITS`).
+пользователя, избранного — до 500 записей; демо-копия без входов 30 дней
+удаляется, копий — до 10 000 ([service.js](../backend/accounts/service.js), `ACCOUNT_LIMITS`).
+Схема 2 (`user_version = 2`) добавила демо-копии и удалила прежние общие
+демо-аккаунты ([accounts.md](accounts.md)).
 
 ## SQLite: демо-запись
 
@@ -163,12 +170,16 @@ CREATE TABLE bookings (
   idempotency_key TEXT UNIQUE,
   plan_id TEXT,
   created_at INTEGER NOT NULL,
-  cancelled_at INTEGER
+  cancelled_at INTEGER,
+  account_id TEXT                           -- схема 2: id аккаунта кабинета; у гостя NULL
 );
 CREATE UNIQUE INDEX bookings_one_active_per_slot ON bookings(slot_id) WHERE status = 'CONFIRMED';
+CREATE INDEX bookings_account ON bookings(account_id, created_at) WHERE account_id IS NOT NULL;
 ```
 
-Персональных данных пациента в схеме нет. Время — миллисекунды Unix.
+Персональных данных пациента в схеме нет; `account_id` — случайный id из
+базы кабинета, без email и имени. При удалении аккаунта он обнуляется.
+Время — миллисекунды Unix.
 
 ## Граф дорог
 
@@ -206,5 +217,5 @@ CREATE UNIQUE INDEX bookings_one_active_per_slot ON bookings(slot_id) WHERE stat
 ## Состояние в браузере
 
 Ключи `localStorage` и `sessionStorage` — [04-frontend.md](04-frontend.md).
-Номера и токены демо-записей хранятся только в браузере
-(`medkarta.demo-bookings`).
+Номера и токены демо-записей гостя хранятся только в браузере
+(`medkarta.demo-bookings`); записи кабинета браузер получает с сервера.

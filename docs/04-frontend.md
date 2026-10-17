@@ -98,9 +98,9 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
 | `med-navigator-dark-mode` | localStorage | тема | [App.jsx](../frontend/src/App.jsx), [theme-init.js](../frontend/public/theme-init.js) |
 | `medkarta.dms.plan` | localStorage | **только id** программы ДМС | [App.jsx](../frontend/src/App.jsx) |
 | `medkarta.demo` | localStorage | ручной выбор демо-режима | [demoMode.js](../frontend/src/demoMode.js) |
-| `medkarta.demo-bookings` | localStorage | номера и токены отмены своих демо-записей | [services/demoBooking.js](../frontend/src/services/demoBooking.js) |
+| `medkarta.demo-bookings` | localStorage | номера и токены отмены демо-записей гостя (записи кабинета хранит сервер) | [services/demoBooking.js](../frontend/src/services/demoBooking.js) |
 | `medkarta.account-owned`, `medkarta.guest-stash` | localStorage | разделение избранного гостя и аккаунта | [App.jsx](../frontend/src/App.jsx) |
-| `medkarta.ai.session` | sessionStorage | случайный id диалога ассистента | [services/ai.js](../frontend/src/services/ai.js) |
+| `medkarta.ai.session` | sessionStorage | случайный id диалога ассистента; сбрасывается при входе и выходе | [services/ai.js](../frontend/src/services/ai.js) |
 | `medkarta.analytics.sid` | sessionStorage | случайный id сессии аналитики | [services/analytics.js](../frontend/src/services/analytics.js) |
 
 Всё прочитанное из `localStorage` проходит валидаторы

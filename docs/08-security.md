@@ -44,6 +44,7 @@
 | S18 | Запросы сборщика на внутренние адреса | только http(s) из `data/sources.json`, запрет локальных и частных адресов, редиректы — в пределах сайта, потолок 3 МБ | [data-collector.test.js](../tests/data-collector.test.js), [fetchSource.js](../tools/data/fetchSource.js) |
 | S19 | Огромный ответ провайдера модели или OSRM | потоковое чтение с потолком 256 КБ / 1 МБ, отказ от редиректов | [planner/client.js](../backend/planner/client.js), [executor/routing.js](../backend/executor/routing.js) |
 | S20 | Подмена данных клиники через взломанную страницу | телефон, сайт, адрес, координаты — только через ручную проверку; массовые изменения отправляют весь прогон на проверку | [data-pipeline.md](data-pipeline.md), [data-collector.test.js](../tests/data-collector.test.js) |
+| S21 | Данные одного кабинета видны в другом | демо-аккаунт — своя копия на браузер (cookie `mk_demo`, в базе SHA-256); демо-записи привязаны к id аккаунта, список отдаётся только по своей сессии; при входе и выходе переписка с ассистентом и id диалога сбрасываются | [personal-accounts.test.js](../tests/personal-accounts.test.js), [accounts.test.js](../tests/accounts.test.js) |
 
 ## Заголовки ответа
 
