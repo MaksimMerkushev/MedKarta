@@ -1,18 +1,11 @@
 /*
- * © 2026 MedКарта Казань. Все права защищены.
+ * © 2026 МедКарта Казань. Все права защищены.
  *
- * Автономный HTTP-сервер для развёртывания на собственном сервере.
+ * Автономный HTTP-сервер: API (точные пути — API_HANDLERS) и собранный
+ * фронтенд из dist/, если он есть.
  *
- * Отдаёт:
- *   /api/chat    — конвейер приватности (backend/api/chat.js);
- *   /api/route   — маршрут по дорогам (backend/api/route.js);
- *   /api/account, /api/auth/* — личный кабинет (backend/api/account.js);
- *   /api/demo/*  — демо-запись: подбор, слоты, запись (backend/api/demoBooking.js);
- *   всё прочее   — собранный фронтенд из dist/, если он есть.
- *
- * Заголовки безопасности выставляются ЗДЕСЬ, а не в конфигурации хостинга:
- * раньше они жили только в vercel.json и после переезда перестали
- * применяться совсем (см. backend/http/securityHeaders.js).
+ * Заголовки безопасности выставляются здесь, чтобы не зависеть от
+ * конфигурации хостинга (backend/http/securityHeaders.js).
  */
 
 import http from 'node:http';
@@ -37,7 +30,6 @@ import { logger } from './observability/safeLogger.js';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const DIST = path.join(ROOT, 'dist');
 
-// Автозагрузка .env для автономной работы на сервере.
 if (typeof process.loadEnvFile === 'function') {
   try {
     process.loadEnvFile(path.join(ROOT, '.env'));
@@ -47,9 +39,8 @@ if (typeof process.loadEnvFile === 'function') {
 }
 
 /*
- * Неверное значение TRUST_PROXY («true», «yes») раньше молча читалось как 0:
- * за nginx все пользователи попадали в одно ведро лимита. Теперь — отказ
- * от запуска с понятной причиной.
+ * Неверный TRUST_PROXY («true», «yes») — отказ от запуска: прочитанный молча
+ * как 0, он за nginx свёл бы всех пользователей в одно ведро лимита.
  */
 try {
   validateTrustProxy();
@@ -77,19 +68,15 @@ const MIME = {
 };
 
 /**
- * Приводит URL к пути внутри dist/.
- *
- * Возвращает null, если путь пытается выйти за пределы каталога: без этой
- * проверки `GET /../.env` отдал бы файл с ключом API.
+ * Путь внутри dist/ или null при выходе за его пределы: иначе `GET /../.env`
+ * отдал бы файл с ключом API.
  */
 const resolveStaticPath = (requestUrl) => {
   let pathname;
   try {
     pathname = decodeURIComponent(new URL(requestUrl, 'http://localhost').pathname);
   } catch {
-    // «/%», «/%E0%A4%A» и прочая битая кодировка. Раньше исключение летело
-    // мимо всех обработчиков и роняло процесс: один такой запрос выключал
-    // сайт для всех.
+    // Битая кодировка («/%», «/%E0%A4%A») — 400, а не исключение.
     return null;
   }
   if (pathname.includes('\0')) {
@@ -103,11 +90,10 @@ const resolveStaticPath = (requestUrl) => {
 };
 
 /*
- * Сжатие текстовых файлов. Без него main.js уходил на каждый визит целиком
- * (3,7 МБ вместо ~0,3 МБ), и одно ядро упиралось в отдачу статики раньше,
- * чем в API. Сжатый вариант считается один раз и живёт в памяти, пока файл
- * не изменился. В продакшене статику лучше отдавать nginx (gzip_static) —
- * см. docs/deployment.md; это запасной путь для автономного запуска.
+ * Без сжатия main.js уходит целиком (3,7 МБ против ~0,3 МБ), и одно ядро
+ * упирается в отдачу статики раньше, чем в API. Сжатый вариант считается один
+ * раз и живёт в памяти, пока файл не изменился. В продакшене статику отдаёт
+ * nginx (gzip, см. docs/deployment.md); это запасной путь.
  */
 const COMPRESSIBLE = new Set(['.html', '.js', '.css', '.json', '.svg', '.webmanifest']);
 const MAX_GZIP_SOURCE_BYTES = 8 * 1024 * 1024;
@@ -152,19 +138,15 @@ const sendFile = async (req, res, filePath, stats, status = 200) => {
   const extension = path.extname(filePath);
   res.statusCode = status;
   res.setHeader('Content-Type', MIME[extension] || 'application/octet-stream');
-  // Хэшированные ассеты кэшируются надолго, HTML — никогда.
+  // «Навсегда» — только файлы с хэшем в имени (index-BCrIjYhY.js), остальное
+  // (и HTML) — no-cache: иначе исправление не дошло бы до вернувшихся пользователей.
   res.setHeader(
     'Cache-Control',
-    // «Навсегда» — только файлы с хэшем в имени (index-BCrIjYhY.js): иначе
-    // исправление в main.js не дошло бы до вернувшихся пользователей.
     filePath.includes(`${path.sep}assets${path.sep}`) && /[-.][A-Za-z0-9_-]{8,}\.[a-z0-9]+$/.test(filePath)
       ? 'public, max-age=31536000, immutable'
       : 'no-cache',
   );
-  /*
-   * ETag и Last-Modified: с «no-cache» браузер теперь переспрашивает и
-   * получает 304 без тела, а не скачивает файл заново на каждом визите.
-   */
+  // С no-cache браузер переспрашивает по ETag и получает 304 без тела.
   const etag = `W/"${stats.size.toString(16)}-${Math.floor(stats.mtimeMs).toString(16)}"`;
   res.setHeader('ETag', etag);
   res.setHeader('Last-Modified', stats.mtime.toUTCString());
@@ -193,12 +175,10 @@ const sendFile = async (req, res, filePath, stats, status = 200) => {
     return;
   }
   /*
-   * pipeline, а не pipe: при обрыве соединения клиентом pipe не закрывал
-   * файловый поток. Две тысячи оборванных скачиваний оставляли две тысячи
-   * открытых дескрипторов, пока лимит не кончался и сайт не начинал отвечать
-   * 404 всем. pipeline закрывает поток при любой ошибке с обеих сторон.
-   * Файл мог исчезнуть между stat и чтением (пересборка dist/) — это тоже
-   * просто закрытие ответа.
+   * pipeline, а не pipe: pipe не закрывает файловый поток при обрыве
+   * соединения клиентом, и дескрипторы утекают до исчерпания лимита.
+   * Исчезновение файла между stat и чтением (пересборка dist/) — тоже просто
+   * закрытие ответа.
    */
   pipeline(fs.createReadStream(filePath), res, () => {});
 };
@@ -254,7 +234,7 @@ const handleRequest = async (req, res) => {
     return;
   }
 
-  // Статика — только чтение. Раньше POST, DELETE и TRACE тоже получали файл с 200.
+  // Статика — только GET и HEAD.
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.statusCode = 405;
     res.setHeader('Allow', 'GET, HEAD');
@@ -307,10 +287,9 @@ const server = http.createServer({ connectionsCheckingInterval: 5_000 }, (req, r
 });
 
 /*
- * Таймауты и потолок соединений. Значения Node по умолчанию (заголовки —
- * 60 с, запрос — 5 мин) рассчитаны не на сервер с одним ядром: сотня
- * медленных клиентов держала бы сокеты и память минутами. Наши запросы
- * укладываются в доли секунды, тело ограничено 32 КБ.
+ * Значения Node по умолчанию (заголовки — 60 с, запрос — 5 мин) не для
+ * сервера с одним ядром: сотня медленных клиентов держала бы сокеты и память
+ * минутами. Наши запросы укладываются в доли секунды, тела — десятки КБ.
  */
 server.headersTimeout = 15_000;
 server.requestTimeout = 20_000;
@@ -318,22 +297,18 @@ server.keepAliveTimeout = 5_000;
 server.maxConnections = Number(process.env.MAX_CONNECTIONS) || 512;
 
 /*
- * Потолок соединений с ОДНОГО адреса. Без него один клиент открывал 512
- * сокетов с недописанными заголовками и закрывал сервер для остальных на
- * время headersTimeout, а потом переподключался. За прокси (TRUST_PROXY > 0)
- * все соединения приходят с адреса nginx — там эту работу делает limit_conn,
- * и здесь проверка отключена.
+ * Потолок соединений с одного адреса: иначе один клиент сокетами
+ * с недописанными заголовками занимает все соединения на время headersTimeout.
+ * За прокси (TRUST_PROXY > 0) все соединения приходят с адреса nginx — там
+ * это делает limit_conn, здесь проверка отключена.
  */
 const MAX_CONNECTIONS_PER_IP = Number(process.env.MAX_CONNECTIONS_PER_IP) || 32;
 const behindProxy = Number.parseInt(process.env.TRUST_PROXY ?? '0', 10) > 0;
 const connectionsByIp = new Map();
 if (!behindProxy) {
   server.on('connection', (socket) => {
-    /*
-     * Ключ — тот же, что у лимита запросов: IPv6 считается по сети /64.
-     * Раньше счётчик вёлся по точному адресу, и один клиент с подсетью /64
-     * (или полтора десятка адресов IPv4) занимал все 512 соединений.
-     */
+    // Ключ — как у лимита запросов: IPv6 считается по сети /64, иначе
+    // клиент с подсетью /64 занял бы все соединения.
     const address = rateLimitKey(socket.remoteAddress || 'unknown');
     const count = (connectionsByIp.get(address) || 0) + 1;
     if (count > MAX_CONNECTIONS_PER_IP) {
@@ -361,10 +336,9 @@ process.on('uncaughtException', (error) => {
 
 server.listen(PORT, HOST, async () => {
   /*
-   * Граф дорог грузится сразу, а не при первом запросе: первый пользователь
-   * не ждёт загрузки, а в журнале запуска видно, работает ли маршрутизация.
-   * Раньше здесь печаталось значение переменной окружения, а не фактическое
-   * состояние, — и строка «haversine» вводила в заблуждение.
+   * Граф дорог грузится при старте: первый пользователь не ждёт загрузки,
+   * а в журнале запуска видно фактическое состояние графа, а не значение
+   * переменной окружения.
    */
   const engine = await getDefaultRoutingEngine();
   logger.event('server.started', {

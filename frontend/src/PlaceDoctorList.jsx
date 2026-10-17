@@ -1,8 +1,7 @@
 /*
- * © 2026 MedКарта Казань. Все права защищены.
+ * © 2026 МедКарта Казань. Все права защищены.
  *
- * Окно маркера, в котором много врачей: РКБ и ДРКБ — по 320 человек
- * на одних координатах. Поиск, фильтр по специальности, группы.
+ * Окно маркера с множеством врачей (в РКБ и ДРКБ — по 320 на одних координатах).
  * Логика отбора — в placeList.js, здесь только отображение.
  */
 
@@ -56,8 +55,8 @@ export default function PlaceDoctorList({ items, onAddToRoute, onRemoveFromRoute
   const withTools = items.length >= SEARCH_FROM;
   const result = useMemo(() => buildPlaceList(items, { query, specialty }), [items, query, specialty]);
 
-  // Фокус в поиск сразу — только при мыши. На телефоне это открыло бы
-  // клавиатуру поверх карты, хотя человек, может, просто листает.
+  // Фокус в поиск сразу — только при мыши: на телефоне это открыло бы
+  // клавиатуру поверх карты.
   useEffect(() => {
     if (!withTools) return;
     if (window.matchMedia?.('(pointer: fine)').matches) {
@@ -150,9 +149,8 @@ export default function PlaceDoctorList({ items, onAddToRoute, onRemoveFromRoute
 
           {chips.length > 1 && (
             /*
-              Раскрытые чипы прокручиваются внутри своей полосы: иначе окно
-              на телефоне росло вверх, и заголовок, крестик и поиск уходили
-              за верхний край экрана.
+              Раскрытые чипы прокручиваются внутри своей полосы: иначе на
+              телефоне окно растёт вверх и заголовок с поиском уходят за экран.
             */
             <div
               className={`mb-2 flex flex-wrap gap-1 ${allChips ? 'max-h-24 overflow-y-auto overscroll-contain' : ''}`}

@@ -1,5 +1,5 @@
 /*
- * © 2026 MedКарта Казань. Все права защищены.
+ * © 2026 МедКарта Казань. Все права защищены.
  *
  * «Мои демо-записи»: номера записей хранятся только в этом браузере,
  * актуальный статус каждый раз спрашивается у сервера.
@@ -12,10 +12,8 @@ export default function MyBookingsPanel({ bookings, onChange, onRoute, onClose }
   const [statuses, setStatuses] = useState({});
   const [busyNumber, setBusyNumber] = useState(null);
   const [error, setError] = useState(null);
-  /*
-   * Статус в подписи: запись, отменённую в окне записи, панель должна
-   * перепроверить, а не показывать прежний ответ сервера «подтверждена».
-   */
+  // Статус входит в подпись: запись, отменённую в окне записи, нужно
+  // перепроверить, а не показывать прежнее «подтверждена».
   const signature = bookings.map((item) => `${item.number}:${item.status}`).join(',');
 
   useEffect(() => {

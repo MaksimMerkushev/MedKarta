@@ -20,7 +20,7 @@
 ├── eslint.config.js    правила линтера, включая границу доверия
 ├── .env.example        шаблон переменных окружения (без значений секретов)
 ├── README.md, SECURITY.md, TECHNICAL_PASSPORT.md, FINANCIAL_ESTIMATE.md/.pdf, LICENSE
-└── Claude outputs/, scratch/   рабочие файлы; в .gitignore, но закоммичены ранее
+└── scratch/          рабочий файл; в .gitignore, но закоммичен ранее
 ```
 
 `TECHNICAL_PASSPORT.md` описывает раннюю версию проекта (Vercel, прежняя

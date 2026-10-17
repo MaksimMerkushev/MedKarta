@@ -1,18 +1,11 @@
 /*
- * © 2026 MedКарта Казань. Все права защищены.
+ * © 2026 МедКарта Казань. Все права защищены.
  *
- * Генератор размеченного набора запросов для проверки обезличивания.
- *
- * Каждый пример — реплики пользователя и список того, что НЕ должно уйти
- * во внешнюю модель (имена в той форме, в какой их написал человек,
- * цифры телефона и документов, адрес с номером дома, слова диагнозов).
- * Обычные запросы без персональных данных помечены benign: по ним
- * считается, сколько нормальных вопросов система зря не отправила модели
- * или испортила лишними заменами.
- *
- * Набор детерминирован (seed): цифры одного прогона можно сравнивать с
- * цифрами другого. Шаблоны и имена делятся на «обучение» и «проверку»,
- * чтобы обучаемый детектор (ner.js) оценивался на том, чего не видел.
+ * Размеченный набор для проверки обезличивания: в каждом примере — что не должно уйти
+ * во внешнюю модель (имена как написаны, цифры телефона и документов, номер дома, диагнозы);
+ * benign — запросы без персональных данных, по ним считаются лишние замены и отказы.
+ * Набор детерминирован (seed); шаблоны и имена делятся на «обучение» и «проверку»,
+ * чтобы детектор оценивался на том, чего не видел.
  */
 
 import { AMBIGUOUS_NAMES, DIMINUTIVES, FEMALE_NAMES, MALE_NAMES, SURNAMES } from './names.js';
@@ -210,7 +203,6 @@ const nameFor = (random, split, gender) => {
   }
 };
 
-/** Человек: имя, фамилия, отчество и происхождение имени. */
 const makePerson = (random, split, gender) => {
   const first = nameFor(random, split, gender);
   const surname = surnameFor(random, split);
@@ -220,7 +212,6 @@ const makePerson = (random, split, gender) => {
 
 const initial = (word) => `${word[0].toUpperCase()}.`;
 
-/** Части имени человека в падеже и формате. */
 const personParts = (person, grammaticalCase, fmt) => {
   const first = declineFirstName(person.first, person.gender, grammaticalCase);
   const sur = declineSurname(person.surname, person.gender, grammaticalCase);
@@ -270,7 +261,6 @@ const applyVariant = (random, variant, word) => {
 const capitalizeFirst = (text) => (text ? text[0].toUpperCase() + text.slice(1) : text);
 const tidy = (text) => text.replace(/\s+([,.?!])/g, '$1').replace(/\s{2,}/g, ' ').replace(/,\s*$/u, '').trim();
 
-/** Заполняет шаблон персоны. */
 const fillPersonTemplate = (random, template, { person, kin, variant }) => {
   const sensitive = [];
   let text = template.replace(/\{(K|P|SP)\.(\w+)(?:\.(\w+))?\}/g, (_, slot, grammaticalCase, fmt) => {
@@ -414,8 +404,6 @@ const fillSimple = (random, template, values) => {
 };
 
 /**
- * Генерирует набор.
- *
  * @param {object} options
  * @param {'train'|'test'} options.split
  * @param {number} [options.seed]
@@ -429,7 +417,6 @@ export const generateDataset = ({ split = 'test', seed = 7, scale = 1, catalogDo
   const count = (base) => Math.round(base * scale);
   const catalogSurnames = new Set(catalogDoctors.map((doctor) => doctor.name.split(' ')[0].toLowerCase()));
 
-  // Родственники.
   for (let i = 0; i < count(2400); i += 1) {
     const kin = kinFor(random);
     const person = makePerson(random, split, KIN[kin].gender);
@@ -438,7 +425,6 @@ export const generateDataset = ({ split = 'test', seed = 7, scale = 1, catalogDo
     add({ category: 'relative', origin: person.origin, variant, person, messages: [text], sensitive });
   }
 
-  // Сам пользователь.
   for (let i = 0; i < count(900); i += 1) {
     const person = makePerson(random, split, random.chance(0.5) ? 'f' : 'm');
     const variant = pickVariant(random);
@@ -500,7 +486,6 @@ export const generateDataset = ({ split = 'test', seed = 7, scale = 1, catalogDo
     add({ category: 'ambiguous_name', origin: 'russian', variant: 'normal', messages: [text], sensitive });
   }
 
-  // Телефоны.
   for (let i = 0; i < count(500); i += 1) {
     const digits = phoneDigits(random);
     const inWords = random.chance(0.12);
@@ -509,7 +494,6 @@ export const generateDataset = ({ split = 'test', seed = 7, scale = 1, catalogDo
     add({ category: 'phone', messages: [text], sensitive: [{ kind: inWords ? 'PHONE_WORDS' : 'PHONE', value: inWords ? value : `${digits}` }] });
   }
 
-  // Почта.
   for (let i = 0; i < count(250); i += 1) {
     const person = makePerson(random, split, random.chance(0.5) ? 'f' : 'm');
     const email = emailOf(random, person);
@@ -517,14 +501,12 @@ export const generateDataset = ({ split = 'test', seed = 7, scale = 1, catalogDo
     add({ category: 'email', messages: [text], sensitive: [{ kind: 'EMAIL', value: email.local }] });
   }
 
-  // Адреса.
   for (let i = 0; i < count(500); i += 1) {
     const address = addressOf(random);
     const text = fillSimple(random, random.pick(ADDRESS_TEMPLATES[split]), { X: address.text });
     add({ category: 'address', messages: [text], sensitive: address.sensitive });
   }
 
-  // Документы и дата рождения.
   for (let i = 0; i < count(400); i += 1) {
     const template = random.pick(DOCUMENT_TEMPLATES[split]);
     const values = {};
@@ -553,7 +535,6 @@ export const generateDataset = ({ split = 'test', seed = 7, scale = 1, catalogDo
     add({ category: 'document', messages: [fillSimple(random, template, values)], sensitive });
   }
 
-  // Диагнозы.
   for (let i = 0; i < count(300); i += 1) {
     const diagnosis = random.pick(DIAGNOSES);
     const text = random.pick([
@@ -563,7 +544,6 @@ export const generateDataset = ({ split = 'test', seed = 7, scale = 1, catalogDo
     add({ category: 'medical', messages: [tidy(text)], sensitive: diagnosis.words.map((word) => ({ kind: 'MEDICAL', value: word })) });
   }
 
-  // Всё сразу: имя, телефон, адрес.
   for (let i = 0; i < count(300); i += 1) {
     const kin = kinFor(random);
     const person = makePerson(random, split, KIN[kin].gender);
@@ -594,7 +574,6 @@ export const generateDataset = ({ split = 'test', seed = 7, scale = 1, catalogDo
     add({ category: 'catalog_doctor', variant, messages: [tidy(text)], sensitive: [{ kind: 'CATALOG_DOCTOR', value: dative }] });
   }
 
-  // Обычные запросы без персональных данных.
   for (let i = 0; i < count(1500); i += 1) {
     add({ category: 'benign', benign: true, messages: [fillSimple(random, random.pick(BENIGN_TEMPLATES[split]), {})], sensitive: [] });
   }
@@ -714,7 +693,6 @@ const addStructureSamples = ({ split, seed, count, add, catalogDoctors }) => {
     add({ category: 'benign_street', benign: true, messages: [tidy(text)], sensitive: [], fixedExpect: { place: { kind: 'street', value: stem } } });
   }
 
-  // Стаж, сортировка, травмпункт.
   for (let i = 0; i < count(400); i += 1) {
     const [template, expectation] = random.pick(FILTER_TEMPLATES[split]);
     const { forms } = specialtyOf();

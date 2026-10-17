@@ -1,5 +1,5 @@
 /*
- * © 2026 MedКарта Казань. Все права защищены.
+ * © 2026 МедКарта Казань. Все права защищены.
  *
  * Демо-запись: состояния слотов, атомарная запись, повторы, гонки,
  * удержание, отмена, перезапуск и HTTP-обработчик /api/demo/*.
@@ -128,7 +128,6 @@ describe('Демо-запись: хранилище', { skip: !DatabaseSync && '
     assert.equal(store.getSlot(slot.id).status, 'FREE');
     const again = store.cancel({ number: booking.number, cancelToken: booking.cancelToken });
     assert.equal(again.alreadyCancelled, true);
-    // Освобождённое время снова можно занять.
     assert.equal(store.book({ slotId: slot.id, idempotencyKey: KEY(13) }).status, 'CONFIRMED');
   });
 

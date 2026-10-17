@@ -1,9 +1,7 @@
 /*
  * Воспроизводимый замер движка маршрутизации для документации
- * (docs/05-routing-engine.md, раздел «Замеры»).
- *
- * Скрипт ничего не меняет: читает граф и справочник учреждений и печатает
- * задержки. Нужен собранный граф (npm run build:graph) — в git его нет.
+ * (docs/09-routing-engine.md, раздел «Замеры»). Только читает граф и справочник
+ * и печатает задержки. Нужен собранный граф (npm run build:graph) — в git его нет.
  *
  *   node docs/tools/bench-routing.mjs
  *   node docs/tools/bench-routing.mjs --graph data/graph/kazan.graph --pairs 1000 --seed 42

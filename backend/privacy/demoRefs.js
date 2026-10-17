@@ -1,13 +1,8 @@
 /*
- * © 2026 MedКарта Казань. Все права защищены.
+ * © 2026 МедКарта Казань. Все права защищены.
  *
- * Названные в реплике врачи и клиники демо-набора — для строгого подбора
- * записи. Только идентификаторы из справочника; слова пользователя наружу
- * не уходят (как и остальные условия записи — см. bookingConstraints.js).
- *
- * Однофамильцы: «к Ефимовой» — это Ефимова, а не Ефимов, хотя справочник
- * по основе фамилии находит обоих. «Ефимову» и «Ефимова» читаются и как
- * мужская, и как женская форма — тогда остаются оба, и подбор покажет обоих.
+ * Названные в реплике врачи и клиники демо-набора — для строгого подбора записи.
+ * Результат — только id из справочника; слова пользователя наружу не уходят.
  */
 
 import { ENTITY_KIND } from './detectors.js';
@@ -16,14 +11,14 @@ import { NO_DEMO_BRANCH } from '../../shared/demoSearch.js';
 
 const DEMO_DOCTOR = 'demo-doc-';
 
-/* Окончания форм фамилии на -ов/-ев/-ин: мужская и женская. */
+/*
+ * Однофамильцы различаются по окончанию: «к Ефимовой» — только Ефимова. «Ефимову»
+ * и «Ефимова» подходят обеим формам — тогда остаются оба.
+ */
 const MALE_ENDINGS = new Set(['', 'a', 'u', 'ym', 'e', 'om']);
 const FEMALE_ENDINGS = new Set(['a', 'oy', 'u']);
 
-/*
- * Предлог уточняет падеж: «к Ибрагимову» — дательный, это мужская форма
- * (женская — «к Ибрагимовой»); «у Ефимова» — родительный, тоже мужская.
- */
+/* Предлог уточняет падеж: «к Ибрагимову» (дательный) и «у Ефимова» (родительный) — мужская форма. */
 const CASE_ENDINGS = {
   dative: { male: new Set(['u']), female: new Set(['oy']) },
   genitive: { male: new Set(['a']), female: new Set(['oy']) },
@@ -54,9 +49,8 @@ const firstNameFits = (doctorId, words) => {
 };
 
 /*
- * Филиал по улице или району: «в Айболит на Максимова» — филиал на ул.
- * Максимова. Основа части id после клиники («maksimova», «leningradskaya»)
- * сверяется со словами реплики.
+ * Филиал по улице или району: «в Айболит на Максимова». Со словами реплики
+ * сверяется основа части id после клиники («maksimova»).
  */
 const branchFits = (branchId, clinicIds, words) => {
   const clinicId = clinicIds.find((id) => branchId.startsWith(`${id}-`));
@@ -65,18 +59,16 @@ const branchFits = (branchId, clinicIds, words) => {
   return stem.length >= 4 && words.some((word) => word.startsWith(stem));
 };
 
-/* «Но не Ефимов», «кроме Ясеня», «только не в Разумед» — исключение, а не выбор. */
-/* «Разумед не надо», «Кузляр не предлагай», «Морозов не подходит» — исключение после названия. */
+/* Исключение, а не выбор: «кроме Ясеня» (до названия), «Разумед не надо» (после). */
 const EXCLUDED_AFTER = /^[»"]?\s*,?\s*(?:—\s*)?(?:не\s+(?:надо|нужно|нужен|нужна|предлагай\p{L}*|подходит|хочу|интересует|рассматрива\p{L}*|советуй\p{L}*)|исключ\p{L}*|мимо)(?!\p{L})/u;
 
 const EXCLUDED_BEFORE = /(?:^|[^\p{L}])(?:не|кроме|исключая|без|только\s+не|но\s+не)\s+(?:(?:к|ко|у|в|во|на)\s+)?(?:(?:клиник|медцентр|центр|стоматологи|врач|доктор)\p{L}*\s+)?[«"]?$/u;
 
 /**
- * Врачи и клиники, названные в реплике. Несколько названных («к Ефимовой
- * или Валееву», «в Ясене или Бересте») — все сразу.
+ * Несколько названных («к Ефимовой или Валееву») возвращаются все сразу.
  *
  * @param {{message: {content: string}, entities: Array}} analysis разбор реплики
- * @returns {{doctorIds?: string[], excludeDoctorIds?: string[], branchIds?: string[], excludeBranchIds?: string[], foreignDoctor?: true, clinicChoice?: true, doctorChoice?: true}}
+ * @returns {{doctorIds?: string[], excludeDoctorIds?: string[], branchIds?: string[], excludeBranchIds?: string[], clinicBranches?: string[], foreignDoctor?: true, clinicChoice?: true, doctorChoice?: true}}
  */
 export const demoRefsOf = (analysis) => {
   const content = analysis.message.content;
@@ -128,10 +120,7 @@ export const demoRefsOf = (analysis) => {
     }
   }
   const refs = {};
-  /*
-   * «Кардиолог в Ситидок или Разумед»: две клиники через «или» — выбор
-   * места приёма, а не маршрут через обе (как может понять планировщик).
-   */
+  /* «Кардиолог в Ситидок или Разумед» — выбор места приёма, а не маршрут через обе клиники. */
   const clinics = (analysis.entities || []).filter((entity) => entity.kind === ENTITY_KIND.CLINIC).sort((left, right) => left.start - right.start);
   if (clinics.slice(1).some((entity, position) => /^\s*,?\s*(?:или|либо)\s+(?:в\s+|во\s+)?$/u.test(lower.slice(clinics[position].end, entity.start)))) {
     refs.clinicChoice = true;

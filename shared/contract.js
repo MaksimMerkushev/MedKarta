@@ -1,10 +1,9 @@
 /*
- * © 2026 MedКарта Казань. Все права защищены.
+ * © 2026 МедКарта Казань. Все права защищены.
  *
- * Единая нормализация ответа модели.
- * Модель — недоверенный источник: её вывод управляет состоянием UI,
- * поэтому каждое поле проходит через белый список и жёсткие лимиты длины.
- * Тот же модуль переиспользуется на клиенте (defense in depth).
+ * Нормализация ответа модели: её вывод недоверенный и управляет состоянием UI, поэтому
+ * каждое поле проходит белый список и лимиты длины. Модуль работает и на клиенте
+ * (defense in depth).
  */
 
 import { normalizeSearchRequest } from './demoSearch.js';
@@ -28,15 +27,14 @@ export const CARD_MODES = ['all', 'doctor', 'facility'];
 export const SORT_MODES = ['recommendation', 'rating', 'experience', 'distance', 'schedule', 'name', 'clinic', 'price'];
 
 // Управляющие символы, невидимые разделители и bidi-оверрайды: ими маскируют
-// инъекции в тексте и ломают отображение. Оставляем только печатаемое.
-// Управляющие символы здесь и есть предмет проверки: ими маскируют инъекции.
+// инъекции и ломают отображение — поэтому здесь они и есть предмет проверки.
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g;
 
 /**
  * Как cleanText, но сохраняет переводы строк (не больше одной пустой
  * строки подряд): нумерованный список в ответе ассистента иначе
- * склеивался в одну строку.
+ * склеивается в одну строку.
  */
 export const cleanMultilineText = (value, maxLength) => {
   if (typeof value !== 'string') {
@@ -82,9 +80,8 @@ const triState = (value) => {
 };
 
 const boundedNumber = (value, min, max) => {
-  // null и пустая строка должны остаться null: Number(null) === 0, и без этой
-  // проверки незаданный фильтр превращался в minRating=0, minExperience=0,
-  // maxDistance=0 — то есть в реально применённое ограничение.
+  // null и пустая строка остаются null: Number(null) === 0, и незаданный фильтр
+  // стал бы реально применённым ограничением (minRating=0, maxDistance=0).
   if (value === null || value === undefined || value === '') {
     return null;
   }
@@ -111,9 +108,8 @@ const normalizeStops = (value) => {
 
       const specialty = cleanText(stop.specialty, LIMITS.MAX_FIELD_CHARS);
       const clinic = cleanText(stop.clinic, LIMITS.MAX_FIELD_CHARS);
-      // doctor добавлен, чтобы остановка могла указывать на конкретного врача,
-      // а не только на пару «профиль + клиника»: иначе маршрут к названному
-      // специалисту сводился бы к любому врачу того же профиля в той же клинике.
+      // doctor — конкретный врач: иначе маршрут к названному специалисту свёлся бы
+      // к любому врачу того же профиля в той же клинике.
       const doctor = cleanText(stop.doctor, LIMITS.MAX_FIELD_CHARS);
       if (!specialty && !clinic && !doctor) {
         return null;

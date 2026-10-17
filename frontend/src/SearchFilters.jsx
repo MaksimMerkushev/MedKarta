@@ -37,7 +37,7 @@ function FilterPill({ active, onClick, children }) {
   );
 }
 
-/** Подпись под фильтром времени: честно говорит, что именно посчитано. */
+/** Подпись под фильтром времени: что именно посчитано. */
 const travelHint = (travel, active) => {
   if (!travel.originKnown) return 'Нужна геолокация или точка отправления на карте — без неё время не считается.';
   if (!active) return `По дорогам ${travel.modeLabel}, от вашей точки на карте.`;
@@ -77,8 +77,8 @@ export default function SearchFilters({
   add('maxTravelMinutes', `До ${filters.maxTravelMinutes} мин в пути`, 0);
   if (dms.available && dms.planName) add('dmsOnly', `По ДМС «${dms.planName}»`, false);
 
-  // Старые ссылки и AI могут задавать условия, которых больше нет в форме.
-  // Они остаются видимыми, чтобы ни один фильтр не скрывал выдачу незаметно.
+  // Старые ссылки и ассистент могут задать условия, которых нет в форме: они
+  // остаются видимыми, чтобы фильтр не скрывал выдачу незаметно.
   add('district', filters.district);
   add('minRating', `Рейтинг от ${filters.minRating}`, 0);
   add('minExperience', `Стаж от ${filters.minExperience} лет`, 0);

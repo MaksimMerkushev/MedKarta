@@ -1,16 +1,13 @@
 /*
- * © 2026 MedКарта Казань. Все права защищены.
- *
- * Сборка конвейера.
+ * © 2026 МедКарта Казань. Все права защищены.
  *
  *   USER → API → PRIVACY GATEWAY → SANITIZED REQUEST → EXTERNAL LLM (planner)
  *        → SCHEMA VALIDATOR → POLICY ENGINE → EXECUTOR → справочник/маршруты
  *        → RESULT BUILDER → USER
  *
- * Здесь же реализована деградация: на каждом шаге после Gateway отказ ведёт
- * к локальному детерминированному плану, а не к попытке «спросить ещё раз,
- * но попроще». Исходного текста на этом уровне уже нет — передать его
- * куда-либо физически нечем.
+ * Деградация: отказ на любом шаге после Gateway ведёт к локальному
+ * детерминированному плану, а не к повторному запросу к модели. Модель
+ * получает только обезличенный запрос Gateway; пути с исходным текстом нет.
  */
 
 import { GATEWAY_DECISION } from './privacy/models.js';
@@ -48,9 +45,8 @@ const LATIN_ONLY = (text) => (text.match(/[a-z]/giu) || []).length >= 5 && !/\p{
 const DOCTOR_WORDS = /(?<!\p{L})(?:врач\p{L}*|доктор\p{L}*|специалист\p{L}*|запис\p{L}*|запиш\p{L}*)(?!\p{L})/u;
 
 /**
- * @param {object} deps все зависимости инъектируются: это то, что позволяет
- *   тестам подставить фикстуру справочника и фальшивый планировщик, не трогая
- *   ни сети, ни реальной базы.
+ * @param {object} deps инъектируются, чтобы тесты подставляли фикстуру
+ *   справочника и фальшивый планировщик без сети и реальной базы.
  */
 export const createPipeline = ({
   catalog,
@@ -81,7 +77,6 @@ export const createPipeline = ({
   const executor = createExecutor({ repository, routing });
   let warnedNotConfigured = false;
 
-  /** Запрашивает план у внешней модели и валидирует ответ. */
   const planExternally = async (request) => {
     const started = Date.now();
     const completion = await planner.generate(request);
@@ -131,9 +126,9 @@ export const createPipeline = ({
     }) {
       const started = Date.now();
       /*
-       * Оценка затраченного процессора — время внутри тяжёлых участков
-       * (разбор реплик и исполнение плана). Ожидание внешней модели и очередь
-       * сюда не входят: по этой оценке chat.js списывает бюджет адреса.
+       * Оценка процессорного времени: только тяжёлые участки (разбор реплик,
+       * исполнение плана), без ожидания модели и очереди. По ней chat.js
+       * списывает бюджет адреса.
        */
       let workMs = 0;
       const cpuMs = () => workMs;
@@ -173,10 +168,9 @@ export const createPipeline = ({
       let planSource = 'local';
 
       /*
-       * Общий бюджет обращений к модели исчерпан — это не отказ пользователю,
-       * а локальный план. Раньше глобальный лимит отвечал 429 всем подряд, и
-       * полтора десятка адресов, отправив по двадцать пустых запросов,
-       * отключали ассистента для всех на пять минут.
+       * Исчерпанный общий бюджет обращений к модели — не отказ пользователю,
+       * а локальный план: иначе несколько адресов пустыми запросами
+       * отключали бы ассистента для всех.
        */
       if (gate.decision === GATEWAY_DECISION.ALLOW_EXTERNAL && gate.request && !takeExternalBudget()) {
         metrics.increment('planner.budget_exhausted');
@@ -187,8 +181,8 @@ export const createPipeline = ({
         } catch (error) {
           metrics.increment('planner.error', { code: error?.code || 'unknown' });
           if (error?.code === PLANNER_ERROR.NOT_CONFIGURED) {
-            // Модель не настроена — это режим работы, а не авария: одна
-            // запись при первом запросе вместо трёх строк error на каждый.
+            // Модель не настроена — режим работы, а не авария: одно
+            // предупреждение на процесс.
             if (!warnedNotConfigured) {
               warnedNotConfigured = true;
               logger.warn('planner.not_configured', { request_id: gate.requestId });
@@ -196,10 +190,8 @@ export const createPipeline = ({
           } else {
             logger.error('planner.error', error, { request_id: gate.requestId });
           }
-          /*
-           * Резервного пути «отправить оригинал другому провайдеру» нет.
-           * Падаем в локальный план — он строится из уже извлечённых структур.
-           */
+          // Резервного пути «отправить оригинал другому провайдеру» нет:
+          // локальный план строится из уже извлечённых структур.
           if (error?.code === PLANNER_ERROR.OUTBOUND_ASSERTION) {
             metrics.increment('gateway.outbound_blocked');
           }
@@ -372,10 +364,9 @@ export const createPipeline = ({
   });
 };
 
-/**
- * Уточняющий вопрос под причину fail-closed.
- * Пользователю не сообщается техническая причина, но формулировка направляет
- * его к безопасному переформулированию.
+/*
+ * Тексты под причину fail-closed: техническая причина пользователю не
+ * сообщается, формулировка направляет к безопасному переформулированию.
  */
 const noticeFor = (reason) =>
   reason === 'hard_identifier_present'
@@ -417,11 +408,8 @@ const clarifyTextFor = (reason) => {
 let cached = null;
 
 /**
- * Ленивая сборка конвейера по умолчанию.
- *
- * Кэшируется обещание, а не результат: иначе двадцать одновременных первых
- * запросов после запуска собирали двадцать конвейеров (каталог, индексы,
- * хранилище) и отвечали по 1,7 с.
+ * Кэшируется обещание, а не результат: иначе одновременные первые запросы
+ * собирали бы каждый свой конвейер (каталог, индексы, хранилище).
  */
 export const getDefaultPipeline = () => {
   if (!cached) {
@@ -434,10 +422,9 @@ export const getDefaultPipeline = () => {
 };
 
 /*
- * Ключ модели и способ до неё достучаться. С AI_PROXY_URL запрос к модели
- * идёт через прокси (OpenRouter не принимает российские адреса). Если адрес
- * прокси задан с ошибкой, внешняя модель выключается: отправлять запрос
- * напрямую, в обход прокси, нельзя — ответит локальный планировщик.
+ * С AI_PROXY_URL запрос к модели идёт через прокси (OpenRouter не принимает
+ * российские адреса). Ошибка в адресе прокси выключает внешнюю модель:
+ * в обход прокси напрямую нельзя — ответит локальный планировщик.
  */
 export const plannerTransportFromEnv = (env = process.env, logger = defaultLogger) => {
   const apiKey = env.OPENROUTER_API_KEY || env.AI_API_KEY;
@@ -456,11 +443,8 @@ const buildDefaultPipeline = async () => {
   const catalog = await loadCatalog();
   const vault = createTokenVault({ store: createStoreFromEnv() });
   if ((process.env.OPENROUTER_API_KEY || process.env.AI_API_KEY) && !process.env.AI_UPSTREAM_URL) {
-    /*
-     * Ключ задан, а адрес модели — нет: запросы уйдут на адрес по умолчанию
-     * (modelhub.my). Предупреждение в журнале запуска, чтобы ключ одного
-     * провайдера не отправлялся другому незаметно. Задайте AI_UPSTREAM_URL явно.
-     */
+    // Без AI_UPSTREAM_URL ключ уйдёт на адрес по умолчанию (modelhub.my):
+    // ключ одного провайдера не должен незаметно уходить другому.
     defaultLogger.warn('planner.default_upstream', { status: 'AI_UPSTREAM_URL not set' });
   }
   const planner = createExternalPlanner({

@@ -1,5 +1,5 @@
 /*
- * © 2026 MedКарта Казань. Все права защищены.
+ * © 2026 МедКарта Казань. Все права защищены.
  *
  * Частные клиники, цены и ДМС: справочник услуг, разворачивание
  * справочника в карточки, покрытие программ ДМС, демо-набор.
@@ -11,9 +11,9 @@ import { describe, it } from 'node:test';
 import { matchService, normalizePrice, SERVICES } from '../shared/services.js';
 import { flattenPrivateCatalog, validatePrivateCatalog } from '../shared/privateCatalog.js';
 import { coverageBadge, coverageFor, validateInsuranceData } from '../shared/dms.js';
-// Логика справочника и ДМС проверяется на прежнем ручном демо-наборе: в нём
-// собраны все режимы доступа и пограничные случаи. Новый генерируемый набор
-// проверяет tests/demo-data.test.js.
+// Логика справочника и ДМС проверяется на ручном демо-наборе: в нём собраны
+// все режимы доступа и пограничные случаи. Генерируемый набор проверяет
+// tests/demo-data.test.js.
 import { demoInsurance } from './fixtures/legacy-demo/insurance.js';
 import { demoPrivateCatalog } from './fixtures/legacy-demo/private.js';
 import { extractConstraints } from '../backend/privacy/gateway.js';

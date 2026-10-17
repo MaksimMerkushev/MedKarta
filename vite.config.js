@@ -20,21 +20,17 @@ const FULL_DB_PATH = fileURLToPath(new URL('./data/doctors.full.js', import.meta
 const PUBLIC_DB_PATH = fileURLToPath(new URL('./data/doctors.js', import.meta.url))
 const HAS_FULL_DB = fs.existsSync(FULL_DB_PATH)
 
-/**
- * Dev-режим: `vite dev` не поднимает backend, поэтому тот же обработчик
- * подключается как middleware. Ключ читается из .env через loadEnv БЕЗ
- * префикса VITE_ — то есть остаётся на стороне dev-сервера и не попадает
- * в бандл.
- *
- * Модуль грузится обычным dynamic import, а не через server.ssrLoadModule:
- * backend/api/chat.js — чистый Node-код без JSX и import.meta.env, поэтому
- * конвейер Vite ему не нужен. Query-параметр сбрасывает кеш модулей, чтобы
- * правки подхватывались без перезапуска.
- */
 const isLocalHost = (host) =>
   /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(String(host || '')) ||
   (process.env.ALLOWED_HOSTS || '').split(',').map((value) => value.trim().toLowerCase()).filter(Boolean).includes(String(host || '').toLowerCase())
 
+/*
+ * `vite dev` не поднимает backend, поэтому те же обработчики подключаются как
+ * middleware. Ключи читаются из .env через loadEnv без префикса VITE_ — остаются
+ * в dev-сервере и не попадают в бандл. Модули backend — чистый Node-код, поэтому
+ * обычный dynamic import, а не ssrLoadModule; query-параметр сбрасывает кеш модулей,
+ * чтобы правки подхватывались без перезапуска.
+ */
 const devApiPlugin = (env) => ({
   name: 'medkarta-dev-api',
   apply: 'serve',
@@ -57,11 +53,10 @@ const devApiPlugin = (env) => ({
       )
     }
 
-    // Все обработчики API: без /api/route в dev-режиме маршрут не строился
-    // вовсе, и казалось, что сломан движок.
     /*
-     * Кабинет держит открытую базу SQLite: его модуль грузится один раз, без
-     * сброса кеша. Иначе каждый запрос открывал бы новое соединение с базой.
+     * Кабинет и демо-запись держат открытую базу SQLite (stateful): их модули
+     * грузятся один раз, без сброса кеша, иначе каждый запрос открывал бы новое
+     * соединение с базой.
      */
     for (const [mount, handlerUrl, label, stateful = false] of [
       ['/api/chat', CHAT_HANDLER_URL, 'чата'],
@@ -81,9 +76,9 @@ const devApiPlugin = (env) => ({
 
       server.middlewares.use(mount, async (req, res, next) => {
         /*
-         * Эти обработчики подключены раньше проверки Host самого Vite. Без
-         * своей проверки страница с чужого домена, указавшего на 127.0.0.1
-         * (DNS rebinding), могла бы звать /api/chat с вашим ключом модели.
+         * Обработчики стоят раньше проверки Host самого Vite: без своей проверки
+         * страница с чужого домена, указавшего на 127.0.0.1 (DNS rebinding),
+         * могла бы звать /api/chat с вашим ключом модели.
          */
         if (!isLocalHost(req.headers.host)) {
           res.statusCode = 403
@@ -109,7 +104,7 @@ const devApiPlugin = (env) => ({
 })
 
 export default defineConfig(({ mode }) => {
-  // envDir задан явно: корень проекта больше не совпадает с root Vite.
+  // envDir задан явно: корень проекта не совпадает с root Vite (frontend/).
   const env = loadEnv(mode, ROOT, '')
 
   return {
@@ -136,8 +131,8 @@ export default defineConfig(({ mode }) => {
        */
       host: 'localhost',
       fs: {
-        // root — frontend/, а shared/ и data/ лежат выше. Раньше разрешался
-        // весь корень проекта — вместе с .env, backend/ и var/.
+        // root — frontend/, а shared/ и data/ лежат выше; весь корень проекта
+        // (с .env, backend/ и var/) не открывается.
         allow: [FRONTEND, SHARED, DATA, NODE_MODULES],
         deny: ['.env', '.env.*', '*.{crt,pem,key}', '**/.git/**', '**/data/collected/**', '**/data/review/**', '**/var/**'],
       },
@@ -149,8 +144,8 @@ export default defineConfig(({ mode }) => {
       sourcemap: false,
       rollupOptions: {
         output: {
-          // Крупные справочники — отдельным чанком: правка интерфейса больше
-          // не инвалидирует полмегабайта данных в кэше браузера.
+          // Крупные справочники — отдельным чанком: правка интерфейса не
+          // инвалидирует полмегабайта данных в кэше браузера.
           manualChunks(id) {
             const normalized = id.split('\\').join('/')
             if (

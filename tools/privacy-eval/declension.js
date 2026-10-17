@@ -1,13 +1,9 @@
 /*
- * © 2026 MedКарта Казань. Все права защищены.
+ * © 2026 МедКарта Казань. Все права защищены.
  *
- * Склонение имён, фамилий и отчеств для набора проверки.
- *
- * Правила упрощены, но покрывают то, как люди реально пишут в чате:
- * «запишите Гульнару», «для Ильдара», «маме Айгуль» (женские имена на
- * согласный не склоняются), «к Хайруллиной». Ошибки склонения в наборе
- * допустимы — пользователи тоже склоняют по-разному, — поэтому для
- * спорных случаев генератор берёт оба варианта.
+ * Упрощённое склонение имён, фамилий и отчеств для набора проверки — как пишут в чате:
+ * «запишите Гульнару», «маме Айгуль», «к Хайруллиной». Ошибки склонения в наборе
+ * допустимы: пользователи тоже склоняют по-разному.
  */
 
 export const CASES = ['nom', 'gen', 'dat', 'acc', 'ins'];
@@ -17,7 +13,6 @@ const SIBILANT_SOFT = /[жшчщц]$/u;
 
 const keepCase = (source, result) => (source[0] === source[0].toUpperCase() ? result[0].toUpperCase() + result.slice(1) : result);
 
-/** Имя в падеже. */
 export const declineFirstName = (name, gender, grammaticalCase) => {
   if (grammaticalCase === 'nom') return name;
   const lower = name.toLowerCase();
@@ -79,7 +74,6 @@ export const declineSurname = (surname, gender, grammaticalCase) => {
   return pick([surname, `${surname}а`, `${surname}у`, `${surname}а`, `${surname}${instrumental}`]);
 };
 
-/** Отчество от имени отца. */
 export const patronymicOf = (fatherName, gender) => {
   const lower = fatherName.toLowerCase();
   const special = {

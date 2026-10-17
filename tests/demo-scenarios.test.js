@@ -1,5 +1,5 @@
 /*
- * © 2026 MedКарта Казань. Все права защищены.
+ * © 2026 МедКарта Казань. Все права защищены.
  *
  * Сквозные сценарии демо-записи: свободный текст → ассистент (конвейер
  * приватности, локальный или «внешний» план) → запрос строгого подбора →
@@ -324,7 +324,7 @@ describe('Демо-сценарии: приватность', () => {
       sessionId: TEST_SESSION,
     });
     const outbound = sent[0].serialized + JSON.stringify(sent[0].hints);
-    // Стаж как числовой фильтр планировщик получал и раньше (minExperience=15) — это не данные о человеке.
+    // Стаж как числовой фильтр (minExperience=15) планировщику передаётся — это не данные о человеке.
     for (const leaked of ['female', 'женщин', 'Premium', 'premium', '16', 'excludeWeekdays', 'понедельник', 'home_visit', 'на дом', 'demo-yasen', 'Ясен']) {
       assert.ok(!outbound.includes(leaked), `во внешний запрос попало «${leaked}»`);
     }
@@ -975,7 +975,6 @@ describe('Демо-сценарии: уточняющие вопросы и ко
     assert.equal(fresh.doctorGender, null);
     assert.deepEqual(fresh.excludeDistricts, []);
     assert.deepEqual(fresh.date, { kind: 'tomorrow' });
-    // «Педиатр для сына» → «а теперь мне к терапевту» — взрослый приём.
     assert.equal((await chat(['педиатр для сына в субботу', 'а теперь мне к терапевту'])).booking.request.patient, 'adult');
   });
 

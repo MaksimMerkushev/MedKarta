@@ -1,26 +1,17 @@
 /*
- * Плагин docsify для сайта документации МедКарты (GitHub Pages,
- * docs.navimed.tech).
- *
- * Адреса страниц — без «#»: docs.navimed.tech/09-routing-engine (режим
- * history). Сайт должен открываться из корня домена; прямой заход на
+ * Плагин docsify для сайта документации (GitHub Pages, docs.navimed.tech). Адреса —
+ * без «#» (режим history), сайт открывается из корня домена; прямой заход на
  * внутреннюю страницу обслуживает docs/404.html — копия index.html.
  *
- * В Markdown-файлах ссылки относительные — так они работают при просмотре
- * на GitHub. На сайте docsify их нужно перевести:
- *   - ссылки на исходный код вне docs/ (../backend/server.js) → файл на
- *     GitHub в документируемом коммите;
- *   - ссылки на другие страницы документации (../02-architecture.md из
- *     adr/) → путь от корня docs/, который понимает docsify; README.md
- *     раздела → адрес раздела («/», «/adr/»);
- *   - ссылки на не-Markdown файлы внутри docs/ (tools/check-docs.mjs) →
- *     файл на GitHub в ветке main: в режиме history docsify перехватывает
- *     переходы внутри сайта и открыть такой файл сам не может;
- *   - картинки внутри docs/ → путь от корня сайта.
- * Блоки ```mermaid превращаются в диаграммы.
- *
- * Функция rewriteLinks не зависит от браузера — её проверяет
- * docs/tools/check-site.mjs.
+ * Относительные ссылки Markdown (как на GitHub) переводятся для docsify:
+ *   - код вне docs/ (../backend/server.js) → GitHub, документируемый коммит;
+ *   - страницы документации → путь от корня docs/; README.md раздела → адрес
+ *     раздела («/», «/adr/»);
+ *   - не-Markdown файлы в docs/ → GitHub, ветка main: в режиме history docsify
+ *     перехватывает переходы и сам такой файл не откроет;
+ *   - картинки в docs/ → путь от корня сайта.
+ * Блоки ```mermaid превращаются в диаграммы. rewriteLinks не зависит от браузера —
+ * её проверяет docs/tools/check-site.mjs.
  */
 (function (root) {
   var REPOSITORY = 'https://github.com/MaksimMerkushev/MedKarta';

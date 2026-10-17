@@ -1,13 +1,10 @@
 /*
- * © 2026 MedКарта Казань. Все права защищены.
+ * © 2026 МедКарта Казань. Все права защищены.
  *
- * Три лучших варианта для ответа ассистента.
- *
- * Отбор идёт в браузере, по уже отфильтрованному и отсортированному списку:
- * точка отправления, время в пути и программа ДМС никуда не отправляются,
- * а «лучший» без них не определить. Сервер знает только профиль и условия.
- *
- * Модуль без JSX и без псевдонимов сборки — его проверяют тесты Node.
+ * Три лучших варианта для ответа ассистента. Отбор идёт в браузере по уже
+ * отфильтрованному списку: точка отправления, время в пути и программа ДМС
+ * в /api/chat не уходят, а без них «лучший» не определить.
+ * Без JSX и псевдонимов сборки — модуль проверяют тесты Node.
  */
 
 export const TOP_PICKS_LIMIT = 3;
@@ -21,11 +18,8 @@ const yearsWord = (count) => {
   return 'лет';
 };
 
-/*
- * Три врача из одной поликлиники — это одна поездка, а не три варианта.
- * Сначала берём лучших из разных мест, но только среди первых
- * DIVERSITY_WINDOW: ради разнообразия не стоит поднимать сотый результат.
- */
+// Три врача из одной поликлиники — одна поездка, а не три варианта. Разные
+// места ищутся только среди первых DIVERSITY_WINDOW, чтобы не поднимать сотый результат.
 const DIVERSITY_WINDOW = 12;
 
 const placeKey = (doc) => {
@@ -35,20 +29,17 @@ const placeKey = (doc) => {
   return `${point}|${(doc.clinic || '').trim().toLowerCase()}`;
 };
 
+// Врач, принимающий в двух филиалах, — один вариант: попадает в подборку один раз.
+const personKey = (doc) => (doc.entityKind === 'doctor' && doc.name
+  ? `${String(doc.name).trim().toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ')}|${doc.doctorProfile || doc.specialty || ''}`
+  : `id:${doc.id}`);
+
 /**
  * @param {Array<object>} list отсортированная выдача (как в списке на карте)
  * @param {{limit?: number, exclude?: Set<string>}} [options] exclude — id точек
  *        маршрута: они остаются в списке без учёта фильтров и в «лучшие» не идут
  * @returns {{picks: Array<object>, total: number}}
  */
-/*
- * Один и тот же врач, принимающий в двух филиалах, — это один вариант,
- * а не два: в подборку он попадает один раз, с лучшим из адресов.
- */
-const personKey = (doc) => (doc.entityKind === 'doctor' && doc.name
-  ? `${String(doc.name).trim().toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ')}|${doc.doctorProfile || doc.specialty || ''}`
-  : `id:${doc.id}`);
-
 export const selectTopPicks = (list, { limit = TOP_PICKS_LIMIT, exclude = new Set() } = {}) => {
   const candidates = (Array.isArray(list) ? list : []).filter((doc) => doc && !exclude.has(doc.id));
   const picks = [];
@@ -91,8 +82,8 @@ export const formatDistance = (km) => {
 export const formatPrice = (value) => (Number.isFinite(value) && value > 0 ? `от ${Math.round(value).toLocaleString('ru-RU')} ₽` : null);
 
 /**
- * Почему вариант попал в лучшие — короткие факты из карточки, по важности.
- * Ничего не выдумываем: нет расписания — нет и пункта про часы.
+ * Почему вариант попал в лучшие: факты из карточки по важности, только те,
+ * что есть в данных (нет расписания — нет пункта про часы).
  *
  * @returns {Array<{kind: string, text: string}>}
  */
@@ -136,10 +127,7 @@ export const SORT_EXPLANATION = Object.freeze({
   clinic: 'по клинике',
 });
 
-/**
- * Условия запроса, которые действительно применены к выдаче, —
- * для строки «под ваш запрос: …».
- */
+/** Условия, реально применённые к выдаче, — для строки «под ваш запрос: …». */
 export const describeCriteria = ({
   profile = null,
   childrenOnly = false,

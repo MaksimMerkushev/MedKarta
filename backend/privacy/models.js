@@ -1,18 +1,10 @@
 /*
- * © 2026 MedКарта Казань. Все права защищены.
+ * © 2026 МедКарта Казань. Все права защищены.
  *
- * Типы границы доверия.
- *
- * ГЛАВНАЯ ИДЕЯ. Внешний планировщик принимает НЕ строку, а объект
- * SanitizedPlannerRequest, создать который можно единственным способом —
- * через privacy/gateway.js. Конструктор закрыт приватным Symbol: вызов
- * `new SanitizedPlannerRequest(...)` из другого модуля бросает исключение.
- *
- * Это превращает «не забудь санитизировать» из соглашения в свойство кода.
- * Разработчик, который захочет отправить сырой ввод, не сможет собрать
- * аргумент нужного типа — ошибка возникнет на этапе вызова, а не на проде.
- * Дополнительно импорт mintSanitizedPlannerRequest ограничен правилом ESLint
- * (см. eslint.config.js, no-restricted-imports).
+ * Типы границы доверия. Внешний планировщик принимает не строку, а
+ * SanitizedPlannerRequest, который создаётся только через privacy/gateway.js:
+ * конструктор закрыт приватным Symbol, поэтому сырой ввод нельзя передать
+ * планировщику даже по ошибке — санитизация становится свойством кода.
  */
 
 const BRAND = Symbol('medkarta.SanitizedPlannerRequest');
@@ -28,12 +20,9 @@ const freezeDeep = (value) => {
 };
 
 /**
- * Единственный тип, который принимает внешний планировщик.
- *
- * Объект НЕ содержит: исходного текста пользователя, ФИО, телефонов, адресов,
- * координат, идентификаторов БД, идентификатора сессии и сырого описания
- * симптомов. Он содержит только редактированный текст с плейсхолдерами и
- * производные семантические подсказки.
+ * Не содержит исходного текста пользователя, ФИО, телефонов, адресов,
+ * координат, идентификаторов БД и сессии, сырого описания симптомов — только
+ * редактированный текст с плейсхолдерами и производные подсказки.
  */
 export class SanitizedPlannerRequest {
   constructor(brand, payload) {
@@ -69,10 +58,7 @@ export class SanitizedPlannerRequest {
     return this.turns.map((turn) => ({ role: turn.role, content: turn.text }));
   }
 
-  /**
-   * Никакой автоматический сериализатор не должен случайно вытащить больше,
-   * чем toWireMessages. Метод фиксирует безопасное представление для логов.
-   */
+  /** Представление для логов: случайная сериализация не вытащит текст реплик. */
   toJSON() {
     return {
       requestId: this.requestId,
@@ -85,15 +71,13 @@ export class SanitizedPlannerRequest {
 }
 
 /**
- * ВНИМАНИЕ: разрешено вызывать только из privacy/gateway.js.
- * Правило ESLint no-restricted-imports запрещает импорт этого символа
- * из любого другого файла; тест tests/boundary.test.js проверяет это же.
+ * Только для privacy/gateway.js. Импорт из других файлов запрещён правилом
+ * ESLint (no-restricted-imports); его дублирует tests/boundary.test.js.
  */
 export const mintSanitizedPlannerRequest = (payload) => new SanitizedPlannerRequest(BRAND, payload);
 
 export const isSanitizedPlannerRequest = (value) => value instanceof SanitizedPlannerRequest;
 
-/** Решение Privacy Gateway о судьбе запроса. */
 export const GATEWAY_DECISION = Object.freeze({
   ALLOW_EXTERNAL: 'allow_external',
   LOCAL_ONLY: 'local_only',
