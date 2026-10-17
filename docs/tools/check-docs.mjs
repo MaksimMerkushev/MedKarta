@@ -4,7 +4,10 @@
  *   1. относительные ссылки ведут на существующие файлы, якоря — на
  *      существующие заголовки (слаги по правилам GitHub);
  *   2. блоки кода закрыты, диаграммы Mermaid извлекаются в отдельные файлы;
- *   3. в тексте нет похожих на секреты строк (ключи API, токены, приватные ключи).
+ *   3. ни в одной строке, включая блоки кода, нет похожих на секреты значений
+ *      (ключи API, токены, приватные ключи, пароли в присваиваниях). Поиск
+ *      идёт и по остальным *.md в корне репозитория. Это эвристика, а не
+ *      замена сканеру секретов по всему репозиторию и истории git.
  *
  *   node docs/tools/check-docs.mjs
  *   node docs/tools/check-docs.mjs --mermaid-out /tmp/mmd   # сохранить диаграммы для mmdc
@@ -28,6 +31,7 @@ const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((entr
 });
 
 const files = [...walk(DOCS), path.join(ROOT, 'README.md')];
+const rootMarkdown = fs.readdirSync(ROOT).filter((name) => name.endsWith('.md') && name !== 'README.md').map((name) => path.join(ROOT, name));
 
 /* Слаг заголовка по правилам GitHub: нижний регистр, без пунктуации, пробелы → дефисы. */
 const slug = (text) => text
@@ -59,6 +63,8 @@ const anchorsOf = (file) => {
   return anchors;
 };
 
+const errors = [];
+
 const SECRET_PATTERNS = [
   [/sk-[A-Za-z0-9_-]{16,}/, 'ключ вида sk-…'],
   [/gh[pousr]_[A-Za-z0-9]{20,}/, 'токен GitHub'],
@@ -67,9 +73,16 @@ const SECRET_PATTERNS = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, 'приватный ключ'],
   [/Bearer\s+[A-Za-z0-9._-]{24,}/, 'Bearer-токен'],
   [/xox[abpr]-[A-Za-z0-9-]{10,}/, 'токен Slack'],
+  // KEY=…, SECRET: …, PASSWORD="…" со значением, похожим на настоящее: 20+ символов, есть и буквы, и цифры.
+  [/\b[A-Z0-9_]*(?:KEY|SECRET|TOKEN|PASSWORD)[A-Z0-9_]*\s*[=:]\s*["']?(?=[A-Za-z0-9_\-\/+=.]*\d)(?=[A-Za-z0-9_\-\/+=.]*[A-Za-z])[A-Za-z0-9_\-\/+=.]{20,}/, 'значение ключа или пароля'],
 ];
 
-const errors = [];
+const findSecrets = (rel, lines) => lines.forEach((line, index) => {
+  for (const [pattern, label] of SECRET_PATTERNS) {
+    if (pattern.test(line)) errors.push(`${rel}:${index + 1}: похоже на секрет (${label})`);
+  }
+});
+
 let links = 0;
 let diagrams = 0;
 if (mermaidOut) fs.mkdirSync(mermaidOut, { recursive: true });
@@ -78,6 +91,8 @@ for (const file of files) {
   const rel = path.relative(ROOT, file);
   const text = fs.readFileSync(file, 'utf8');
   const lines = text.split('\n');
+  // Секреты ищутся во всех строках: пример в блоке кода публикуется так же, как текст.
+  findSecrets(rel, lines);
 
   let fence = null;
   let mermaid = null;
@@ -107,10 +122,6 @@ for (const file of files) {
       return;
     }
 
-    for (const [pattern, label] of SECRET_PATTERNS) {
-      if (pattern.test(line)) errors.push(`${rel}:${index + 1}: похоже на секрет (${label})`);
-    }
-
     // Ссылки вне блоков кода; инлайн-код вырезается, чтобы не ловить примеры.
     const plain = line.replace(/`[^`]*`/g, '');
     for (const match of plain.matchAll(/\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)) {
@@ -130,6 +141,8 @@ for (const file of files) {
   });
   if (fence) errors.push(`${rel}:${fenceStart}: блок кода не закрыт`);
 }
+
+for (const file of rootMarkdown) findSecrets(path.relative(ROOT, file), fs.readFileSync(file, 'utf8').split('\n'));
 
 console.log(`Файлов: ${files.length}, относительных ссылок: ${links}, диаграмм Mermaid: ${diagrams}`);
 if (errors.length > 0) {
