@@ -9,7 +9,8 @@
  * (см. docs/accounts.md).
  *
  * Что хранится — и ничего больше:
- *   users     — email, имя, хэш пароля, id программы ДМС;
+ *   users     — email, имя, хэш пароля, id программы ДМС; у демо-аккаунтов —
+ *               шаблон и SHA-256 от токена браузера (у каждого браузера своя копия);
  *   sessions  — SHA-256 от токена сессии (сам токен — только в cookie);
  *   favorites — id врачей и учреждений из справочника.
  * Запросы к ассистенту, симптомы, координаты и история поиска сюда не пишутся.
@@ -18,7 +19,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 const MIGRATIONS = [
   `
@@ -47,6 +48,16 @@ const MIGRATIONS = [
     PRIMARY KEY (user_id, item_id)
   );
   `,
+  // Демо-аккаунт — личная копия шаблона на браузер: зрители не видят данных друг друга.
+  // Прежние общие демо-аккаунты (demo_key) удаляются вместе с сессиями: в общий кабинет больше не войти.
+  // Столбец demo_key остаётся только потому, что SQLite не удаляет столбец с UNIQUE.
+  `
+  DELETE FROM users WHERE demo_key IS NOT NULL;
+  ALTER TABLE users ADD COLUMN demo_template TEXT;
+  ALTER TABLE users ADD COLUMN demo_owner TEXT;
+  CREATE UNIQUE INDEX users_demo_copy ON users(demo_template, demo_owner) WHERE demo_template IS NOT NULL;
+  CREATE INDEX users_demo_seen ON users(updated_at) WHERE demo_template IS NOT NULL;
+  `,
 ];
 
 // node:sqlite работает без флага с Node 22.13; на более старой версии
@@ -67,7 +78,8 @@ const toUser = (row) => (row
     displayName: row.display_name,
     passwordHash: row.password_hash,
     dmsPlanId: row.dms_plan_id,
-    demoKey: row.demo_key,
+    demoTemplate: row.demo_template || null,
+    demoOwner: row.demo_owner || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -109,11 +121,16 @@ export const createSqliteAccountStore = ({ DatabaseSync, file }) => {
   }
 
   const statements = {
-    insertUser: db.prepare(`INSERT INTO users (id, email, display_name, password_hash, dms_plan_id, demo_key, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
+    insertUser: db.prepare(`INSERT INTO users (id, email, display_name, password_hash, dms_plan_id, demo_template, demo_owner, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
     userById: db.prepare('SELECT * FROM users WHERE id = ?'),
     userByEmail: db.prepare('SELECT * FROM users WHERE email = ?'),
-    userByDemoKey: db.prepare('SELECT * FROM users WHERE demo_key = ?'),
+    demoCopy: db.prepare('SELECT * FROM users WHERE demo_template = ? AND demo_owner = ?'),
+    touchUser: db.prepare('UPDATE users SET updated_at = ? WHERE id = ?'),
+    purgeDemoCopies: db.prepare('DELETE FROM users WHERE demo_template IS NOT NULL AND updated_at < ?'),
+    countDemoCopies: db.prepare('SELECT COUNT(*) AS count FROM users WHERE demo_template IS NOT NULL'),
+    deleteOldestDemoCopies: db.prepare(`DELETE FROM users WHERE id IN (
+      SELECT id FROM users WHERE demo_template IS NOT NULL ORDER BY updated_at ASC LIMIT ?)`),
     updateName: db.prepare('UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?'),
     updatePlan: db.prepare('UPDATE users SET dms_plan_id = ?, updated_at = ? WHERE id = ?'),
     deleteUser: db.prepare('DELETE FROM users WHERE id = ?'),
@@ -147,13 +164,18 @@ export const createSqliteAccountStore = ({ DatabaseSync, file }) => {
   return Object.freeze({
     kind: 'sqlite',
 
-    createUser({ id, email, displayName, passwordHash = null, dmsPlanId = null, demoKey = null, now }) {
-      statements.insertUser.run(id, email, displayName, passwordHash, dmsPlanId, demoKey, now, now);
+    createUser({ id, email, displayName, passwordHash = null, dmsPlanId = null, demoTemplate = null, demoOwner = null, now }) {
+      statements.insertUser.run(id, email, displayName, passwordHash, dmsPlanId, demoTemplate, demoOwner, now, now);
       return toUser(statements.userById.get(id));
     },
     getUserById: (id) => toUser(statements.userById.get(id)),
     getUserByEmail: (email) => toUser(statements.userByEmail.get(email)),
-    getUserByDemoKey: (key) => toUser(statements.userByDemoKey.get(key)),
+    getDemoCopy: (template, ownerHash) => toUser(statements.demoCopy.get(template, ownerHash)),
+    touchUser: (id, now) => statements.touchUser.run(now, id).changes > 0,
+    // Сессии и избранное копий удаляются каскадом.
+    purgeDemoCopies: (olderThan) => statements.purgeDemoCopies.run(olderThan).changes,
+    countDemoCopies: () => statements.countDemoCopies.get().count,
+    deleteOldestDemoCopies: (count) => statements.deleteOldestDemoCopies.run(count).changes,
     updateDisplayName: (id, displayName, now) => statements.updateName.run(displayName, now, id).changes > 0,
     updateDmsPlan: (id, planId, now) => statements.updatePlan.run(planId, now, id).changes > 0,
     deleteUser: (id) => statements.deleteUser.run(id).changes > 0,

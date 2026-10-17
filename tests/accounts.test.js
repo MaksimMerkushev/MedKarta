@@ -6,7 +6,10 @@
  */
 
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { hashPassword, PasswordBusyError, passwordProblem, verifyPassword } from '../backend/accounts/passwords.js';
@@ -192,49 +195,89 @@ describe('Кабинет: программа ДМС и избранное', () =
 });
 
 describe('Кабинет: демо-аккаунты', () => {
-  it('создаются один раз, с программой ДМС и избранным, без пароля', async () => {
+  it('у каждого браузера своя копия: с программой ДМС и избранным, без пароля', async () => {
     const { service, store } = makeService();
-    assert.equal(service.seedDemoAccounts(), DEMO_ACCOUNTS.length);
-    assert.equal(service.seedDemoAccounts(), 0, 'повторный запуск не плодит аккаунты');
     const anna = service.demoLogin('anna');
     assert.equal(anna.user.dmsPlanId, 'demo-standard');
     assert.equal(anna.user.isDemo, true);
+    assert.equal(anna.user.email, 'anna@medkarta.example');
     assert.ok(anna.favorites.length > 0);
+    assert.match(anna.owner, /^[A-Za-z0-9_-]{43}$/);
     assert.ok(DEMO_ACCOUNTS.every((account) => account.email.endsWith('@medkarta.example')));
-    assert.equal(store.getUserByEmail('anna@medkarta.example').passwordHash, null);
     await rejects(service.login({ email: 'anna@medkarta.example', password: '' }), 'bad_credentials');
     await rejects(service.login({ email: 'anna@medkarta.example', password: 'любой-пароль' }), 'bad_credentials');
     assert.throws(() => service.demoLogin('root'), (error) => error.code === 'unknown_demo');
     assert.throws(() => service.demoLogin('__proto__'), (error) => error.code === 'unknown_demo');
 
-    // Изменения одного зрителя не видны следующему: вход возвращает демо к исходному.
-    const annaUser = store.getUserByDemoKey('anna');
+    // Тот же браузер возвращается в ту же копию — с её изменениями.
+    const annaUser = service.sessionUser(anna.session.token);
     service.updateProfile(annaUser, { dmsPlanId: 'demo-basic' });
     service.updateFavorites(annaUser, { action: 'remove', ids: anna.favorites });
-    const again = service.demoLogin('anna');
-    assert.equal(again.user.dmsPlanId, 'demo-standard');
-    assert.deepEqual([...again.favorites].sort(), [...anna.favorites].sort());
-    assert.throws(() => service.deleteAccount(store.getUserByDemoKey('anna')), (error) => error.code === 'demo_account');
+    const again = service.demoLogin('anna', { owner: anna.owner });
+    assert.equal(again.owner, anna.owner);
+    assert.equal(again.user.dmsPlanId, 'demo-basic');
+    assert.deepEqual(again.favorites, []);
+    assert.equal(service.sessionUser(again.session.token).id, annaUser.id);
+
+    // Другой браузер получает свою копию в исходном виде.
+    const other = service.demoLogin('anna');
+    assert.notEqual(other.owner, anna.owner);
+    assert.equal(other.user.dmsPlanId, 'demo-standard');
+    assert.notEqual(service.sessionUser(other.session.token).id, annaUser.id);
+
+    // Другой демо-аккаунт того же браузера — отдельный кабинет.
+    const family = service.demoLogin('family', { owner: anna.owner });
+    assert.equal(family.user.dmsPlanId, 'demo-premium');
+    assert.notEqual(service.sessionUser(family.session.token).id, annaUser.id);
+
+    assert.throws(() => service.deleteAccount(annaUser), (error) => error.code === 'demo_account');
+    assert.equal(store.countDemoCopies(), 3);
   });
 
-  it('имя демо-аккаунта не меняется, а испорченное — восстанавливается при входе', () => {
-    const { service, store } = makeService();
-    service.seedDemoAccounts();
-    const anna = store.getUserByDemoKey('anna');
-    assert.throws(() => service.updateProfile(anna, { displayName: 'Звоните +7 900 000-00-00' }), (error) => error.code === 'demo_account');
-    store.updateDisplayName(anna.id, 'Испорчено', Date.now());
-    assert.equal(service.demoLogin('anna').user.displayName, 'Анна (демо)');
+  it('испорченный токен браузера заменяется новым; имя демо-аккаунта не меняется', () => {
+    const { service } = makeService();
+    const login = service.demoLogin('anna', { owner: 'x' });
+    assert.match(login.owner, /^[A-Za-z0-9_-]{43}$/);
+    const user = service.sessionUser(login.session.token);
+    assert.throws(() => service.updateProfile(user, { displayName: 'Звоните +7 900 000-00-00' }), (error) => error.code === 'demo_account');
   });
 
-  it('демо-аккаунт открывают многие: зрители не выбивают друг друга, сессия — 12 часов', () => {
+  it('обновление базы удаляет прежние общие демо-аккаунты с их сессиями, остальных не трогает', () => {
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'medkarta-accounts-')), 'medkarta.sqlite');
+    const legacy = new DatabaseSync(file);
+    legacy.exec(`
+      CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE COLLATE NOCASE, display_name TEXT NOT NULL,
+        password_hash TEXT, dms_plan_id TEXT, demo_key TEXT UNIQUE, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+      CREATE TABLE sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+      CREATE TABLE favorites (user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, item_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL, PRIMARY KEY (user_id, item_id));
+      INSERT INTO users VALUES ('${'a'.repeat(32)}', 'anna@medkarta.example', 'Анна Демо', NULL, 'demo-standard', 'anna', 1, 1);
+      INSERT INTO users VALUES ('${'b'.repeat(32)}', 'real@user.ru', 'Настоящий', 'scrypt$x', NULL, NULL, 1, 1);
+      INSERT INTO sessions VALUES ('shared-session', '${'a'.repeat(32)}', 1, 9999999999999);
+      INSERT INTO favorites VALUES ('${'a'.repeat(32)}', '"demo-doc-x"', 1);
+      PRAGMA user_version = 1;
+    `);
+    legacy.close();
+    const store = createSqliteAccountStore({ DatabaseSync, file });
+    assert.equal(store.getUserById('a'.repeat(32)), null);
+    assert.equal(store.getSession('shared-session'), null);
+    assert.deepEqual(store.listFavorites('a'.repeat(32)), []);
+    assert.equal(store.getUserById('b'.repeat(32)).email, 'real@user.ru');
+    store.close();
+  });
+
+  it('демо-сессия — 12 часов; копия, к которой не возвращались 30 дней, удаляется', () => {
     let clock = Date.parse('2026-10-08T10:00:00Z');
-    const { service } = makeService({ now: () => clock });
-    service.seedDemoAccounts();
-    const first = service.demoLogin('family').session.token;
-    for (let index = 0; index < 30; index += 1) service.demoLogin('family');
-    assert.ok(service.sessionUser(first), 'первого зрителя выкинуло');
+    const { service, store } = makeService({ now: () => clock });
+    const first = service.demoLogin('family');
     clock += 12 * 60 * 60 * 1000 + 1;
-    assert.equal(service.sessionUser(first), null);
+    assert.equal(service.sessionUser(first.session.token), null);
+    assert.equal(store.countDemoCopies(), 1);
+    clock += ACCOUNT_LIMITS.DEMO_COPY_TTL_MS;
+    service.purgeExpiredSessions();
+    assert.equal(store.countDemoCopies(), 0);
+    assert.equal(service.demoLogin('family', { owner: first.owner }).user.dmsPlanId, 'demo-premium');
   });
 });
 
@@ -246,9 +289,9 @@ describe('Кабинет: HTTP', () => {
 
   before(async () => {
     ({ service } = makeService());
-    service.seedDemoAccounts();
     const handler = createAccountHandler({
       getService: async () => service,
+      onAccountDeleted: async () => {},
       authLimit: createRateLimiter({ windowMs: 60_000, maxPerIp: 1000, maxPerInstance: Number.POSITIVE_INFINITY }),
       apiLimit: createRateLimiter({ windowMs: 60_000, maxPerIp: 1000, maxPerInstance: Number.POSITIVE_INFINITY }),
       features: () => flags,

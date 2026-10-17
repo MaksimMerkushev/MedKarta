@@ -13,8 +13,9 @@
  *   POST   /api/auth/logout        — выход
  *
  * Сессия — случайный токен в cookie HttpOnly; SameSite=Lax; Path=/api, в базе
- * хранится только его SHA-256. С ассистентом кабинет не связан: в /api/chat
- * не уходят ни email, ни имя, ни программа ДМС, ни избранное.
+ * хранится только его SHA-256. Cookie mk_demo с теми же флагами связывает
+ * браузер с его копиями демо-аккаунтов. С ассистентом кабинет не связан: в
+ * /api/chat не уходят ни email, ни имя, ни программа ДМС, ни избранное.
  */
 
 import path from 'node:path';
@@ -29,6 +30,8 @@ import { logger } from '../observability/safeLogger.js';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 export const SESSION_COOKIE = 'mk_session';
+export const DEMO_OWNER_COOKIE = 'mk_demo';
+const DEMO_OWNER_MAX_AGE_S = 30 * 24 * 60 * 60;
 // Слияние избранного: до 500 id по ~40 символов — с запасом.
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -94,16 +97,14 @@ const isSecureRequest = (req) => {
   return isFromTrustedProxy(req) && String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
 };
 
-export const sessionCookie = (req, token, expiresAt) => {
-  const parts = [`${SESSION_COOKIE}=${token}`, 'Path=/api', 'HttpOnly', 'SameSite=Lax'];
-  if (token) {
-    parts.push(`Max-Age=${Math.max(0, Math.floor((expiresAt - Date.now()) / 1000))}`);
-  } else {
-    parts.push('Max-Age=0');
-  }
+const cookie = (req, name, value, maxAgeSeconds) => {
+  const parts = [`${name}=${value}`, 'Path=/api', 'HttpOnly', 'SameSite=Lax', `Max-Age=${Math.max(0, Math.floor(maxAgeSeconds))}`];
   if (isSecureRequest(req)) parts.push('Secure');
   return parts.join('; ');
 };
+
+export const sessionCookie = (req, token, expiresAt) =>
+  cookie(req, SESSION_COOKIE, token, token ? (expiresAt - Date.now()) / 1000 : 0);
 
 /*
  * CSRF — в три слоя: SameSite=Lax у cookie, обязательный Content-Type:
@@ -136,12 +137,24 @@ const pathOf = (url) => {
   return end === -1 ? raw : raw.slice(0, end);
 };
 
+/*
+ * Удалённый аккаунт отвязывается от своих демо-записей: записи остаются
+ * занятыми слотами, но больше ни с кем не связаны.
+ */
+const forgetDemoBookings = async (userId) => {
+  const { getDefaultDemoBookingService } = await import('./demoBooking.js');
+  const service = await getDefaultDemoBookingService();
+  service?.store.forgetAccount(userId);
+};
+
 /**
  * @param {object} deps
  * @param {() => Promise<object|null>} deps.getService сервис кабинета или null, если он выключен
+ * @param {(userId: string) => Promise<void>} [deps.onAccountDeleted]
  */
 export const createAccountHandler = ({
   getService,
+  onAccountDeleted = forgetDemoBookings,
   authLimit = defaultAuthLimit,
   apiLimit = defaultApiLimit,
   demoLimit = defaultDemoLimit,
@@ -204,8 +217,8 @@ export const createAccountHandler = ({
       }
     }
 
-    const startSession = (result, status = 200) => {
-      res.setHeader('Set-Cookie', sessionCookie(req, result.session.token, result.session.expiresAt));
+    const startSession = (result, status = 200, extraCookies = []) => {
+      res.setHeader('Set-Cookie', [sessionCookie(req, result.session.token, result.session.expiresAt), ...extraCookies]);
       respondJson(res, status, { user: result.user, favorites: result.favorites, features: flags });
     };
 
@@ -250,7 +263,8 @@ export const createAccountHandler = ({
             respondJson(res, 403, { error: 'Демо-аккаунты выключены на этом сервере.' });
             return;
           }
-          startSession(service.demoLogin(body.account));
+          const result = service.demoLogin(body.account, { owner: parseCookies(req.headers.cookie)[DEMO_OWNER_COOKIE] });
+          startSession(result, 200, [cookie(req, DEMO_OWNER_COOKIE, result.owner, DEMO_OWNER_MAX_AGE_S)]);
           return;
         }
         case 'logout': {
@@ -279,6 +293,11 @@ export const createAccountHandler = ({
           return;
         }
         service.deleteAccount(user);
+        try {
+          await onAccountDeleted(user.id);
+        } catch (error) {
+          logger.error('account.forget_bookings_failed', error);
+        }
         logger.event('account.deleted', { status: 'ok' });
         res.setHeader('Set-Cookie', sessionCookie(req, '', 0));
         respondJson(res, 200, { user: null, favorites: [], features: flags });
@@ -316,10 +335,6 @@ export const getDefaultAccountService = async () => {
       });
       const service = createAccountService({ store, isKnownPlan: (planId) => KNOWN_PLANS.has(planId) });
       service.purgeExpiredSessions();
-      if (process.env.DEMO_DATA === 'on') {
-        const created = service.seedDemoAccounts();
-        if (created > 0) logger.event('account.demo_seeded', { count: created });
-      }
       return service;
     } catch (error) {
       logger.error('account.store_failed', error);
@@ -327,6 +342,14 @@ export const getDefaultAccountService = async () => {
     }
   })();
   return defaultService;
+};
+
+/** Пользователь кабинета по cookie запроса или null (кабинет выключен, гость, сессия истекла). */
+export const currentAccountUser = async (req, getService = getDefaultAccountService) => {
+  const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+  if (!token) return null;
+  const service = await getService();
+  return service ? service.sessionUser(token) : null;
 };
 
 export default createAccountHandler({ getService: getDefaultAccountService });

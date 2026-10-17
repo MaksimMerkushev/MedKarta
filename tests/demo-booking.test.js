@@ -249,7 +249,7 @@ describe('Демо-запись: HTTP /api/demo/*', { skip: !DatabaseSync && 'н
     const index = await getDemoCatalog();
     const store = createBookingStore({ DatabaseSync, file: ':memory:', index, now: () => NOW });
     service = createDemoBookingService({ index, store, getEngine: async () => null, now: () => NOW });
-    const handler = createDemoBookingHandler({ getService: async () => service, searchLimit: unlimited, readLimit: unlimited, writeLimit: unlimited });
+    const handler = createDemoBookingHandler({ getService: async () => service, getAccountUser: async () => null, searchLimit: unlimited, readLimit: unlimited, writeLimit: unlimited });
     server = http.createServer((req, res) => handler(req, res));
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     port = server.address().port;

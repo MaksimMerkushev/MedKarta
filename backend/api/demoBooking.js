@@ -10,11 +10,14 @@
  *   POST /api/demo/release           — снять своё удержание
  *   POST /api/demo/bookings          — записаться (идемпотентно)
  *   POST /api/demo/bookings/cancel   — отменить запись
- *   POST /api/demo/bookings/lookup   — состояние своих записей
+ *   POST /api/demo/bookings/lookup   — состояние своих записей по номерам и токенам
+ *   GET  /api/demo/bookings/mine     — записи вошедшего пользователя
  *
  * Это симуляция: ничего не уходит в МИС, клиники, страховые и уведомления.
- * Персональных данных пациента нет ни в запросах, ни в базе. Точку
- * отправления сервер получает так же, как /api/route, и не пишет её никуда.
+ * Персональных данных пациента нет ни в запросах, ни в базе. Запись, сделанная
+ * из личного кабинета, привязана к его id: её видит только этот аккаунт, а у
+ * гостя записи живут в браузере. Точку отправления сервер получает так же,
+ * как /api/route, и не пишет её никуда.
  */
 
 import path from 'node:path';
@@ -25,6 +28,7 @@ import { getDemoCatalog } from '../demo/catalog.js';
 import { createDemoSearch } from '../demo/search.js';
 import { addDays, demoNow, isDay, moscowDay, moscowParts } from '../demo/time.js';
 import { readBody, respondJson, verifyOrigin } from '../http/request.js';
+import { currentAccountUser } from './account.js';
 import { createRateLimiter, getClientIp } from '../http/rateLimit.js';
 import { logger } from '../observability/safeLogger.js';
 
@@ -44,6 +48,7 @@ const ROUTES = new Map([
   ['/api/demo/bookings', { POST: 'book' }],
   ['/api/demo/bookings/cancel', { POST: 'cancel' }],
   ['/api/demo/bookings/lookup', { POST: 'lookup' }],
+  ['/api/demo/bookings/mine', { GET: 'mine' }],
 ]);
 export const DEMO_BOOKING_PATHS = Object.freeze([...ROUTES.keys()]);
 
@@ -140,6 +145,7 @@ export const createDemoBookingHandler = ({
   searchLimit = defaultSearchLimit,
   readLimit = defaultReadLimit,
   writeLimit = defaultWriteLimit,
+  getAccountUser = currentAccountUser,
 } = {}) =>
   async function demoBookingHandler(req, res) {
     const url = req.originalUrl || req.url;
@@ -151,14 +157,14 @@ export const createDemoBookingHandler = ({
       return;
     }
 
-    const limiter = operation === 'search' ? searchLimit : operation === 'slots' || operation === 'lookup' ? readLimit : writeLimit;
+    const limiter = operation === 'search' ? searchLimit : ['slots', 'lookup', 'mine'].includes(operation) ? readLimit : writeLimit;
     const limit = limiter(getClientIp(req));
     if (!limit.allowed) {
       res.setHeader('Retry-After', String(limit.retryAfterSeconds));
       respondJson(res, 429, { error: 'Слишком много запросов. Подождите немного.' });
       return;
     }
-    if (operation !== 'slots' && !isTrustedWrite(req)) {
+    if (req.method !== 'GET' && !isTrustedWrite(req)) {
       respondJson(res, 403, { error: 'Запрос отклонён.' });
       return;
     }
@@ -184,6 +190,15 @@ export const createDemoBookingHandler = ({
     }
 
     const at = service.now();
+    // Кабинет недоступен или сломан — запись работает как у гостя.
+    const accountUser = async () => {
+      try {
+        return await getAccountUser(req);
+      } catch (error) {
+        logger.error('demo.account_lookup_failed', error);
+        return null;
+      }
+    };
     try {
       switch (operation) {
         case 'search': {
@@ -241,8 +256,10 @@ export const createDemoBookingHandler = ({
         }
         case 'book': {
           const planId = typeof body.planId === 'string' && service.index.plans.has(body.planId) ? body.planId : null;
-          const booking = service.store.book({ slotId: body.slotId, holdToken: body.holdToken || null, idempotencyKey: body.idempotencyKey, planId, at });
+          const owner = await accountUser();
+          const booking = service.store.book({ slotId: body.slotId, holdToken: body.holdToken || null, idempotencyKey: body.idempotencyKey, planId, accountId: owner?.id || null, at });
           logger.event('demo.booking', { status: booking.repeated ? 'repeated' : 'created' });
+          // owned — запись привязана к кабинету; иначе номер и код отмены хранит браузер.
           respondJson(res, booking.repeated ? 200 : 201, { booking: service.describe(booking) });
           return;
         }
@@ -255,6 +272,15 @@ export const createDemoBookingHandler = ({
         case 'lookup': {
           const items = Array.isArray(body.items) ? body.items : [];
           respondJson(res, 200, { bookings: service.store.lookup({ items, at }).map((item) => (item.found ? service.describe(item) : item)) });
+          return;
+        }
+        case 'mine': {
+          const owner = await accountUser();
+          if (!owner) {
+            respondJson(res, 401, { error: 'Войдите в личный кабинет.' });
+            return;
+          }
+          respondJson(res, 200, { bookings: service.store.listForAccount({ accountId: owner.id, at }).map(service.describe) });
           return;
         }
         default:

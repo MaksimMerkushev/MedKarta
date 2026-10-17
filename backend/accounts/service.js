@@ -14,10 +14,11 @@ import { hashPassword, PasswordBusyError, passwordProblem, verifyPassword } from
 export const ACCOUNT_LIMITS = Object.freeze({
   SESSION_TTL_MS: 30 * 24 * 60 * 60 * 1000,
   MAX_SESSIONS_PER_USER: 10,
-  // Демо-аккаунт открывают сразу многие (зал на питче): потолок «10 входов»
-  // выкидывал бы зрителей друг у друга. Взамен демо-сессия короче.
   DEMO_SESSION_TTL_MS: 12 * 60 * 60 * 1000,
-  MAX_DEMO_SESSIONS: 2000,
+  // Копия демо-аккаунта живёт, пока браузер к ней возвращается; потолок
+  // числа копий защищает базу от входов в цикле.
+  DEMO_COPY_TTL_MS: 30 * 24 * 60 * 60 * 1000,
+  MAX_DEMO_COPIES: 10_000,
   MAX_FAVORITES: 500,
   MAX_NAME: 60,
   MAX_EMAIL: 254,
@@ -41,6 +42,10 @@ const fail = (code, status, message) => {
  * Демо-аккаунты — вымышленные люди с программами ДМС из демо-набора.
  * Пароля у них нет: войти можно только кнопкой «Войти как …», и только
  * когда на сервере включён DEMO_DATA. Избранное — id демо-врачей.
+ *
+ * Каждый браузер получает свою копию каждого демо-аккаунта (cookie
+ * mk_demo): избранное, программа ДМС и записи одного зрителя не видны
+ * другому, а после выхода и повторного входа в том же браузере — на месте.
  */
 export const DEMO_ACCOUNTS = Object.freeze([
   {
@@ -77,6 +82,7 @@ export const DEMO_ACCOUNTS = Object.freeze([
   },
 ]);
 
+const DEMO_OWNER = /^[A-Za-z0-9_-]{32,64}$/;
 const EMAIL = /^[^\s@<>()[\]\\,;:"]{1,64}@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}$/iu;
 const PLAN_ID = /^[a-z0-9][a-z0-9-]{1,63}$/;
 // eslint-disable-next-line no-control-regex
@@ -112,12 +118,15 @@ export const decodeItemId = (stored) => {
 
 const hashToken = (token) => createHash('sha256').update(token).digest('hex');
 
+const isDemoUser = (user) => Boolean(user.demoTemplate);
+
 /** То, что уходит в браузер: без хэша пароля и служебных полей. */
 export const publicUser = (user) => ({
-  email: user.email,
+  // У копии демо-аккаунта служебный email — показываем адрес шаблона.
+  email: user.demoTemplate ? DEMO_ACCOUNTS.find((account) => account.key === user.demoTemplate)?.email || user.email : user.email,
   displayName: user.displayName,
   dmsPlanId: user.dmsPlanId || null,
-  isDemo: Boolean(user.demoKey),
+  isDemo: isDemoUser(user),
   createdAt: new Date(user.createdAt).toISOString(),
 });
 
@@ -133,13 +142,13 @@ export const createAccountService = ({ store, isKnownPlan = () => false, now = (
   const startSession = (user) => {
     const token = randomBytes(32).toString('base64url');
     const created = now();
-    const ttl = user.demoKey ? ACCOUNT_LIMITS.DEMO_SESSION_TTL_MS : ACCOUNT_LIMITS.SESSION_TTL_MS;
+    const ttl = isDemoUser(user) ? ACCOUNT_LIMITS.DEMO_SESSION_TTL_MS : ACCOUNT_LIMITS.SESSION_TTL_MS;
     store.createSession({
       tokenHash: hashToken(token),
       userId: user.id,
       now: created,
       expiresAt: created + ttl,
-      maxPerUser: user.demoKey ? ACCOUNT_LIMITS.MAX_DEMO_SESSIONS : ACCOUNT_LIMITS.MAX_SESSIONS_PER_USER,
+      maxPerUser: ACCOUNT_LIMITS.MAX_SESSIONS_PER_USER,
     });
     return { token, expiresAt: created + ttl };
   };
@@ -197,21 +206,42 @@ export const createAccountService = ({ store, isKnownPlan = () => false, now = (
       return { user: publicUser(user), favorites: favoritesOf(user.id), session: startSession(user) };
     },
 
-    /*
-     * Демо-аккаунт общий для всех, кто смотрит демо. Каждый вход возвращает
-     * его к исходной программе ДМС и избранному: следующий зритель не должен
-     * видеть то, что успел поменять предыдущий.
+    /**
+     * Вход в копию демо-аккаунта этого браузера. Копии нет — она создаётся
+     * из шаблона; есть — возвращается со всеми изменениями.
+     *
+     * @param {string} key ключ шаблона (DEMO_ACCOUNTS)
+     * @param {{owner?: string}} [options] токен браузера из cookie mk_demo
+     * @returns {{user: object, favorites: Array, session: object, owner: string}}
+     *   owner — токен браузера: новый, если прежнего не было или он испорчен
      */
-    demoLogin(key) {
+    demoLogin(key, { owner } = {}) {
       const seed = DEMO_ACCOUNTS.find((account) => account.key === key);
-      const user = seed ? store.getUserByDemoKey(seed.key) : null;
-      if (!user) fail('unknown_demo', 404, 'Такого демо-аккаунта нет.');
+      if (!seed) fail('unknown_demo', 404, 'Такого демо-аккаунта нет.');
+      const ownerToken = typeof owner === 'string' && DEMO_OWNER.test(owner) ? owner : randomBytes(32).toString('base64url');
+      const ownerHash = hashToken(`demo-owner|${ownerToken}`);
       const stamp = now();
-      store.updateDisplayName(user.id, seed.displayName, stamp);
-      store.updateDmsPlan(user.id, seed.dmsPlanId && isKnownPlan(seed.dmsPlanId) ? seed.dmsPlanId : null, stamp);
-      store.replaceFavorites(user.id, seed.favorites.map(encodeItemId).filter(Boolean), stamp);
+      let user = store.getDemoCopy(seed.key, ownerHash);
+      if (user) {
+        store.touchUser(user.id, stamp);
+      } else {
+        store.purgeDemoCopies(stamp - ACCOUNT_LIMITS.DEMO_COPY_TTL_MS);
+        const excess = store.countDemoCopies() - ACCOUNT_LIMITS.MAX_DEMO_COPIES + 1;
+        if (excess > 0) store.deleteOldestDemoCopies(excess);
+        const id = newId();
+        user = store.createUser({
+          id,
+          email: `demo-${id}@medkarta.example`,
+          displayName: seed.displayName,
+          dmsPlanId: seed.dmsPlanId && isKnownPlan(seed.dmsPlanId) ? seed.dmsPlanId : null,
+          demoTemplate: seed.key,
+          demoOwner: ownerHash,
+          now: stamp,
+        });
+        store.addFavorites(user.id, seed.favorites.map(encodeItemId).filter(Boolean), stamp);
+      }
       const fresh = store.getUserById(user.id);
-      return { user: publicUser(fresh), favorites: favoritesOf(fresh.id), session: startSession(fresh) };
+      return { user: publicUser(fresh), favorites: favoritesOf(fresh.id), session: startSession(fresh), owner: ownerToken };
     },
 
     /** Пользователь по токену из cookie или null. Истёкшая сессия удаляется. */
@@ -236,8 +266,7 @@ export const createAccountService = ({ store, isKnownPlan = () => false, now = (
 
     updateProfile(user, { displayName, dmsPlanId } = {}) {
       const stamp = now();
-      // Имя демо-аккаунта видят все зрители демо: менять его нельзя.
-      if (displayName !== undefined && user.demoKey) fail('demo_account', 403, 'Имя демо-аккаунта не меняется.');
+      if (displayName !== undefined && isDemoUser(user)) fail('demo_account', 403, 'Имя демо-аккаунта не меняется.');
       if (displayName !== undefined) {
         const name = cleanDisplayName(displayName);
         if (!name) fail('bad_name', 400, 'Имя не может быть пустым.');
@@ -267,32 +296,15 @@ export const createAccountService = ({ store, isKnownPlan = () => false, now = (
     },
 
     deleteAccount(user) {
-      if (user.demoKey) fail('demo_account', 403, 'Демо-аккаунт удалить нельзя — он общий для показа.');
+      if (isDemoUser(user)) fail('demo_account', 403, 'Демо-аккаунт удалить нельзя.');
       store.deleteUser(user.id);
     },
 
-    /**
-     * Создаёт недостающие демо-аккаунты (идемпотентно). Уже созданные не
-     * трогает: изменения, сделанные во время показа, переживают перезапуск.
-     */
-    seedDemoAccounts(accounts = DEMO_ACCOUNTS) {
-      let created = 0;
-      for (const account of accounts) {
-        if (store.getUserByDemoKey(account.key) || store.getUserByEmail(account.email)) continue;
-        const user = store.createUser({
-          id: newId(),
-          email: account.email,
-          displayName: account.displayName,
-          dmsPlanId: account.dmsPlanId && isKnownPlan(account.dmsPlanId) ? account.dmsPlanId : null,
-          demoKey: account.key,
-          now: now(),
-        });
-        store.addFavorites(user.id, account.favorites.map(encodeItemId).filter(Boolean), now());
-        created += 1;
-      }
-      return created;
+    /** Убирает истёкшие сессии и копии демо-аккаунтов, к которым давно не возвращались. */
+    purgeExpiredSessions() {
+      const stamp = now();
+      store.purgeDemoCopies(stamp - ACCOUNT_LIMITS.DEMO_COPY_TTL_MS);
+      return store.purgeExpiredSessions(stamp);
     },
-
-    purgeExpiredSessions: () => store.purgeExpiredSessions(now()),
   });
 };
