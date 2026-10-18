@@ -3,26 +3,28 @@
  *
  * Личный кабинет: вход, демо-аккаунты, программа ДМС, избранные врачи.
  */
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   CalendarClock,
   CircleCheck,
-  Eye,
-  EyeOff,
   Heart,
   Info,
   Loader2,
   LogIn,
   LogOut,
-  Mail,
   MapPin,
   ShieldCheck,
   ShieldOff,
   Sparkles,
   Trash2,
-  UserPlus,
   X,
+  LayoutDashboard,
+  UserRound,
 } from 'lucide-react';
+
+import { LoginForm } from './ui/auth';
+import { Avatar as PhotoAvatar } from './ui/kit';
+import { Link } from './ui/router';
 
 const INSURED_LABEL = { adult: 'для взрослых', child: 'детская', family: 'семейная' };
 
@@ -71,26 +73,11 @@ const Section = ({ icon, title, aside, children }) => {
   );
 };
 
-const inputClass =
-  'w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-[14px] text-slate-800 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-200 dark:border-slate-600 dark:bg-slate-900 dark:text-white dark:focus:ring-blue-900';
-
 /* ---------- Гость ---------- */
 
 const GuestView = ({ account, onBusy }) => {
-  const [mode, setMode] = useState('login');
-  const [email, setEmail] = useState('');
-  const [secret, setSecret] = useState('');
-  const [displayName, setDisplayName] = useState('');
-  const [consent, setConsent] = useState(false);
-  const [showSecret, setShowSecret] = useState(false);
   const [error, setError] = useState('');
   const [pending, setPending] = useState(null);
-  const ids = useId();
-  const emailRef = useRef(null);
-
-  useEffect(() => {
-    emailRef.current?.focus();
-  }, [mode]);
 
   const run = async (key, action) => {
     setError('');
@@ -103,15 +90,6 @@ const GuestView = ({ account, onBusy }) => {
     } finally {
       setPending(null);
       onBusy?.(false);
-    }
-  };
-
-  const submit = (event) => {
-    event.preventDefault();
-    if (mode === 'register') {
-      run('form', () => account.register({ email, password: secret, displayName, consent }));
-    } else {
-      run('form', () => account.login({ email, password: secret }));
     }
   };
 
@@ -128,10 +106,24 @@ const GuestView = ({ account, onBusy }) => {
 
   return (
     <div className="space-y-4">
+      <Section icon={LogIn} title="Вход по email">
+        <LoginForm
+          autoFocus
+          onLogin={async (credentials) => {
+            onBusy?.(true);
+            try {
+              await account.login(credentials);
+            } finally {
+              onBusy?.(false);
+            }
+          }}
+        />
+      </Section>
+
       {features.demo && features.demoAccounts?.length > 0 && (
         <Section icon={Sparkles} title="Демо-аккаунты">
           <p className="mb-3 text-[12.5px] leading-5 text-slate-500 dark:text-slate-400">
-            Вымышленные пользователи с программами ДМС — чтобы показать кабинет без регистрации.
+            Вымышленные пользователи с программами ДМС — чтобы посмотреть кабинет без аккаунта.
           </p>
           <ul className="grid gap-2">
             {features.demoAccounts.map((demo, index) => (
@@ -141,6 +133,7 @@ const GuestView = ({ account, onBusy }) => {
                   disabled={Boolean(pending)}
                   onClick={() => run(demo.key, () => account.loginDemo(demo.key))}
                   className="group flex w-full items-center gap-3 rounded-xl border border-slate-200 p-2.5 text-left transition hover:border-blue-300 hover:bg-blue-50/60 disabled:opacity-60 dark:border-slate-700 dark:hover:bg-slate-700/60"
+                  data-testid={`demo-login-${demo.key}`}
                 >
                   <Avatar name={demo.displayName} index={index} size="h-9 w-9 text-[13px]" />
                   <span className="min-w-0 flex-1">
@@ -156,101 +149,9 @@ const GuestView = ({ account, onBusy }) => {
               </li>
             ))}
           </ul>
+          {error && <p className="mt-2 rounded-xl bg-red-50 px-3 py-2 text-[12.5px] text-red-700 dark:bg-red-900/30 dark:text-red-200" role="alert">{error}</p>}
         </Section>
       )}
-
-      <Section icon={mode === 'register' ? UserPlus : LogIn} title={mode === 'register' ? 'Регистрация' : 'Вход по email'}>
-        {features.registration && (
-          <div className="mb-3 grid grid-cols-2 rounded-xl bg-slate-100 p-1 text-[13px] font-semibold dark:bg-slate-900" role="tablist" aria-label="Вход или регистрация">
-            {[
-              ['login', 'Вход'],
-              ['register', 'Регистрация'],
-            ].map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                role="tab"
-                aria-selected={mode === value}
-                onClick={() => {
-                  setMode(value);
-                  setError('');
-                }}
-                className={`rounded-lg py-1.5 transition ${mode === value ? 'bg-white text-blue-700 shadow-sm dark:bg-slate-700 dark:text-white' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'}`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
-        <form className="space-y-3" onSubmit={submit} noValidate>
-          {mode === 'register' && (
-            <div>
-              <label htmlFor={`${ids}-name`} className="mb-1 block text-[12px] font-semibold text-slate-600 dark:text-slate-300">Как к вам обращаться</label>
-              <input id={`${ids}-name`} className={inputClass} value={displayName} maxLength={60} autoComplete="given-name" onChange={(event) => setDisplayName(event.target.value)} />
-            </div>
-          )}
-          <div>
-            <label htmlFor={`${ids}-email`} className="mb-1 block text-[12px] font-semibold text-slate-600 dark:text-slate-300">Email</label>
-            <div className="relative">
-              <Mail size={16} className="pointer-events-none absolute left-3 top-3 text-slate-400" aria-hidden="true" />
-              <input
-                id={`${ids}-email`}
-                ref={emailRef}
-                type="email"
-                inputMode="email"
-                autoComplete="email"
-                maxLength={254}
-                className={`${inputClass} pl-9`}
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-              />
-            </div>
-          </div>
-          <div>
-            <label htmlFor={`${ids}-secret`} className="mb-1 block text-[12px] font-semibold text-slate-600 dark:text-slate-300">Пароль</label>
-            <div className="relative">
-              <input
-                id={`${ids}-secret`}
-                type={showSecret ? 'text' : 'password'}
-                autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
-                maxLength={128}
-                className={`${inputClass} pr-11`}
-                value={secret}
-                onChange={(event) => setSecret(event.target.value)}
-              />
-              <button
-                type="button"
-                onClick={() => setShowSecret((current) => !current)}
-                className="absolute right-1.5 top-1.5 flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700"
-                aria-label={showSecret ? 'Скрыть пароль' : 'Показать пароль'}
-              >
-                {showSecret ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
-              </button>
-            </div>
-            {mode === 'register' && <p className="mt-1 text-[11.5px] text-slate-400">Не короче 8 символов и не только цифры.</p>}
-          </div>
-          {mode === 'register' && (
-            <label className="flex items-start gap-2 text-[12px] leading-5 text-slate-600 dark:text-slate-300">
-              <input type="checkbox" className="mt-0.5 h-4 w-4 rounded border-slate-300 accent-blue-600" checked={consent} onChange={(event) => setConsent(event.target.checked)} />
-              <span>Согласен на обработку email, имени, программы ДМС и избранного для работы кабинета. Историю запросов к ассистенту мы не храним.</span>
-            </label>
-          )}
-          {error && (
-            <p className="rounded-xl bg-red-50 px-3 py-2 text-[12.5px] text-red-700 dark:bg-red-900/30 dark:text-red-200" role="alert">{error}</p>
-          )}
-          <button
-            type="submit"
-            disabled={Boolean(pending)}
-            className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 py-2.5 text-[14px] font-semibold text-white shadow-sm transition hover:brightness-110 disabled:opacity-60"
-          >
-            {pending === 'form' ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : mode === 'register' ? <UserPlus size={16} aria-hidden="true" /> : <LogIn size={16} aria-hidden="true" />}
-            {mode === 'register' ? 'Создать аккаунт' : 'Войти'}
-          </button>
-          {!features.registration && (
-            <p className="text-center text-[11.5px] text-slate-400">Регистрация откроется после запуска — пока войдите в демо-аккаунт.</p>
-          )}
-        </form>
-      </Section>
     </div>
   );
 };
@@ -403,9 +304,27 @@ const UserView = ({ account, insurance, today, planId, onSelectPlan, favorites, 
       <div className="rounded-2xl bg-slate-50 p-4 text-[12px] leading-5 text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
         <p className="mb-3 flex gap-2">
           <Info size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
-          <span>В аккаунте хранятся только email, имя, программа ДМС и избранное. Запросы к ассистенту и ваше местоположение не сохраняются.</span>
+          <span>В аккаунте хранятся email, имя, роль, программа ДМС, избранное и история входов. Запросы к ассистенту и ваше местоположение не сохраняются.</span>
         </p>
         <div className="flex flex-wrap gap-2">
+          <Link
+            to="/profile"
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+            data-testid="account-profile-link"
+          >
+            <UserRound size={15} aria-hidden="true" />
+            Профиль
+          </Link>
+          {user.permissions?.includes('admin.access') && (
+            <Link
+              to="/admin"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-[13px] font-semibold text-violet-700 hover:bg-violet-100 dark:border-violet-800 dark:bg-violet-950/40 dark:text-violet-200"
+              data-testid="account-admin-link"
+            >
+              <LayoutDashboard size={15} aria-hidden="true" />
+              Админ-панель
+            </Link>
+          )}
           <button
             type="button"
             onClick={() => run('logout', () => account.logout())}
@@ -414,7 +333,7 @@ const UserView = ({ account, insurance, today, planId, onSelectPlan, favorites, 
             {pending === 'logout' ? <Loader2 size={15} className="animate-spin" aria-hidden="true" /> : <LogOut size={15} aria-hidden="true" />}
             Выйти
           </button>
-          {!user.isDemo && (confirmDelete ? (
+          {!user.isDemo && user.role === 'user' && (confirmDelete ? (
             <button
               type="button"
               onClick={() => run('delete', () => account.removeAccount())}
@@ -474,11 +393,19 @@ export default function AccountPanel({ account, insurance, today, planId, onSele
           <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-white/70">МедКарта</div>
           {user ? (
             <div className="mt-3 flex items-center gap-3">
-              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white/20 text-[17px] font-bold ring-2 ring-white/30">{initialsOf(user.displayName)}</span>
+              {user.avatarUrl ? (
+                <PhotoAvatar name={user.displayName} src={user.avatarUrl} seed={user.id} size={48} className="ring-2 ring-white/30" />
+              ) : (
+                <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white/20 text-[17px] font-bold ring-2 ring-white/30">{initialsOf(user.displayName)}</span>
+              )}
               <div className="min-w-0">
                 <h2 className="truncate text-[19px] font-extrabold leading-tight">{user.displayName}</h2>
                 <div className="truncate text-[12.5px] text-white/75">{user.email}</div>
-                {user.isDemo && <span className="mt-1 inline-block rounded-full bg-white/20 px-2 py-0.5 text-[10.5px] font-bold uppercase tracking-wide">Демо-аккаунт</span>}
+                {user.isDemo ? (
+                  <span className="mt-1 inline-block rounded-full bg-white/20 px-2 py-0.5 text-[10.5px] font-bold uppercase tracking-wide">Демо-аккаунт</span>
+                ) : (
+                  <span className="mt-1 inline-block rounded-full bg-white/20 px-2 py-0.5 text-[10.5px] font-bold uppercase tracking-wide">{user.roleLabel}</span>
+                )}
               </div>
             </div>
           ) : (

@@ -33,10 +33,11 @@ export const setDemoPreference = (enabled) => {
 
 /**
  * Флаги сервера: демо-набор, симуляция записи и скрыты ли государственные
- * клиники (в демо по умолчанию скрыты, PUBLIC_CLINICS=on — показать).
+ * клиники (в демо по умолчанию скрыты, PUBLIC_CLINICS=on — показать), плюс
+ * публичные настройки из админ-панели.
  */
 export const fetchServerConfig = async () => {
-  const fallback = { demo: false, booking: false, publicClinics: true };
+  const fallback = { demo: false, booking: false, publicClinics: true, settings: null };
   try {
     const response = await fetch('/api/config', { credentials: 'same-origin' });
     if (!response.ok) return fallback;
@@ -45,6 +46,8 @@ export const fetchServerConfig = async () => {
       demo: payload?.demo === true,
       booking: payload?.booking === true,
       publicClinics: payload?.publicClinics !== false,
+      // Публичные настройки из админ-панели: название, контакты, сообщение о работах.
+      settings: payload?.settings && typeof payload.settings === 'object' ? payload.settings : null,
     };
   } catch {
     return fallback;

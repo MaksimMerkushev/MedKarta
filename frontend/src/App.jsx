@@ -49,6 +49,10 @@ import {
   ShieldPlus,
   FlaskConical,
   CircleUserRound,
+  LayoutDashboard,
+  LogIn,
+  LogOut,
+  Wrench,
 } from 'lucide-react';
 import { doctorsData } from '@data/doctors.legacy.js';
 import { verifiedDoctors } from '@data/doctors';
@@ -69,6 +73,9 @@ import PlaceDetailsModal from './PlaceDetailsModal';
 import DemoDoctorSchedule from './DemoDoctorSchedule';
 import { fetchAccountBookings, readMyBookings, toStoredBooking, writeMyBookings } from './services/demoBooking';
 import { resetAssistantSession } from './services/ai';
+import { ForcedPasswordChange } from './ui/auth';
+import { Avatar } from './ui/kit';
+import { Link } from './ui/router';
 import { coverageBadge, coverageFor, findPlan, findProvider } from '@shared/dms.js';
 import { track } from './services/analytics';
 import { buildExternalRouteUrl, EXTERNAL_MODE_BY_TRAVEL_MODE } from './externalMaps';
@@ -1225,11 +1232,17 @@ export default function App() {
    * кнопкой входа; после входа из него чат открывается сам.
    */
   const [isChatNoticeOpen, setIsChatNoticeOpen] = useState(false);
+  // Выключен в настройках админ-панели (значение приходит из /api/config ниже).
+  const assistantDisabledRef = useRef(false);
   const [chatAfterSignIn, setChatAfterSignIn] = useState(false);
   const canUseAssistant = account.status === 'user' || account.features.chatRequiresAccount === false;
   const toggleAIAssistant = useCallback(() => {
     if (isAIAssistantOpen) {
       setIsAIAssistantOpen(false);
+      return;
+    }
+    if (assistantDisabledRef.current) {
+      showToast('Ассистент временно отключён администратором. Поиск и карта работают.', 'warning');
       return;
     }
     if (!canUseAssistant) {
@@ -1238,7 +1251,7 @@ export default function App() {
     }
     setIsAIAssistantMounted(true);
     setIsAIAssistantOpen(true);
-  }, [isAIAssistantOpen, canUseAssistant]);
+  }, [isAIAssistantOpen, canUseAssistant, showToast]);
   const signInForAssistant = useCallback(() => {
     setIsChatNoticeOpen(false);
     setChatAfterSignIn(true);
@@ -1842,11 +1855,20 @@ export default function App() {
 
   // --- Демо-режим и ДМС ---------------------------------------------------
 
+  // Публичные настройки из админ-панели (название, сообщение о работах, ассистент).
+  const [siteSettings, setSiteSettings] = useState(null);
+  const [maintenanceDismissed, setMaintenanceDismissed] = useState(false);
+  useEffect(() => {
+    assistantDisabledRef.current = siteSettings?.assistant === false;
+    if (siteSettings?.appName && siteSettings.appName !== 'МедКарта') document.title = `${siteSettings.appName} — врачи и клиники Казани`;
+  }, [siteSettings]);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const preference = readDemoPreference();
       const config = await fetchServerConfig();
+      if (!cancelled) setSiteSettings(config.settings);
       const enabled = preference ?? config.demo;
       if (!enabled || cancelled) return;
       try {
@@ -3837,7 +3859,7 @@ export default function App() {
                 <div className="flex min-w-0 items-center gap-2">
                   <MapPin size={24} className="sidebar-title-pin shrink-0 text-blue-600 dark:text-blue-400" aria-hidden="true" />
                   <div className="min-w-0">
-                    <h1 className="sidebar-title truncate text-[23px] font-extrabold leading-none tracking-tight text-blue-600 dark:text-blue-400">МедКарта</h1>
+                    <h1 className="sidebar-title truncate text-[23px] font-extrabold leading-none tracking-tight text-blue-600 dark:text-blue-400">{siteSettings?.appName || 'МедКарта'}</h1>
                     <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Казань</p>
                   </div>
                 </div>
@@ -4319,6 +4341,55 @@ export default function App() {
       )}
 
       <main className="relative flex-1 bg-slate-100 dark:bg-slate-900">
+        {/* Кто вошёл: аватар, имя и роль, профиль, админ-панель (сотрудникам), выход. */}
+        <div
+          className={`absolute z-[1001] ${isMobile ? 'right-3' : routeTargets.length > 0 ? 'right-[352px] top-6' : 'right-6 top-6'}`}
+          style={isMobile ? { top: 'calc(env(safe-area-inset-top, 0px) + 30px)' } : undefined}
+        >
+          {account.status === 'user' && account.user ? (
+            isMobile ? (
+              <button type="button" onClick={() => setIsAccountOpen(true)} className="block rounded-full shadow-lg ring-2 ring-white dark:ring-slate-800" aria-label={`Личный кабинет: ${account.user.displayName}`} data-testid="user-chip">
+                <Avatar name={account.user.displayName} src={account.user.avatarUrl} seed={account.user.id} size={38} />
+              </button>
+            ) : (
+              <div className="flex items-center gap-0.5 rounded-2xl border border-slate-200 bg-white/95 py-1 pl-1 pr-1 shadow-lg backdrop-blur dark:border-slate-700 dark:bg-slate-800/95" data-testid="user-chip">
+                <button type="button" onClick={() => setIsAccountOpen(true)} className="flex items-center gap-2 rounded-xl px-1.5 py-1 text-left hover:bg-slate-100 dark:hover:bg-slate-700" title="Личный кабинет">
+                  <Avatar name={account.user.displayName} src={account.user.avatarUrl} seed={account.user.id} size={30} />
+                  <span className="max-w-[170px] leading-tight">
+                    <span className="block truncate text-[13px] font-bold text-slate-800 dark:text-white" data-testid="user-chip-name">{account.user.displayName}</span>
+                    <span className="block truncate text-[11px] text-slate-500 dark:text-slate-400">{account.user.isDemo ? 'Демо-аккаунт' : account.user.roleLabel}</span>
+                  </span>
+                </button>
+                <span className="mx-0.5 h-6 w-px bg-slate-200 dark:bg-slate-700" aria-hidden="true" />
+                <Link to="/profile" className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-[12.5px] font-semibold text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700" data-testid="user-chip-profile">
+                  <UserRound size={15} aria-hidden="true" />Профиль
+                </Link>
+                {account.user.permissions?.includes('admin.access') && (
+                  <Link to="/admin" className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-[12.5px] font-semibold text-violet-700 hover:bg-violet-50 dark:text-violet-300 dark:hover:bg-violet-950/40" data-testid="user-chip-admin">
+                    <LayoutDashboard size={15} aria-hidden="true" />Админ-панель
+                  </Link>
+                )}
+                <button type="button" onClick={() => account.logout()} className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-[12.5px] font-semibold text-slate-600 hover:bg-red-50 hover:text-red-600 dark:text-slate-300 dark:hover:bg-red-950/40" data-testid="user-chip-logout">
+                  <LogOut size={15} aria-hidden="true" />Выйти
+                </button>
+              </div>
+            )
+          ) : account.status === 'guest' && account.features.available ? (
+            <button type="button" onClick={() => setIsAccountOpen(true)} className="inline-flex h-10 items-center gap-1.5 rounded-2xl border border-slate-200 bg-white/95 px-3.5 text-[13px] font-semibold text-slate-700 shadow-lg backdrop-blur hover:bg-white dark:border-slate-700 dark:bg-slate-800/95 dark:text-slate-200" data-testid="sign-in-button">
+              <LogIn size={16} aria-hidden="true" />Войти
+            </button>
+          ) : null}
+        </div>
+
+        {siteSettings?.maintenance && !maintenanceDismissed && (
+          <div role="status" className={`absolute left-1/2 z-[1002] flex w-[min(92%,560px)] -translate-x-1/2 items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50/95 px-4 py-2.5 text-[13px] leading-5 text-amber-900 shadow-lg backdrop-blur dark:border-amber-800 dark:bg-amber-950/90 dark:text-amber-100 ${isMobile ? 'top-[84px]' : 'top-[76px]'}`} data-testid="maintenance-banner">
+            <Wrench size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+            <span className="min-w-0 flex-1 whitespace-pre-line">{siteSettings.maintenance}</span>
+            <button type="button" onClick={() => setMaintenanceDismissed(true)} className="-mr-1 shrink-0 rounded-lg p-1 hover:bg-amber-100 dark:hover:bg-amber-900" aria-label="Скрыть сообщение">
+              <X size={15} aria-hidden="true" />
+            </button>
+          </div>
+        )}
         {!isMobile && routeTargets.length > 0 && isRoutePanelCollapsed && (
           <div
             className={`route-panel-slide-in absolute z-[1000] cursor-pointer ${isMobile ? 'left-3 right-3' : 'right-6 top-6'}`}
@@ -4648,6 +4719,16 @@ export default function App() {
       )}
 
       <Toast toast={toast} onDismiss={dismissToast} />
+      {account.status === 'user' && account.user?.mustChangePassword && (
+        <ForcedPasswordChange
+          user={account.user}
+          onDone={(user) => {
+            account.applyUser(user);
+            showToast('Пароль изменён. Добро пожаловать!', 'success');
+          }}
+          onLogout={account.logout}
+        />
+      )}
     </div>
   );
 }

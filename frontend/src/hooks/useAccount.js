@@ -14,7 +14,6 @@ import {
   loginAccount,
   loginDemoAccount,
   logoutAccount,
-  registerAccount,
   updateAccount,
   updateAccountFavorites,
 } from '../services/account';
@@ -82,7 +81,6 @@ export const useAccount = ({ onSignedIn, onSignedOut, onGuest } = {}) => {
   const expire = useCallback(() => signedOut('expired'), [signedOut]);
 
   const login = useCallback(async (credentials) => signedIn(await loginAccount(credentials)), [signedIn]);
-  const register = useCallback(async (form) => signedIn(await registerAccount(form)), [signedIn]);
   const loginDemo = useCallback(async (key) => signedIn(await loginDemoAccount(key)), [signedIn]);
 
   const logout = useCallback(async () => {
@@ -111,5 +109,10 @@ export const useAccount = ({ onSignedIn, onSignedOut, onGuest } = {}) => {
     return payload.favorites;
   }, [guarded]);
 
-  return { ...state, login, register, loginDemo, logout, expire, removeAccount, setPlan, syncFavorites };
+  // Профиль изменили на другой странице (имя, аватар, пароль) — обновить без входа заново.
+  const applyUser = useCallback((user) => {
+    if (user) setState((current) => (current.status === 'user' ? { ...current, user } : current));
+  }, []);
+
+  return { ...state, login, loginDemo, logout, expire, applyUser, removeAccount, setPlan, syncFavorites };
 };
