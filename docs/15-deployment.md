@@ -73,7 +73,7 @@ ls -lh data/graph/kazan.graph
 
 ```bash
 curl -s http://127.0.0.1:3001/api/config
-# {"demo":true,"booking":true,"publicClinics":false}
+# {"demo":true,"booking":true,"publicClinics":false,"settings":{"appName":"МедКарта",…}}
 ```
 
 ## Сервер (VPS)
@@ -133,14 +133,58 @@ cd /srv/medkarta/app && sudo -u medkarta git pull && sudo -u medkarta npm ci \
 Граф обновляется без перезапуска: замените файл — сервер подхватит его в
 течение 30 секунд ([09-routing-engine.md](09-routing-engine.md)).
 
+### Выпуск с аккаунтами и админ-панелью
+
+Первый выпуск, где база аккаунтов переходит на схему 3 (роли, статусы,
+журналы). Миграция необратима, поэтому порядок такой:
+
+1. **Копия базы до обновления** (сервис работает; на старом коде команды
+   `npm run accounts` ещё нет):
+
+   ```bash
+   sqlite3 /srv/medkarta/app/var/accounts/medkarta.sqlite ".backup '/backup/accounts-before-v3.sqlite'"
+   ```
+2. **Код и проверки:** `git pull`, `npm ci`, `npm test`, `npm run lint`,
+   `npm run build` — как в «Обновлении», но **без** перезапуска.
+3. **Перезапуск:** `sudo systemctl restart medkarta` — миграция применяется
+   при открытии базы; в журнале `server.started` — `action: accounts_ready`.
+   Прежние аккаунты получают роль «Пользователь», демо-аккаунты работают как
+   раньше.
+4. **Главный администратор** — в терминале сервера (пароль вводится вручную,
+   не отображается и в `.env` не попадает; сервер останавливать не нужно):
+
+   ```bash
+   cd /srv/medkarta/app && sudo -u medkarta npm run accounts -- bootstrap
+   ```
+
+   Вариант — один раз запустить сервис с `ADMIN_BOOTSTRAP_PASSWORD` в
+   окружении и сразу убрать переменную.
+5. **Проверка:** вход на `https://<домен>/admin`, дашборд открывается,
+   `npm run accounts -- status` показывает схему 3 и одного
+   суперадминистратора; `POST /api/auth/register` отвечает `404`.
+6. **Тестовые пользователи в production не создаются** (`seed-test-users`
+   откажется при `NODE_ENV=production`); настоящие аккаунты — в разделе
+   «Пользователи».
+7. **По желанию — доступ к `/admin` только из своих сетей** в nginx
+   (`location /admin` и `location /api/admin/` с `allow … ; deny all;`): второго
+   фактора у входа нет. Это изменение конфигурации сервера — делайте его
+   осознанно.
+
+Откат: остановить сервис, вернуть прежний код и файл базы из копии шага 1
+(`chmod 600`), запустить. Всё, что изменилось после копии, будет потеряно.
+
+Потеря доступа к админ-панели — `npm run accounts -- reset-password --email …`
+или `restore-admin --email …` на сервере ([accounts.md](accounts.md#потеря-доступа)).
+
 ### Резервные копии
 
 Раз в сутки на другую машину: `.env`, `data/doctors.full.js`, `data/graph/`,
 `data/collected/`, `var/analytics/`, базы `var/accounts/medkarta.sqlite` и
-`var/demo/booking.sqlite`. Горячая копия SQLite:
+`var/demo/booking.sqlite`. Горячая копия базы аккаунтов (целостный снимок
+через `VACUUM INTO`, права 600):
 
 ```bash
-sqlite3 var/accounts/medkarta.sqlite ".backup '/backup/accounts-$(date +%F).sqlite'"
+sudo -u medkarta npm run accounts -- backup --out /backup/accounts-$(date +%F).sqlite
 ```
 
 ### Перед выкладкой
@@ -153,6 +197,8 @@ sqlite3 var/accounts/medkarta.sqlite ".backup '/backup/accounts-$(date +%F).sqli
 5. `data/doctors.full.js` не попал в git: `git check-ignore data/doctors.full.js`.
 6. Граф на месте: `ls -lh data/graph/kazan.graph`.
 7. Обратный прокси, APM и Sentry не пишут тела запросов.
+8. `ADMIN_BOOTSTRAP_PASSWORD` нет в `.env` и окружении сервиса.
+9. Есть свежая копия базы аккаунтов.
 
 ## Модель за рубежом через прокси
 

@@ -21,7 +21,9 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
 | `server.fs.allow` / `deny` | только `frontend/`, `shared/`, `data/`, `node_modules/`; запрет `.env*`, ключей, `.git`, `var/`, `data/collected`, `data/review` | dev-сервер не отдаёт секреты |
 
 Ленивые чанки: `AIAssistant`, `AccountPanel`, `BookingDialog` подключаются
-через `React.lazy` в [App.jsx](../frontend/src/App.jsx). Демо-набор
+через `React.lazy` в [App.jsx](../frontend/src/App.jsx); админ-панель
+(`/admin…`, каждый раздел — свой чанк) и профиль (`/profile`) — в
+[Root.jsx](../frontend/src/Root.jsx), карта их код не загружает. Демо-набор
 загружается отдельным чанком из [demoMode.js](../frontend/src/demoMode.js).
 
 > Важно: если `data/doctors.full.js` существует, он попадает в бандл и
@@ -36,7 +38,8 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
 `devApiPlugin`):
 
 - пути: `/api/chat`, `/api/route`, `/api/travel-times`, `/api/events`,
-  `/api/config`, `/api/account`, `/api/auth`, `/api/demo`;
+  `/api/config`, `/api/account`, `/api/auth`, `/api/me`, `/api/admin`,
+  `/api/demo`;
 - переменные из `.env` переносятся в `process.env` только для сервера
   (список ключей задан в плагине);
 - **демо-режим включён по умолчанию**, если `DEMO_DATA` не задан;
@@ -58,7 +61,15 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
 | [PlaceDoctorList.jsx](../frontend/src/PlaceDoctorList.jsx), [placeList.js](../frontend/src/placeList.js) | окно маркера с сотнями врачей (поиск, группы) |
 | [SearchFilters.jsx](../frontend/src/SearchFilters.jsx) | панель фильтров |
 | [DmsPanel.jsx](../frontend/src/DmsPanel.jsx) | «Мой ДМС»: страховая и программа |
-| [AccountPanel.jsx](../frontend/src/AccountPanel.jsx), [hooks/useAccount.js](../frontend/src/hooks/useAccount.js) | личный кабинет |
+| [AccountPanel.jsx](../frontend/src/AccountPanel.jsx), [hooks/useAccount.js](../frontend/src/hooks/useAccount.js) | личный кабинет на карте; плашка пользователя «Аватар · Имя · Профиль · Выйти» — в [App.jsx](../frontend/src/App.jsx) |
+| [Root.jsx](../frontend/src/Root.jsx) | выбор приложения по пути: карта, `/profile` или `/admin…` |
+| [profile/ProfilePage.jsx](../frontend/src/profile/ProfilePage.jsx) | профиль: фото, имя, пароль, свои сессии, история входов |
+| [admin/AdminApp.jsx](../frontend/src/admin/AdminApp.jsx), [admin/pages/](../frontend/src/admin/pages/) | админ-панель: оболочка с меню по разрешениям, вход, разделы |
+| [admin/charts.jsx](../frontend/src/admin/charts.jsx) | графики дашборда на SVG: подсказка, клавиатура, таблица вместо графика |
+| [admin/api.js](../frontend/src/admin/api.js), [admin/model.js](../frontend/src/admin/model.js), [admin/common.jsx](../frontend/src/admin/common.jsx) | запросы к `/api/admin`, права и подписи журнала, общие окна |
+| [ui/kit.jsx](../frontend/src/ui/kit.jsx), [ui/format.js](../frontend/src/ui/format.js), [ui/hooks.js](../frontend/src/ui/hooks.js) | общие компоненты профиля и панели, даты по Москве, уведомления, тема, загрузка данных |
+| [ui/auth.jsx](../frontend/src/ui/auth.jsx) | форма входа, смена пароля, обязательная смена временного пароля |
+| [ui/navigation.js](../frontend/src/ui/navigation.js), [ui/router.jsx](../frontend/src/ui/router.jsx) | переходы без перезагрузки (`history.pushState`) и ссылка `Link` |
 | [ChatLoginNotice.jsx](../frontend/src/ChatLoginNotice.jsx) | предупреждение гостю вместо чата: ассистент только после входа |
 | [FeedbackWidgets.jsx](../frontend/src/FeedbackWidgets.jsx) | «Нашли, куда обратиться?», «Данные неверны» |
 | [ErrorBoundary.jsx](../frontend/src/ErrorBoundary.jsx) | понятный экран вместо белого при исключении |
@@ -116,7 +127,8 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
 | [services/travelTimes.js](../frontend/src/services/travelTimes.js) | `POST /api/travel-times` | 12 с |
 | [App.jsx](../frontend/src/App.jsx) | `POST /api/route` | — |
 | [services/demoBooking.js](../frontend/src/services/demoBooking.js) | `/api/demo/*` | 15 с |
-| [services/account.js](../frontend/src/services/account.js) | `/api/account`, `/api/auth/*` | — |
+| [services/account.js](../frontend/src/services/account.js) | `/api/account`, `/api/auth/*`, `/api/me/*` | — |
+| [admin/api.js](../frontend/src/admin/api.js) | `/api/admin/*`; ответ `401` возвращает панель к форме входа | — |
 | [services/analytics.js](../frontend/src/services/analytics.js) | `POST /api/events` | — |
 | [demoMode.js](../frontend/src/demoMode.js) | `GET /api/config` | — |
 
@@ -205,8 +217,14 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
 ## Безопасность клиента
 
 - Секретов в клиентском коде нет: правило ESLint `no-restricted-syntax`
-  запрещает обращения к `*API_KEY*`, `*SECRET_KEY*`, `*ACCESS_TOKEN*`,
-  `*PASSWORD*` в `frontend/src/` ([eslint.config.js](../eslint.config.js)).
+  запрещает в `frontend/src/` обращения к переменным окружения
+  (`import.meta.env.*`, `process.env.*`) и константам в верхнем регистре с
+  `API_KEY`, `SECRET_KEY`, `ACCESS_TOKEN`, `PASSWORD` в имени
+  ([eslint.config.js](../eslint.config.js)). Поля ответов API в camelCase
+  (`mustChangePassword`, `temporaryPassword`) правило не трогает.
+- Права в интерфейсе только прячут кнопки и разделы; каждое действие
+  проверяет сервер. Временный пароль показывается один раз и не сохраняется
+  ни в состоянии после закрытия окна, ни в хранилище браузера.
 - CSP разрешает только `script-src 'self'`, поэтому скрипт выбора темы до
   первой отрисовки вынесен в отдельный файл
   [theme-init.js](../frontend/public/theme-init.js).

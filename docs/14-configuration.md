@@ -16,7 +16,7 @@
 | `PORT` | `3001` | порт | [server.js](../backend/server.js) |
 | `HOST` | `127.0.0.1` | адрес прослушивания | [server.js](../backend/server.js) |
 | `SERVE_STATIC` | включено, если есть `dist/` | `off` — только API | [server.js](../backend/server.js) |
-| `NODE_ENV` | — | `production`: cookie всегда `Secure`, `DEMO_NOW` игнорируется; `test`: журнал выключен | [account.js](../backend/api/account.js), [time.js](../backend/demo/time.js), [safeLogger.js](../backend/observability/safeLogger.js) |
+| `NODE_ENV` | — | `production`: cookie всегда `Secure`, `DEMO_NOW` игнорируется, тестовые пользователи запрещены; `test`: журнал выключен | [accountHttp.js](../backend/api/accountHttp.js), [time.js](../backend/demo/time.js), [safeLogger.js](../backend/observability/safeLogger.js) |
 | `MAX_CONNECTIONS` | `512` | потолок соединений | [server.js](../backend/server.js) |
 | `MAX_CONNECTIONS_PER_IP` | `32` | соединений с адреса (IPv6 — сеть /64), только при `TRUST_PROXY=0` | [server.js](../backend/server.js) |
 | `TRUST_PROXY` | `0` | число прокси перед сервером, целое 0–5; иное — отказ запуска | [rateLimit.js](../backend/http/rateLimit.js) |
@@ -72,15 +72,23 @@
 | `DEMO_NOW` | текущее время | «заморозить» время демо (ISO 8601); не действует при `NODE_ENV=production` | [time.js](../backend/demo/time.js) |
 | `PUBLIC_CLINICS` | в демо — скрыты | `on` — показывать государственные учреждения в демо | [flags.js](../backend/demo/flags.js) |
 
-## Личный кабинет
+## Аккаунты и админ-панель
 
 | Переменная | По умолчанию | Что делает | Где |
 |---|---|---|---|
-| `ACCOUNTS` | включено | `off` — выключить кабинет | [account.js](../backend/api/account.js) |
-| `ACCOUNTS_DB_PATH` | `var/accounts/medkarta.sqlite` | файл базы | [account.js](../backend/api/account.js) |
-| `ACCOUNTS_REGISTRATION` | выключено | `on` — открыть регистрацию (сначала юридическая подготовка, [accounts.md](accounts.md)) | [account.js](../backend/api/account.js) |
-| `COOKIE_SECURE` | автоматически | `on` / `off` — принудительно ставить или не ставить `Secure` | [account.js](../backend/api/account.js) |
-| `CHAT_REQUIRES_ACCOUNT` | включено | `off` — открыть ассистента гостям; по умолчанию он только для вошедших в кабинет | [chatAccess.js](../backend/api/chatAccess.js) |
+| `ACCOUNTS` | включено | `off` — выключить аккаунты и админ-панель | [accountContext.js](../backend/api/accountContext.js) |
+| `ACCOUNTS_DB_PATH` | `var/accounts/medkarta.sqlite` | файл базы | [accountContext.js](../backend/api/accountContext.js) |
+| `ADMIN_BOOTSTRAP_PASSWORD` | — | пароль главного суперадминистратора; создаётся при запуске, **только если такого email ещё нет**, повторный запуск ничего не меняет. После первого входа уберите переменную | [accountContext.js](../backend/api/accountContext.js), [bootstrap.js](../backend/accounts/bootstrap.js) |
+| `ADMIN_BOOTSTRAP_EMAIL` | `maximka2703@bk.ru` | email главного суперадминистратора | [bootstrap.js](../backend/accounts/bootstrap.js) |
+| `APP_ENV` | — | `production` — как и `NODE_ENV=production`, запрещает `npm run accounts -- seed-test-users` без `--allow-production` | [accounts.mjs](../scripts/accounts.mjs) |
+| `COOKIE_SECURE` | автоматически | `on` / `off` — принудительно ставить или не ставить `Secure` | [accountHttp.js](../backend/api/accountHttp.js) |
+| `CHAT_REQUIRES_ACCOUNT` | включено | `off` — открыть ассистента гостям; значение по умолчанию для настройки «Ассистент только после входа» в админ-панели | [chatAccess.js](../backend/api/chatAccess.js), [settings.js](../backend/accounts/settings.js) |
+
+Публичной регистрации нет (`ACCOUNTS_REGISTRATION` больше не читается).
+Сроки сессий, порог неудачных входов, сроки хранения журналов, сообщение о
+технических работах, включение ассистента и демо-кнопок — **настройки в
+админ-панели** (таблица `settings`), а не переменные окружения; секретов и
+переменных окружения админ-панель не показывает и не меняет.
 
 ## Аналитика
 
@@ -112,6 +120,8 @@
 | `npm test` | все тесты `node --test tests/*.test.js` |
 | `npm run test:hybrid` | то же при `PRIVACY_OUTBOUND_MODE=hybrid` |
 | `npm run test:security` | оба прогона подряд |
+| `npm run test:e2e` | сквозная проверка аккаунтов и админ-панели в Chromium ([e2e-admin.mjs](../scripts/e2e-admin.mjs)); нужны `dist/` и Playwright |
+| `npm run accounts -- <команда>` | суперадминистратор, тестовые пользователи, сброс пароля, восстановление доступа, резервная копия ([accounts.md](accounts.md#первый-запуск)) |
 | `npm run lint`, `npm run lint:fix` | ESLint |
 | `npm run eval:privacy` | проверка обезличивания на размеченном наборе ([privacy-evaluation.md](privacy-evaluation.md)) |
 | `npm run ai:check`, `ai:bench`, `ai:trace` | проверка связи, замер и трассировка внешней модели |

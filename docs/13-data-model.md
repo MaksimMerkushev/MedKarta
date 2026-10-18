@@ -20,6 +20,10 @@ erDiagram
     BOOKING }o--|| SLOT : "слот"
     USER ||--o{ SESSION : "сессии"
     USER ||--o{ FAVORITE : "избранное"
+    USER ||--o{ AUTH_EVENT : "история входов"
+    USER ||--o{ USER_BLOCK : "блокировки"
+    USER ||--o| AVATAR : "фото"
+    USER ||--o{ AUDIT : "действия (актор и цель)"
 ```
 
 Диаграмма объединяет справочник частных клиник и демо-набор
@@ -98,47 +102,84 @@ http(s); телефон — цифры и разделители; координ
 
 Режимы доступа и приоритет правил — [10-medical-search-and-data.md](10-medical-search-and-data.md).
 
-## SQLite: личный кабинет
+## SQLite: аккаунты (схема 3)
 
 [backend/accounts/sqliteStore.js](../backend/accounts/sqliteStore.js); файл
 `ACCOUNTS_DB_PATH` (по умолчанию `var/accounts/medkarta.sqlite`). Прагмы:
 `foreign_keys = ON`, `busy_timeout = 2000`, `secure_delete = ON`, WAL для
-файла; миграции — по `user_version`.
+файла; миграции — по `user_version` в транзакции: 1 — пользователи, сессии,
+избранное; 2 — демо-копии; 3 — роли, статусы, журналы, аватары, настройки.
+Отката миграций нет: перед обновлением — `npm run accounts -- backup`.
 
 ```sql
 CREATE TABLE users (
-  id            TEXT PRIMARY KEY,
+  id            TEXT PRIMARY KEY,               -- 32 hex, случайный
   email         TEXT NOT NULL UNIQUE COLLATE NOCASE,
-  display_name  TEXT NOT NULL,
-  password_hash TEXT,            -- scrypt$N$r$p$соль$хэш; у демо-аккаунтов NULL
+  display_name  TEXT NOT NULL,                  -- «Имя Фамилия», для совместимости
+  password_hash TEXT,                           -- scrypt$N$r$p$соль$хэш; у демо-аккаунтов NULL
   dms_plan_id   TEXT,
-  demo_key      TEXT UNIQUE,     -- устарел (общие демо-аккаунты), не заполняется
+  demo_key      TEXT UNIQUE,                    -- устарел, не заполняется
   created_at    INTEGER NOT NULL,
-  updated_at    INTEGER NOT NULL, -- у демо-копии — время последнего входа
-  demo_template TEXT,            -- схема 2: ключ демо-профиля (anna, family, …)
-  demo_owner    TEXT             -- схема 2: SHA-256 от cookie браузера mk_demo
+  updated_at    INTEGER NOT NULL,               -- у демо-копии — время последнего входа
+  demo_template TEXT,                           -- схема 2: ключ демо-профиля
+  demo_owner    TEXT,                           -- схема 2: SHA-256 от cookie mk_demo
+  first_name    TEXT NOT NULL DEFAULT '',       -- схема 3 и ниже
+  last_name     TEXT NOT NULL DEFAULT '',
+  role          TEXT NOT NULL DEFAULT 'user'    -- user | moderator | admin | superadmin
+                CHECK (role IN ('user', 'moderator', 'admin', 'superadmin')),
+  status        TEXT NOT NULL DEFAULT 'active'  -- active | blocked | archived
+                CHECK (status IN ('active', 'blocked', 'archived')),
+  blocked_until INTEGER,                        -- NULL — бессрочно
+  block_reason  TEXT,
+  must_change_password INTEGER NOT NULL DEFAULT 0,
+  password_changed_at  INTEGER,
+  last_login_at        INTEGER,
+  last_seen_at         INTEGER,                 -- последний запрос с сессией
+  failed_logins        INTEGER NOT NULL DEFAULT 0, -- подряд, сбрасывается при входе
+  last_failed_login_at INTEGER,
+  created_by    TEXT,                           -- id сотрудника; NULL — CLI или старая регистрация
+  version       INTEGER NOT NULL DEFAULT 1,     -- оптимистическая блокировка правок
+  search_text   TEXT NOT NULL DEFAULT ''        -- id, email, имя в нижнем регистре (кириллица — в JS)
 );
-CREATE UNIQUE INDEX users_demo_copy ON users(demo_template, demo_owner) WHERE demo_template IS NOT NULL;
-CREATE INDEX users_demo_seen ON users(updated_at) WHERE demo_template IS NOT NULL;
 CREATE TABLE sessions (
-  token_hash TEXT PRIMARY KEY,   -- SHA-256 от токена из cookie
-  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  created_at INTEGER NOT NULL,
-  expires_at INTEGER NOT NULL
+  token_hash   TEXT PRIMARY KEY,                -- SHA-256 от токена из cookie
+  user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at   INTEGER NOT NULL,
+  expires_at   INTEGER NOT NULL,                -- сдвигается при активности, не дальше предела
+  public_id    TEXT UNIQUE,                     -- схема 3: id для отзыва, не токен
+  last_seen_at INTEGER,
+  client       TEXT,                            -- «Chrome 129 · macOS»
+  ip_prefix    TEXT                             -- 203.0.113.0/24 или /48 для IPv6
 );
-CREATE TABLE favorites (
-  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  item_id    TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  PRIMARY KEY (user_id, item_id)
-);
+CREATE TABLE favorites (user_id, item_id, created_at, PRIMARY KEY (user_id, item_id));
+
+CREATE TABLE auth_events (id, at, type, user_id, session_id, client, ip_prefix, reason);
+  -- type: login_ok | login_failed | login_denied | logout | password_changed
+  --       | session_revoked | sessions_revoked; хранится retention.authEventsDays (90)
+CREATE TABLE audit_log (id, at, action, actor_id, actor_label, target_id, target_label,
+  result CHECK (result IN ('ok', 'denied', 'failed')), details, search_text);
+  -- action: user.create, user.role, user.block, …, settings.update; details — JSON без секретов;
+  -- хранится retention.auditDays (365)
+CREATE TABLE user_blocks (id, user_id → users ON DELETE CASCADE, at,
+  action CHECK (action IN ('block', 'unblock', 'expired')), until, reason, actor_id, actor_label);
+CREATE TABLE user_activity (user_id → users ON DELETE CASCADE, day, PRIMARY KEY (user_id, day)) WITHOUT ROWID;
+  -- день по Москве; основа DAU/WAU/MAU; хранится 400 дней
+CREATE TABLE avatars (user_id PRIMARY KEY → users ON DELETE CASCADE, mime, data BLOB, etag, updated_at);
+CREATE TABLE settings (key PRIMARY KEY, value JSON, updated_at, updated_by);
+CREATE TABLE role_overrides (role PRIMARY KEY, permissions JSON, updated_at, updated_by);
 ```
 
-Срок сессии — 30 дней, демо-сессии — 12 часов; не больше 10 сессий на
-пользователя, избранного — до 500 записей; демо-копия без входов 30 дней
-удаляется, копий — до 10 000 ([service.js](../backend/accounts/service.js), `ACCOUNT_LIMITS`).
-Схема 2 (`user_version = 2`) добавила демо-копии и удалила прежние общие
-демо-аккаунты ([accounts.md](accounts.md)).
+Индексы: `users(role)`, `users(status)`, `users(created_at)`, демо-копии;
+`sessions(user_id)`, `sessions(expires_at)`; журналы — по `(user_id, at)`,
+`(type, at)`, `(target_id, at)`, `(actor_id, at)`, `(action, at)`, `at`.
+
+Сроки сессий — настройки `sessions.idleDays` (14) и `sessions.maxDays` (30),
+демо-сессии — 12 часов; сессий на пользователя — `sessions.maxPerUser` (10);
+избранного — до 500 записей; демо-копия без входов 30 дней удаляется, копий —
+до 10 000 ([service.js](../backend/accounts/service.js), `ACCOUNT_LIMITS`).
+Раз в час сервер удаляет просроченные сессии, окончившиеся блокировки
+переводит в «активен», журналы старше срока хранения — удаляет. Подробности
+о ролях и безопасности — [accounts.md](accounts.md).
 
 ## SQLite: демо-запись
 

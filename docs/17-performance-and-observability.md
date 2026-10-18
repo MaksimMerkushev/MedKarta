@@ -84,7 +84,7 @@
 | Ассистент | `gateway.decision`, `planner.usage`, `planner.invalid_plan`, `planner.not_configured`, `planner.error`, `planner.upstream_error`, `planner.transport_error`, `planner.outbound_blocked`, `policy.rejected`, `pipeline.done`, `api.chat.failed` |
 | Маршруты | `routing.request`, `travel_times.request` |
 | Демо-запись | `demo.search`, `demo.hold`, `demo.booking`, `demo.cancel`, `demo.booking_rejected`, `demo.booking_error` |
-| Кабинет | `account.login`, `account.register`, `account.deleted`, `account.unavailable`, `account.store_failed` |
+| Аккаунты | `account.login`, `account.deleted`, `account.unavailable`, `account.store_failed`, `account.bootstrap` (`created` / `exists`, без email и пароля), `account.bootstrap_failed`, `account.maintenance_failed`, `account.request_failed`, `account.forget_bookings_failed`; действия сотрудников — в журнале действий в базе, а не в stdout |
 | Сбои | `server.handler_failed`, `server.request_failed`, `process.unhandled_rejection`, `process.uncaught_exception`, `analytics.write_failed` |
 
 Пример события решения Privacy Gateway — в

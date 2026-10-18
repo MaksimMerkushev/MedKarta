@@ -74,14 +74,17 @@
 | Возможность | Статус | Код | Примечание |
 |---|---|---|---|
 | Личный кабинет: вход, программа ДМС, избранное, удаление аккаунта | Implemented | [api/account.js](../backend/api/account.js) | SQLite через `node:sqlite` (Node 22.13+) |
-| Регистрация | Implemented, выключена по умолчанию | [api/account.js](../backend/api/account.js) | `ACCOUNTS_REGISTRATION=on`; до включения нужна юридическая подготовка ([accounts.md](accounts.md)) |
+| Профиль `/profile`: фото, имя, смена пароля, свои сессии и история входов | Implemented | [api/me.js](../backend/api/me.js), [ProfilePage.jsx](../frontend/src/profile/ProfilePage.jsx) | |
+| Роли (пользователь, модератор, администратор, суперадминистратор) и разрешения | Implemented | [rbac.js](../backend/accounts/rbac.js) | проверяются на сервере |
+| Админ-панель `/admin`: дашборд, пользователи, блокировки, роли, сессии, журнал действий, мониторинг, настройки | Implemented | [api/admin.js](../backend/api/admin.js), [admin/](../frontend/src/admin/) | [accounts.md](accounts.md) |
+| Публичная регистрация | Not implemented (намеренно) | — | аккаунты создаёт администратор; до открытия регистрации нужна юридическая подготовка ([accounts.md](accounts.md#персональные-данные)) |
 | Продуктовая аналитика без ПДн и отчёт по поискам | Implemented | [api/events.js](../backend/api/events.js), [report.js](../backend/analytics/report.js) | |
 | Сборщик данных частных клиник с ручной проверкой | Partially Implemented | [tools/data/](../tools/data/collector.js) | конвейер работает, но в `data/sources.json` только два демо-источника, `data/private/catalog.json` пуст |
 | Проверка госврачей на сайтах учреждений | Partially Implemented | [data-verify.mjs](../scripts/data-verify.mjs) | скрипт есть; в коммите `data/verification.json` без результатов |
 | Метрики конвейера | Partially Implemented | [metrics.js](../backend/observability/metrics.js) | собираются в памяти процесса, наружу не отдаются |
 | Хранилище токенов в Upstash Redis | Implemented, не проверено в аудите | [tokenVault.js](../backend/storage/tokenVault.js) | по умолчанию — память процесса |
 | Провайдер маршрутизации OSRM | Implemented, выключен | [executor/routing.js](../backend/executor/routing.js) | передаёт координаты третьей стороне; только явным флагом |
-| PostgreSQL для кабинета | Planned | [accounts.md](accounts.md) | |
+| PostgreSQL для аккаунтов | Planned | [accounts.md](accounts.md#переход-на-postgresql) | |
 | Лимиты частоты во внешнем хранилище | Planned | [SECURITY.md](../SECURITY.md), раздел 7 | сейчас — память процесса |
 
 ## Технологический стек

@@ -59,11 +59,27 @@ flowchart TD
 
 - Сопоставление API — по **точному пути** (без строки запроса), а не по
   префиксу: `/api/routeXYZ` не попадает в обработчик `/api/route`.
+  Исключение — `/api/me` и `/api/admin`: им отдаётся сам путь и всё под
+  ним (`/api/admin/…`, но не `/api/administrator`), а метод и путь
+  с параметрами (`/api/admin/users/:id`) сопоставляет таблица маршрутов
+  [router.js](../backend/http/router.js); параметр — `[A-Za-z0-9_-]{1,64}`,
+  неизвестный маршрут — `404`.
 - Таблица путей собирается из обработчиков: `/api/chat` (за проверкой входа
   в кабинет, [chatAccess.js](../backend/api/chatAccess.js)), `/api/route`,
   `/api/travel-times`, `/api/events`, `/api/config`, пути кабинета
-  (`ACCOUNT_PATHS`) и демо-записи (`DEMO_BOOKING_PATHS`). Полный список —
+  (`ACCOUNT_PATHS`) и демо-записи (`DEMO_BOOKING_PATHS`), префиксы
+  `/api/me` и `/api/admin`. Полный список —
   [12-api-reference.md](12-api-reference.md).
+- Каждый ответ API учитывается в
+  [requestStats.js](../backend/observability/requestStats.js): число, статус
+  и время по группам путей (без строки запроса и id) и почасовые корзины за
+  24 часа — для раздела «Система» и дашборда. Счётчики живут в памяти
+  процесса и обнуляются при перезапуске.
+- База аккаунтов открывается при запуске (в событии `server.started` —
+  `action: accounts_ready` или `accounts_off`), там же из `ADMIN_BOOTSTRAP_PASSWORD` создаётся
+  главный суперадминистратор; раз в час — чистка просроченных сессий,
+  окончившихся блокировок и старых записей журналов
+  ([accountContext.js](../backend/api/accountContext.js)).
 - Неизвестный `/api/*` — `404 {"error":"Not found"}`, а не `index.html`.
 
 ### Статика
@@ -133,9 +149,11 @@ N-е значение с конца `X-Forwarded-For`. IPv6 считается �
 | `/api/demo/search` | 120 за 5 мин | — | 16 КБ |
 | `/api/demo/slots`, `/api/demo/bookings/lookup`, `/api/demo/bookings/mine` | 600 за 5 мин | — | 16 КБ |
 | прочие `/api/demo/*` | 60 за 5 мин | — | 16 КБ |
-| `/api/auth/login`, `/api/auth/register` | 20 за 15 мин; 10 неудачных входов на email за 15 мин | scrypt: 2 расчёта одновременно, очередь 32 | 64 КБ |
+| `/api/auth/login` | 20 за 15 мин; 10 неудачных входов на email за 15 мин (настройка `auth.maxFailedPerEmail`) | scrypt: 2 расчёта одновременно, очередь 32 | 64 КБ |
 | `/api/auth/demo` | 200 за 15 мин | — | 64 КБ |
 | прочие запросы кабинета | 300 за 5 мин | — | 64 КБ |
+| `/api/me/*` | 300 за 5 мин; смена пароля — 10 за 15 мин | scrypt — та же очередь | 16 КБ; аватар — 400 КБ |
+| `/api/admin/*` | 600 за 5 мин | scrypt — та же очередь (временные пароли) | 32 КБ |
 
 Все счётчики живут **в памяти процесса**: при нескольких экземплярах сервера
 суммарный лимит выше заявленного ([18-known-limitations.md](18-known-limitations.md)).
@@ -161,5 +179,5 @@ N-е значение с конца `X-Forwarded-For`. IPv6 считается �
 | Privacy Gateway и Token Vault | [07-privacy.md](07-privacy.md) |
 | Движок маршрутизации | [09-routing-engine.md](09-routing-engine.md) |
 | Строгий подбор и хранилище записи | [11-demo-booking.md](11-demo-booking.md) |
-| Кабинет | [accounts.md](accounts.md) |
+| Аккаунты, роли, админ-панель | [accounts.md](accounts.md) |
 | Аналитика | [analytics.md](analytics.md), [17-performance-and-observability.md](17-performance-and-observability.md) |

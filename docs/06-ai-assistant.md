@@ -51,7 +51,7 @@ flowchart TD
 
 | Шаг | Модуль | Что делает | Что при отказе |
 |---|---|---|---|
-| 0. Вход | [api/chatAccess.js](../backend/api/chatAccess.js) | действующая сессия кабинета (`CHAT_REQUIRES_ACCOUNT=off` — без неё) | 401 `login_required` / 503 `accounts_unavailable` |
+| 0. Вход | [api/chatAccess.js](../backend/api/chatAccess.js) | ассистент включён в настройках админ-панели; действующая сессия (настройка «только после входа», по умолчанию из `CHAT_REQUIRES_ACCOUNT`), пароль не временный | 503 `assistant_disabled` / 401 `login_required` / 403 `password_change_required` / 503 `accounts_unavailable` |
 | 1. Приём | [api/chat.js](../backend/api/chat.js) | метод `POST`, `Origin`, лимит частоты, тело до 32 КБ, `validateChatMessages` | 405 / 403 / 429 / 413 / 400 |
 | 2. Разбор | [privacy/gateway.js](../backend/privacy/gateway.js) | детекторы, связывание со справочником, классификатор жалоб, условия, решение политики | сбой анализа → `local_only`, текст наружу не уходит |
 | 3. План | [planner/client.js](../backend/planner/client.js) или [localPlanner.js](../backend/planner/localPlanner.js) | JSON-план из перечислений | любой сбой внешнего пути → локальный план |

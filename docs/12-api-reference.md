@@ -29,17 +29,21 @@ OpenAPI-спецификация не приводится: запросы `/api
 | POST | `/api/route` | маршрут по дорогам через 2–6 точек | [route.js](../backend/api/route.js) |
 | POST | `/api/travel-times` | время в пути от точки до многих | [travelTimes.js](../backend/api/travelTimes.js) |
 | POST | `/api/events` | события аналитики | [events.js](../backend/api/events.js) |
-| GET, HEAD | `/api/config` | флаги демо-режима | [config.js](../backend/api/config.js) |
+| GET, HEAD | `/api/config` | флаги демо-режима и публичные настройки | [config.js](../backend/api/config.js) |
 | GET, PATCH, DELETE | `/api/account` | кабинет: профиль, программа ДМС, удаление | [account.js](../backend/api/account.js) |
 | POST | `/api/account/favorites` | избранное | [account.js](../backend/api/account.js) |
-| POST | `/api/auth/login`, `/api/auth/register`, `/api/auth/demo`, `/api/auth/logout` | вход, регистрация, демо-вход, выход | [account.js](../backend/api/account.js) |
+| POST | `/api/auth/login`, `/api/auth/demo`, `/api/auth/logout` | вход, демо-вход, выход (регистрации нет) | [account.js](../backend/api/account.js) |
+| GET, PATCH, POST, PUT, DELETE | `/api/me/*` | свой профиль, пароль, сессии, история входов, аватар | [me.js](../backend/api/me.js) |
+| GET, POST, PATCH, PUT, DELETE | `/api/admin/*` | админ-панель (по разрешениям роли) | [admin.js](../backend/api/admin.js) |
 | POST | `/api/demo/search` | строгий подбор | [demoBooking.js](../backend/api/demoBooking.js) |
 | GET | `/api/demo/slots` | расписание демо-врача | [demoBooking.js](../backend/api/demoBooking.js) |
 | POST | `/api/demo/hold`, `/api/demo/release` | удержание слота | [demoBooking.js](../backend/api/demoBooking.js) |
 | POST | `/api/demo/bookings`, `/api/demo/bookings/cancel`, `/api/demo/bookings/lookup` | запись, отмена, статус | [demoBooking.js](../backend/api/demoBooking.js) |
 | GET | `/api/demo/bookings/mine` | записи вошедшего пользователя | [demoBooking.js](../backend/api/demoBooking.js) |
 
-Неизвестный путь под `/api/` — `404 {"error":"Not found"}`.
+Неизвестный путь под `/api/` — `404 {"error":"Not found"}`. `/api/me/*` и
+`/api/admin/*` — единственные маршруты с параметрами в пути (`:id` —
+`[A-Za-z0-9_-]{1,64}`), их сопоставляет [router.js](../backend/http/router.js).
 
 ## Общие правила
 
@@ -63,9 +67,12 @@ OpenAPI-спецификация не приводится: запросы `/api
 
 Запрос к ассистенту. Подробно о конвейере — [06-ai-assistant.md](06-ai-assistant.md).
 
-Нужна действующая сессия личного кабинета (cookie `mk_session`); при
-`CHAT_REQUIRES_ACCOUNT=off` — не нужна. Из кабинета в конвейер ничего не
-передаётся.
+Нужна действующая сессия (cookie `mk_session`) без временного пароля; если
+в настройках админ-панели выключено «Ассистент только после входа» (по
+умолчанию — из `CHAT_REQUIRES_ACCOUNT`), — не нужна. Выключенный в
+настройках ассистент отвечает `503 assistant_disabled`, гость — `401
+login_required`, временный пароль — `403 password_change_required`. Из
+аккаунта в конвейер ничего не передаётся.
 
 **Тело** (до 32 КБ):
 
@@ -288,7 +295,18 @@ Content-Type: application/json
 Публичные флаги для интерфейса.
 
 ```json
-{ "demo": true, "booking": true, "publicClinics": false }
+{
+  "demo": true,
+  "booking": true,
+  "publicClinics": false,
+  "settings": {
+    "appName": "МедКарта",
+    "supportEmail": null,
+    "supportPhone": null,
+    "maintenance": null,
+    "assistant": true
+  }
+}
 ```
 
 | Поле | Смысл |
@@ -296,6 +314,7 @@ Content-Type: application/json
 | `demo` | `DEMO_DATA=on` |
 | `booking` | демо-запись включена и доступен `node:sqlite` |
 | `publicClinics` | показывать государственные учреждения (в демо по умолчанию `false`) |
+| `settings` | настройки из админ-панели с пометкой «публичная»: название, контакты поддержки, текст о технических работах (`null` — выключено), ассистент включён; `null`, если база аккаунтов недоступна |
 
 ---
 
@@ -307,16 +326,23 @@ Content-Type: application/json
 | Метод и путь | Тело | Ответ | Лимит на адрес |
 |---|---|---|---|
 | `GET /api/account` | — | `{user, favorites, features}`; гость — `user: null` | 300 за 5 мин |
-| `PATCH /api/account` | `{displayName}` или `{dmsPlanId}` (только из справочника) | `{user, favorites, features}` | 300 за 5 мин |
-| `DELETE /api/account` | `{"confirm": true}` | `{user: null, …}`, cookie стирается | 300 за 5 мин |
+| `PATCH /api/account` | `{displayName}`, `{firstName, lastName}` или `{dmsPlanId}` (только из справочника) | `{user, favorites, features}` | 300 за 5 мин |
+| `DELETE /api/account` | `{"confirm": true}`; только роль `user`, у сотрудников — `403 staff_account` | `{user: null, …}`, cookie стирается | 300 за 5 мин |
 | `POST /api/account/favorites` | `{action: "add" \| "remove" \| "merge", ids: [...]}` | `{favorites}` | 300 за 5 мин |
 | `POST /api/auth/login` | `{email, password}` | `{user, favorites, features}` + cookie | 20 за 15 мин |
-| `POST /api/auth/register` | `{email, password, displayName, consent: true}` | `201` + cookie; при выключенной регистрации — `403` | 20 за 15 мин |
 | `POST /api/auth/demo` | `{account: "anna" \| "family" \| "kids" \| "basic"}` | демо-сессия на 12 часов в копии профиля этого браузера + cookie `mk_demo` (30 дней); при выключенном демо — `403` | 200 за 15 мин |
 | `POST /api/auth/logout` | `{}` | `{user: null, …}`, cookie стирается | 300 за 5 мин |
 
-`features` — `{available, registration, demo, demoAccounts}`; в
-`demoAccounts` — только ключ, имя и описание программы, без email.
+`features` — `{available, registration, demo, assistant, chatRequiresAccount,
+demoAccounts}`; `registration` всегда `false` (`POST /api/auth/register` —
+`404`), в `demoAccounts` — только ключ, имя и описание программы, без email.
+
+Вход заблокированного аккаунта (пароль верный) — `403 account_blocked` с
+`blockedUntil` и причиной, архивного — `403 account_inactive`; при неверном
+пароле — всегда `401 invalid_credentials`, статус аккаунта не раскрывается.
+У пользователя с временным паролем `user.mustChangePassword: true`: до смены
+пароля остальные маршруты `/api/me/*` и `/api/admin/*` отвечают
+`403 password_change_required`.
 
 Пример демо-входа:
 
@@ -362,6 +388,115 @@ Set-Cookie: mk_session=<token>; Path=/api; HttpOnly; SameSite=Lax; Max-Age=43199
 `ACCOUNTS=off`), при этом `GET /api/account` отвечает гостю `200`. Ошибки
 сервиса кабинета возвращают `{error, code}` со статусом из
 [service.js](../backend/accounts/service.js).
+
+---
+
+## Профиль: /api/me/*
+
+Только с сессией (иначе `401 unauthenticated`). Лимит — 300 запросов за 5
+минут с адреса, смена пароля — 10 за 15 минут.
+
+| Метод и путь | Тело | Ответ |
+|---|---|---|
+| `GET /api/me` | — | `{user, favorites, session: {id}}`; `user` с ролью, статусом, `permissions`, `avatarUrl` |
+| `PATCH /api/me` | `{firstName, lastName}` — другие поля: `400 unexpected_field` | `{user, favorites}` |
+| `POST /api/me/password` | `{currentPassword, newPassword}` | `{user}`; все прежние сессии завершены, выдаётся новая cookie. Доступен и с временным паролем |
+| `GET /api/me/sessions` | — | `{items: [{id, createdAt, lastSeenAt, expiresAt, client, network, current}]}` |
+| `DELETE /api/me/sessions/:id` | `{}` | `{revoked, current}`; своя текущая — выход |
+| `POST /api/me/sessions/revoke-others` | `{}` | `{revoked}` |
+| `GET /api/me/logins?limit=20` | — (не больше 50) | `{items: [{at, type, label, client, network, reason}]}` |
+| `GET /api/me/avatar` | — | изображение; `404`, если фото нет |
+| `PUT /api/me/avatar` | `{image: "data:image/webp;base64,…"}` до 256 КБ | `{user, favorites}` |
+| `DELETE /api/me/avatar` | `{}` | `{user, favorites}` |
+
+Пример сессии:
+
+```json
+{
+  "items": [
+    {
+      "id": "184999a2c16c5a3591ca92d6",
+      "createdAt": "2026-10-18T15:40:43.422Z",
+      "lastSeenAt": "2026-10-18T15:40:43.422Z",
+      "expiresAt": "2026-11-01T15:40:43.422Z",
+      "client": "Chrome 129 · macOS",
+      "network": "127.0.0.0/24",
+      "current": true
+    }
+  ]
+}
+```
+
+---
+
+## Админ-панель: /api/admin/*
+
+Каждый маршрут проверяет разрешение роли на сервере (список и умолчания —
+[accounts.md](accounts.md#роли-и-разрешения)). Без сессии — `401`, без
+`admin.access` или нужного разрешения — `403 forbidden`. Лимит — 600 запросов
+за 5 минут с адреса. Тела — только перечисленные поля: лишнее поле —
+`400 unexpected_field` (например, `role` в `PATCH`).
+
+| Метод и путь | Разрешение | Тело или параметры | Ответ |
+|---|---|---|---|
+| `GET /api/admin/me` | `admin.access` | — | `{user, permissions, roles}` |
+| `GET /api/admin/dashboard` | `dashboard.view` | `?period=24h\|7d\|30d\|90d` | счётчики, ряды для графиков, последние пользователи и действия, состояние компонентов |
+| `GET /api/admin/users` | `users.view` | `?q&role&status&kind=real\|demo\|all&sort&dir&page&pageSize=10\|25\|50\|100` | `{items, total, page, pageSize, sort, dir}` |
+| `POST /api/admin/users` | `users.create` | `{email, firstName, lastName, role}` | `201 {user, temporaryPassword}` — пароль показывается один раз |
+| `GET /api/admin/users/export` | `users.export` | те же фильтры или `?ids=a,b` | CSV (UTF-8 с BOM, `;`), до 10 000 строк |
+| `POST /api/admin/users/bulk` | `users.block` | `{action: "block"\|"unblock", ids, reason, until}` до 100 id | `{succeeded, failed, results: [{id, ok, error}]}` |
+| `GET /api/admin/users/:id` | `users.view` | — | `{user, can, permissions}`: что текущий сотрудник может сделать с этим аккаунтом |
+| `PATCH /api/admin/users/:id` | `users.edit` | `{firstName, lastName, email, version}` | `{user, can, …}`; устаревшая `version` — `409 conflict` |
+| `DELETE /api/admin/users/:id` | `users.delete` | `{confirmEmail}` | `{deleted: true}` |
+| `POST /api/admin/users/:id/role` | `roles.assign` | `{role, version}` | `{user, can, …}` |
+| `POST /api/admin/users/:id/block` | `users.block` | `{reason, until}` (`until` — ISO-дата или `null` — бессрочно) | `{user, can, …}`; все сессии завершены |
+| `POST /api/admin/users/:id/unblock` | `users.block` | `{}` | `{user, can, …}` |
+| `POST /api/admin/users/:id/archive`, `/restore` | `users.archive` | `{}` | `{user, can, …}` |
+| `POST /api/admin/users/:id/password-reset` | `users.password` | `{}` | `{user, can, …, temporaryPassword}`; все сессии завершены |
+| `POST /api/admin/users/:id/password-require` | `users.password` | `{}` | `{user, can, …}` |
+| `POST /api/admin/users/:id/sessions/revoke` | `users.sessions` | `{}` | `{revoked}` |
+| `GET /api/admin/users/:id/sessions` | `users.sessions` | — | `{items}` |
+| `GET /api/admin/users/:id/logins` | `users.view` | `?page&type=failed` | `{items, total, page, pageSize}` |
+| `GET /api/admin/users/:id/blocks` | `users.view` | — | `{items}` |
+| `GET /api/admin/users/:id/audit` | `audit.view` | `?page` | `{items, total, …}` |
+| `GET /api/admin/users/:id/avatar` | `users.view` | — | изображение |
+| `GET /api/admin/sessions` | `users.sessions` | `?userId&kind&page&pageSize` | `{items, total, …}` |
+| `DELETE /api/admin/sessions/:id` | `users.sessions` | `{}` | `{revoked: 1}` |
+| `GET /api/admin/roles` | `roles.assign` или `roles.manage` | — | роли, разрешения, матрица, число пользователей по ролям, история изменений |
+| `PUT /api/admin/roles/:role` | `roles.manage` | `{permissions: [...]}` — только `admin`, `moderator` | то же, что `GET`, и `warnings`; нарушенные зависимости — `400` |
+| `POST /api/admin/roles/:role/reset` | `roles.manage` | `{}` | набор по умолчанию |
+| `GET /api/admin/audit` | `audit.view` | `?q&action&result=ok\|denied&from&to&page&pageSize` | `{items, total, page, pageSize, actions}` |
+| `GET /api/admin/system` | `system.view` | — | компоненты, процесс, запросы и ошибки, каталог, файлы данных |
+| `GET /api/admin/settings` | `settings.view` | — | `{items: [{key, group, label, type, value, default, …}], canEdit}` |
+| `PATCH /api/admin/settings` | `settings.edit` | `{values: {"sessions.idleDays": 7, …}}` | `{items, canEdit, changed}`; неизвестный ключ или значение вне границ — `400` |
+
+Отказы по иерархии: `403 self_action` (над собой), `403 forbidden` (роль не
+ниже своей или нет разрешения), `403 last_superadmin` (последний активный
+суперадминистратор) — каждый записывается в журнал с результатом `denied`.
+Демо-копии не управляются: `409 demo_account`.
+
+Пример — блокировка самого себя:
+
+```json
+{ "error": "Это действие нельзя выполнить над своим аккаунтом.", "code": "self_action" }
+```
+
+Пример записи журнала:
+
+```json
+{
+  "id": 3,
+  "at": "2026-10-18T15:40:43.833Z",
+  "action": "user.block",
+  "actionLabel": "Блокировка",
+  "actor": "Максим · m***@bk.ru",
+  "actorId": "5b99eb3ba0be65c123f57c936ecb78b6",
+  "target": "Ольга Петрова · o***@medkarta.test",
+  "targetId": "5d060dd2c4d01cd2a8af62274b7645bc",
+  "result": "ok",
+  "details": { "reason": "Проверка", "until": null, "from": "active" }
+}
+```
 
 ---
 
