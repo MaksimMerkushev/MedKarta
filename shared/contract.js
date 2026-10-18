@@ -144,7 +144,8 @@ const sanitizeBooking = (value) => {
   const summary = Array.isArray(value.summary)
     ? value.summary.map((item) => cleanText(item, LIMITS.MAX_FIELD_CHARS)).filter(Boolean).slice(0, 20)
     : [];
-  return { request, summary };
+  // route — маршрут просили явно: интерфейс проложит его к первому варианту подбора.
+  return { request, summary, route: value.route === true };
 };
 
 export const DEFAULT_REPLY =

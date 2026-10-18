@@ -56,6 +56,7 @@ export default function AIAssistant({
   bookingPlanId = null,
   bookingsRefresh = 0,
   onBookOption,
+  onRouteOption = null,
   onSelectPlan,
   onRequestOrigin,
   onLoginRequired,
@@ -210,6 +211,7 @@ export default function AIAssistant({
               onSelectPlan={onSelectPlan}
               onBook={onBookOption}
               onFocus={(option) => onFocusPick?.({ lat: option.clinic.lat, lng: option.clinic.lng })}
+              onRoute={onRouteOption}
               onRequestOrigin={onRequestOrigin}
               onAnswer={isLoading ? null : sendText}
             />
