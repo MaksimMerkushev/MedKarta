@@ -31,7 +31,8 @@
     "preview": "vite preview",
     "audit:security": "npm audit --omit=dev",
     "prices:doctors": "node scripts/generate-doctor-service-prices.mjs",
-    "ownership:facilities": "node scripts/reclassify-facility-ownership.mjs"
+    "ownership:facilities": "node scripts/reclassify-facility-ownership.mjs",
+    "accounts": "node scripts/accounts.mjs"
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.2.1",

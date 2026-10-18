@@ -10,6 +10,9 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { after, before, describe, it } from 'node:test';
 
+import { randomBytes } from 'node:crypto';
+
+import { hashPassword } from '../backend/accounts/passwords.js';
 import { createAccountService } from '../backend/accounts/service.js';
 import { createSqliteAccountStore, loadSqlite } from '../backend/accounts/sqliteStore.js';
 import { createAccountHandler, currentAccountUser, DEMO_OWNER_COOKIE, SESSION_COOKIE } from '../backend/api/account.js';
@@ -29,11 +32,12 @@ describe('Личные кабинеты: изоляция', { skip: !DatabaseSyn
   let base;
   let accounts;
   let bookings;
-  let flags = { registration: true, demo: true };
+  const flags = { registration: false, demo: true };
+  let accountStore;
   let nextKey = 0;
 
   before(async () => {
-    const accountStore = createSqliteAccountStore({ DatabaseSync, file: ':memory:' });
+    accountStore = createSqliteAccountStore({ DatabaseSync, file: ':memory:' });
     // Кабинет — на реальных часах: срок cookie считается от Date.now().
     accounts = createAccountService({ store: accountStore, isKnownPlan: (id) => PLANS.has(id) });
     const index = await getDemoCatalog();
@@ -199,17 +203,22 @@ describe('Личные кабинеты: изоляция', { skip: !DatabaseSyn
   it('удалённый аккаунт: записи отвязываются, новый аккаунт их не видит', async () => {
     const [slot] = freeSlots(1);
     const tab = browser();
-    const created = await tab.call('/api/auth/register', { method: 'POST', body: { email: 'iso@user.ru', password: 'пароль-пароль', displayName: 'Изоляция', consent: true } });
-    assert.equal(created.status, 201);
+    // Аккаунты создаёт администратор — здесь сразу в хранилище.
+    const createIso = async () => accountStore.createUser({
+      id: randomBytes(16).toString('hex'), email: 'iso@user.ru', firstName: 'Изоляция', lastName: 'Тест', passwordHash: await hashPassword('пароль-пароль'), now: Date.now(),
+    });
+    await createIso();
+    const created = await tab.call('/api/auth/login', { method: 'POST', body: { email: 'iso@user.ru', password: 'пароль-пароль' } });
+    assert.equal(created.status, 200);
     const booked = (await tab.book(slot.id)).body.booking;
     assert.equal(booked.owned, true);
     assert.equal((await tab.mine()).body.bookings.length, 1);
     assert.equal((await tab.call('/api/account', { method: 'DELETE', body: { confirm: true } })).status, 200);
 
-    const again = await tab.call('/api/auth/register', { method: 'POST', body: { email: 'iso@user.ru', password: 'пароль-пароль', displayName: 'Изоляция', consent: true } });
-    assert.equal(again.status, 201);
+    await createIso();
+    const again = await tab.call('/api/auth/login', { method: 'POST', body: { email: 'iso@user.ru', password: 'пароль-пароль' } });
+    assert.equal(again.status, 200);
     assert.deepEqual((await tab.mine()).body.bookings, []);
-    flags = { registration: false, demo: true };
   });
 
   it('поддельная или чужая cookie браузера не открывает чужую копию', async () => {
