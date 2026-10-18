@@ -60,9 +60,10 @@ export const createRequestStats = ({ now = () => Date.now() } = {}) => {
       }
     },
     snapshot() {
-      const minute = Math.floor(now() / 60_000);
+      // Часы по часам: последние 24, текущий — неполный.
+      const hour = Math.floor(now() / 3_600_000);
       const perHour = Array.from({ length: 24 }, (_, index) => {
-        const hourStart = minute - (23 - index) * 60 - 59;
+        const hourStart = (hour - (23 - index)) * 60;
         let count = 0;
         let errors = 0;
         for (let step = 0; step < 60; step += 1) {
