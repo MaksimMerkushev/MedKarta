@@ -136,8 +136,11 @@
   [accounts.md](accounts.md), [12-api-reference.md](12-api-reference.md),
   [13-data-model.md](13-data-model.md), [14-configuration.md](14-configuration.md),
   [08-security.md](08-security.md), [15-deployment.md](15-deployment.md);
-  добавлены `tests/admin.test.js` и `scripts/e2e-admin.mjs`. Всего 999
-  тестов ([16-testing.md](16-testing.md)).
+  добавлены `tests/admin.test.js` и `scripts/e2e-admin.mjs`. Всего 1000
+  тестов без графа дорог и 1008 с графом ([16-testing.md](16-testing.md)).
+  Маршрут с днём или часами приёма теперь начинается с подбора свободного
+  времени ([11-demo-booking.md](11-demo-booking.md)), маршрут на карте —
+  компактной строкой вместо окна.
 
 ## Что не удалось проверить
 

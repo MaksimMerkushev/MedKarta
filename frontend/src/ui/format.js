@@ -46,5 +46,6 @@ export const plural = (count, one, few, many) => {
 export const ROLE_LABELS = { superadmin: 'Суперадминистратор', admin: 'Администратор', moderator: 'Модератор', user: 'Пользователь' };
 export const STATUS_LABELS = { active: 'Активен', blocked: 'Заблокирован', archived: 'В архиве' };
 
+// Только буквы: «Анна (демо)» — «АД», а не «А(».
 export const initialsOf = (name) =>
-  String(name || '').trim().split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0].toUpperCase()).join('') || '·';
+  (String(name || '').match(/\p{L}+/gu) || []).slice(0, 2).map((part) => part[0].toUpperCase()).join('') || '·';

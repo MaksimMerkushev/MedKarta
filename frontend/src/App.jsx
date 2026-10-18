@@ -1043,7 +1043,7 @@ const formatDistance = (meters) => {
     return `${Math.round(meters)} м`;
   }
 
-  return `${(meters / 1000).toFixed(1)} км`;
+  return `${(meters / 1000).toLocaleString('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} км`;
 };
 
 const formatTime = (seconds) => {
@@ -1056,6 +1056,59 @@ const formatTime = (seconds) => {
   const mins = minutes % 60;
   return `${hours} ч ${mins} мин`;
 };
+
+const stopsWord = (count) => (count % 10 === 1 && count % 100 !== 11 ? 'точка' : count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14) ? 'точки' : 'точек');
+
+/**
+ * Маршрут одной строкой: время и расстояние, развернуть подробности, сбросить.
+ * Подробное окно (точки, вид транспорта, Яндекс Карты и 2ГИС) — по нажатию.
+ */
+function RoutePill({ count, routeData, expanded, onToggle, onClear, className = '' }) {
+  const status = !routeData ? 'loading' : routeData.error ? 'error' : 'ready';
+  return (
+    <div className={`flex items-center rounded-2xl border border-slate-200 bg-white/95 p-1 shadow-lg backdrop-blur dark:border-slate-700 dark:bg-slate-800/95 ${className}`} data-testid="route-pill">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        title={expanded ? 'Свернуть маршрут' : 'Подробнее о маршруте'}
+        className="flex min-w-0 flex-1 items-center gap-2 rounded-xl py-0.5 pl-1 pr-1.5 text-left hover:bg-slate-100 dark:hover:bg-slate-700"
+        data-testid="route-pill-toggle"
+      >
+        <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full bg-blue-600 text-white">
+          <Navigation size={14} aria-hidden="true" />
+        </span>
+        <span className="min-w-0 leading-tight">
+          <span className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+            Маршрут{count > 1 ? ` · ${count} ${stopsWord(count)}` : ''}
+          </span>
+          {status === 'ready' && (
+            <span className="block whitespace-nowrap text-[13px] font-bold text-slate-800 dark:text-white">
+              {formatTime(routeData.time)} <span className="font-medium text-slate-500 dark:text-slate-400">· {formatDistance(routeData.distance)}</span>
+            </span>
+          )}
+          {status === 'error' && <span className="block whitespace-nowrap text-[13px] font-semibold text-red-600 dark:text-red-400">Не построен — подробнее</span>}
+          {status === 'loading' && (
+            <span className="flex items-center gap-1 whitespace-nowrap text-[13px] font-medium text-slate-500 dark:text-slate-400">
+              <Loader2 size={12} className="animate-spin" aria-hidden="true" /> Строю…
+            </span>
+          )}
+        </span>
+        {expanded ? <ChevronUp size={15} className="shrink-0 text-slate-400" aria-hidden="true" /> : <ChevronDown size={15} className="shrink-0 text-slate-400" aria-hidden="true" />}
+      </button>
+      <button
+        type="button"
+        onClick={onClear}
+        aria-label="Сбросить маршрут"
+        title="Сбросить маршрут"
+        className="ml-0.5 shrink-0 rounded-xl p-2 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/30"
+        data-testid="route-pill-clear"
+      >
+        <X size={15} aria-hidden="true" />
+      </button>
+    </div>
+  );
+}
 
 export default function App() {
   const [userLocation, setUserLocation] = useState(defaultLocation);
@@ -1274,7 +1327,8 @@ export default function App() {
     setIsAIAssistantOpen(false);
     setIsChatNoticeOpen(true);
   }, []);
-  const [isRoutePanelCollapsed, setIsRoutePanelCollapsed] = useState(false);
+  // Маршрут — компактной строкой; подробное окно открывается по нажатию.
+  const [isRoutePanelCollapsed, setIsRoutePanelCollapsed] = useState(true);
   /*
    * «Топ-3» под ответами ассистента: id реплики → подборка. Подборка — снимок
    * на момент ответа: если потом поменять фильтры, старый ответ не меняется.
@@ -2825,6 +2879,19 @@ export default function App() {
     if (isMobile) setIsAIAssistantOpen(false);
   }, [handleRouteClick, isMobile, showToast]);
 
+  // Маршрут к варианту подбора: по кнопке «Маршрут» или сам, если маршрут просили в чате.
+  const routeToOption = useCallback((option, { auto = false } = {}) => {
+    const itemId = option?.doctor?.id && option?.clinic?.branchId ? `${option.doctor.id}--${option.clinic.branchId}` : null;
+    const doc = itemId ? enrichedDoctorsRef.current.find((item) => item.id === itemId) : null;
+    if (!doc) {
+      if (!auto) showToast('Клиника этого варианта не найдена на карте.', 'warning');
+      return;
+    }
+    handleRouteClick(doc);
+    // Сам проложенный маршрут не закрывает чат: человек ещё выбирает время.
+    if (isMobile && !auto) setIsAIAssistantOpen(false);
+  }, [handleRouteClick, isMobile, showToast]);
+
   const requestBookingOrigin = useCallback(() => {
     setIsFollowingUser(false);
     setFlyToTarget(activeOrigin);
@@ -2933,7 +3000,7 @@ export default function App() {
   const clearRoute = useCallback(() => {
     setRouteTargets([]);
     setRouteData(null);
-    setIsRoutePanelCollapsed(false);
+    setIsRoutePanelCollapsed(true);
     setIsRouteStarted(false);
   }, []);
 
@@ -4192,33 +4259,16 @@ export default function App() {
       {/* Mobile bottom bar: route panel stacked above nav buttons */}
       {isMobile && !isMobileFiltersOpen && (
         <div className="fixed bottom-0 left-0 right-0 z-[999] flex flex-col">
-          {/* Collapsed route pill */}
+          {/* Маршрут одной строкой */}
           {routeTargets.length > 0 && isRoutePanelCollapsed && (
-            <div
-              className="mx-3 mb-2 cursor-pointer"
-              role="button"
-              tabIndex={0}
-              aria-label="Развернуть маршрут"
-              onClick={() => setIsRoutePanelCollapsed(false)}
-              onKeyDown={activateOnKey(() => setIsRoutePanelCollapsed(false))}
-            >
-              <div className="flex items-center gap-3 rounded-2xl bg-gradient-to-r from-blue-600 to-blue-500 px-4 py-3 shadow-[0_4px_20px_rgba(59,130,246,0.35)] transition-transform active:scale-[0.98] dark:from-blue-700 dark:to-blue-600">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/20">
-                  <Navigation size={18} className="text-white" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-[11px] font-bold uppercase tracking-wider text-blue-100">Smart-маршрут · {routeTargets.length} {routeTargets.length === 1 ? 'точка' : routeTargets.length < 5 ? 'точки' : 'точек'}</div>
-                  {routeData && !routeData.error ? (
-                    <div className="mt-0.5 text-[15px] font-extrabold text-white">{formatTime(routeData.time)} <span className="font-medium text-blue-200">· {formatDistance(routeData.distance)}</span></div>
-                  ) : routeData?.error ? (
-                    <div className="mt-0.5 truncate text-sm font-semibold text-red-100">Маршрут не построен — нажмите, чтобы узнать почему</div>
-                  ) : (
-                    <div className="mt-0.5 text-sm font-medium text-blue-200">Построение маршрута...</div>
-                  )}
-                </div>
-                <ChevronUp size={20} className="shrink-0 text-white/70" />
-              </div>
-            </div>
+            <RoutePill
+              className="mx-3 mb-2"
+              count={routeTargets.length}
+              routeData={routeData}
+              expanded={false}
+              onToggle={() => setIsRoutePanelCollapsed(false)}
+              onClear={clearRoute}
+            />
           )}
 
           {/* Expanded route panel */}
@@ -4227,7 +4277,7 @@ export default function App() {
               <div className="sticky top-0 z-10 border-b border-slate-100 bg-gradient-to-r from-blue-50 to-white px-4 py-3 dark:border-slate-700 dark:from-slate-700 dark:to-slate-800">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <div className="text-[11px] font-bold uppercase tracking-[0.22em] text-blue-600 dark:text-blue-400">Smart-Маршрут</div>
+                    <div className="text-[11px] font-bold uppercase tracking-[0.22em] text-blue-600 dark:text-blue-400">Маршрут</div>
                     <div className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-blue-100 px-1.5 text-[10px] font-bold text-blue-700 dark:bg-blue-900 dark:text-blue-300">{routeTargets.length}</div>
                   </div>
                   <button type="button" onClick={() => setIsRoutePanelCollapsed(true)} aria-label="Свернуть маршрут" className="rounded-lg p-1.5 text-slate-400 transition-colors active:bg-slate-200 dark:active:bg-slate-700">
@@ -4343,9 +4393,18 @@ export default function App() {
       <main className="relative flex-1 bg-slate-100 dark:bg-slate-900">
         {/* Кто вошёл: аватар, имя и роль, профиль, админ-панель (сотрудникам), выход. */}
         <div
-          className={`absolute z-[1001] ${isMobile ? 'right-3' : routeTargets.length > 0 ? 'right-[352px] top-6' : 'right-6 top-6'}`}
+          className={`absolute z-[1001] flex items-center gap-2 ${isMobile ? 'right-3' : 'right-6 top-6'}`}
           style={isMobile ? { top: 'calc(env(safe-area-inset-top, 0px) + 30px)' } : undefined}
         >
+          {!isMobile && routeTargets.length > 0 && (
+            <RoutePill
+              count={routeTargets.length}
+              routeData={routeData}
+              expanded={!isRoutePanelCollapsed}
+              onToggle={() => setIsRoutePanelCollapsed((current) => !current)}
+              onClear={clearRoute}
+            />
+          )}
           {account.status === 'user' && account.user ? (
             isMobile ? (
               <button type="button" onClick={() => setIsAccountOpen(true)} className="block rounded-full shadow-lg ring-2 ring-white dark:ring-slate-800" aria-label={`Личный кабинет: ${account.user.displayName}`} data-testid="user-chip">
@@ -4390,49 +4449,20 @@ export default function App() {
             </button>
           </div>
         )}
-        {!isMobile && routeTargets.length > 0 && isRoutePanelCollapsed && (
-          <div
-            className={`route-panel-slide-in absolute z-[1000] cursor-pointer ${isMobile ? 'left-3 right-3' : 'right-6 top-6'}`}
-            style={isMobile ? { bottom: 'calc(80px + env(safe-area-inset-bottom, 0px))' } : undefined}
-            role="button"
-            tabIndex={0}
-            aria-label="Развернуть маршрут"
-            onClick={() => setIsRoutePanelCollapsed(false)}
-            onKeyDown={activateOnKey(() => setIsRoutePanelCollapsed(false))}
-          >
-            <div className="flex items-center gap-3 rounded-2xl bg-gradient-to-r from-blue-600 to-blue-500 px-4 py-3 shadow-[0_4px_20px_rgba(59,130,246,0.35)] transition-transform active:scale-[0.98] dark:from-blue-700 dark:to-blue-600">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/20">
-                <Navigation size={18} className="text-white" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-[11px] font-bold uppercase tracking-wider text-blue-100">Smart-маршрут · {routeTargets.length} {routeTargets.length === 1 ? 'точка' : routeTargets.length < 5 ? 'точки' : 'точек'}</div>
-                {routeData && !routeData.error ? (
-                  <div className="mt-0.5 text-[15px] font-extrabold text-white">{formatTime(routeData.time)} <span className="font-medium text-blue-200">· {formatDistance(routeData.distance)}</span></div>
-                ) : routeData?.error ? (
-                  <div className="mt-0.5 truncate text-sm font-semibold text-red-100">Маршрут не построен — нажмите, чтобы узнать почему</div>
-                ) : (
-                  <div className="mt-0.5 text-sm font-medium text-blue-200">Построение маршрута...</div>
-                )}
-              </div>
-              <ChevronUp size={20} className="shrink-0 text-white/70" />
-            </div>
-          </div>
-        )}
-
         {!isMobile && routeTargets.length > 0 && !isRoutePanelCollapsed && (
           <div
-            className={`route-panel-slide-in absolute z-[1000] flex flex-col overflow-hidden border border-slate-100 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-800 ${isMobile ? 'left-2 right-2 rounded-2xl' : 'right-6 top-6 w-80 rounded-3xl'}`}
+            className={`route-panel-slide-in absolute z-[1000] flex flex-col overflow-hidden border border-slate-100 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-800 ${isMobile ? 'left-2 right-2 rounded-2xl' : 'right-6 top-[84px] w-80 rounded-3xl'}`}
             /*
              * Высота ограничена, чтобы с пятью точками «Начать маршрут» и
              * «Очистить» не уходили за нижний край; снизу — место под кнопки
              * ИИ и геолокации.
              */
-            style={isMobile ? { bottom: 'calc(80px + env(safe-area-inset-bottom, 0px))', maxHeight: '55vh' } : { maxHeight: 'calc(100% - 184px)' }}
+            style={isMobile ? { bottom: 'calc(80px + env(safe-area-inset-bottom, 0px))', maxHeight: '55vh' } : { maxHeight: 'calc(100% - 244px)' }}
           >
             <div className={`border-b border-slate-100 bg-gradient-to-r from-blue-50 to-white dark:border-slate-700 dark:from-slate-700 dark:to-slate-800 ${isMobile ? 'px-4 py-3' : 'px-5 py-4'}`}>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <div className="text-[11px] font-bold uppercase tracking-[0.22em] text-blue-600 dark:text-blue-400">Smart-Маршрут</div>
+                  <div className="text-[11px] font-bold uppercase tracking-[0.22em] text-blue-600 dark:text-blue-400">Маршрут</div>
                   <div className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-blue-100 px-1.5 text-[10px] font-bold text-blue-700 dark:bg-blue-900 dark:text-blue-300">{routeTargets.length}</div>
                 </div>
                 <button type="button" onClick={() => setIsRoutePanelCollapsed(true)} aria-label="Свернуть маршрут" className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 active:bg-slate-200 dark:hover:bg-slate-700">
@@ -4671,6 +4701,7 @@ export default function App() {
               bookingPlanId={dmsPlan?.id || null}
               bookingsRefresh={bookingsRefresh}
               onBookOption={openBooking}
+              onRouteOption={routeToOption}
               onSelectPlan={choosePlanFromChat}
               onRequestOrigin={requestBookingOrigin}
               onLoginRequired={handleAssistantLoginRequired}
