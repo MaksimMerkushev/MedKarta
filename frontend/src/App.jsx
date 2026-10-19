@@ -922,7 +922,7 @@ const EMPTY_LIST = Object.freeze([]);
  * booking — симуляция записи включена на сервере; publicClinics — показывать
  * государственные учреждения (в демо по умолчанию скрыты, данные не удаляются).
  */
-const EMPTY_DEMO = Object.freeze({ enabled: false, items: EMPTY_LIST, insurance: null, booking: false, publicClinics: true });
+const EMPTY_DEMO = Object.freeze({ enabled: false, items: EMPTY_LIST, insurance: null, booking: false, publicClinics: true, demoOnly: false });
 const PUBLIC_OWNERSHIP = 'Государственная';
 
 /** Варианты фильтра «не дольше N минут в пути». */
@@ -1601,7 +1601,9 @@ export default function App() {
     // Реальная частная клиника из демо-набора заменяет свою карточку из OSM, а не дублирует её.
     const replacedByDemo = new Set(demoState.items.map((item) => item.osmId).filter(Boolean));
     const osmFacilities = replacedByDemo.size > 0 ? kazanFacilities.filter((item) => !replacedByDemo.has(item.id)) : kazanFacilities;
-    const all = [...verifiedDoctors, ...doctorsData, ...osmFacilities.map(withOsmSchedule), ...clinicsFacilities, ...COLLECTED_FACILITIES, ...demoState.items];
+    // «Только демо» (DEMO_ONLY на сервере): на карте только вымышленные клиники и врачи.
+    const all = demoState.demoOnly ? [...demoState.items]
+      : [...verifiedDoctors, ...doctorsData, ...osmFacilities.map(withOsmSchedule), ...clinicsFacilities, ...COLLECTED_FACILITIES, ...demoState.items];
     // Демо-режим: государственные учреждения скрыты из выдачи (флаг сервера PUBLIC_CLINICS).
     const base = demoState.enabled && !demoState.publicClinics ? all.filter((item) => item.ownership !== PUBLIC_OWNERSHIP) : all;
     const clinicAddressMap = new Map();
@@ -1657,7 +1659,7 @@ export default function App() {
         const hasCoords = typeof item.lat === 'number' && typeof item.lng === 'number';
         return Boolean(address) && !/уточняется/i.test(address) && hasCoords;
       });
-  }, [clinicsFacilities, demoState.items, demoState.enabled, demoState.publicClinics]);
+  }, [clinicsFacilities, demoState.items, demoState.enabled, demoState.publicClinics, demoState.demoOnly]);
 
   const activeOrigin = isManualOrigin && customOrigin ? customOrigin : userLocation;
   // Поле ввода обновляется мгновенно, тяжёлая фильтрация — с задержкой.
@@ -1925,12 +1927,13 @@ export default function App() {
       const preference = readDemoPreference();
       const config = await fetchServerConfig();
       if (!cancelled) setSiteSettings(config.settings);
-      const enabled = preference ?? config.demo;
+      // «Только демо» на сервере: выбор «без демо» из браузера не действует.
+      const enabled = config.demoOnly || (preference ?? config.demo);
       if (!enabled || cancelled) return;
       try {
-        const data = await loadDemoData();
+        const data = await loadDemoData({ fictionalOnly: config.demoOnly });
         // Запись и скрытие госучреждений — только если демо включено и на сервере.
-        if (!cancelled) setDemoState({ enabled: true, ...data, booking: config.demo && config.booking, publicClinics: !config.demo || config.publicClinics });
+        if (!cancelled) setDemoState({ enabled: true, ...data, booking: config.demo && config.booking, publicClinics: !config.demo || config.publicClinics, demoOnly: config.demoOnly });
       } catch {
         // Демо-набор необязателен: без него работает обычный справочник.
       }
@@ -4061,12 +4064,19 @@ export default function App() {
               {demoState.enabled && (
                 <div className="mb-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-100" role="note">
                   <FlaskConical size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
-                  <p>
-                    <b>Демо-режим.</b> Врачи, расписание, цены и ДМС с пометкой «Демо» вымышлены; клиники — вымышленные и реальные частные (данные OSM).
-                    {demoState.booking && ' Запись демонстрационная — в клиники ничего не уходит.'}
-                    {!demoState.publicClinics && ' Госклиники временно скрыты.'}{' '}
-                    <button type="button" onClick={disableDemo} className="font-semibold underline underline-offset-2">Выключить</button>
-                  </p>
+                  {demoState.demoOnly ? (
+                    <p data-testid="demo-only-note">
+                      <b>Демо-версия.</b> Все клиники, врачи, адреса, расписание, цены и программы ДМС вымышлены.
+                      {demoState.booking && ' Запись демонстрационная — никуда не отправляется.'}
+                    </p>
+                  ) : (
+                    <p>
+                      <b>Демо-режим.</b> Врачи, расписание, цены и ДМС с пометкой «Демо» вымышлены; клиники — вымышленные и реальные частные (данные OSM).
+                      {demoState.booking && ' Запись демонстрационная — в клиники ничего не уходит.'}
+                      {!demoState.publicClinics && ' Госклиники временно скрыты.'}{' '}
+                      <button type="button" onClick={disableDemo} className="font-semibold underline underline-offset-2">Выключить</button>
+                    </p>
+                  )}
                 </div>
               )}
               {demoState.booking && isMyBookingsOpen && (

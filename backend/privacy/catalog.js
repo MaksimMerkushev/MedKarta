@@ -246,6 +246,17 @@ export const loadCatalog = async () => {
   const replacedByDemo = new Set(demoFacilities.map((item) => item.osmId).filter(Boolean));
   const osmFacilities = (facilitiesModule.kazanFacilities || []).filter((item) => !replacedByDemo.has(item.id));
 
+  /*
+   * «Только демо» (DEMO_ONLY=on): ассистент знает только вымышленные клиники
+   * и врачей — те же, что на карте. Реальные данные не загружаются в выдачу.
+   */
+  const { demoOnlyEnabled } = await import('../demo/flags.js');
+  if (demoOnlyEnabled()) {
+    const fictional = (list) => list.filter((item) => !item.realClinic);
+    cached = buildCatalog({ doctors: fictional(demoDoctors), clinics: [], facilities: fictional(demoFacilities) });
+    return cached;
+  }
+
   cached = buildCatalog({
     doctors: visible([...doctors, ...collectedDoctors, ...demoDoctors]),
     clinics: visible(clinicsModule.ClinicsData?.clinics || []),

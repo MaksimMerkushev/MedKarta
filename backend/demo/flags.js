@@ -10,6 +10,11 @@
  *                         (по умолчанию скрыты: демо-сценарий — частные
  *                         клиники, расписание и ДМС). Данные ОМС и их
  *                         обработка не меняются — скрывается только выдача.
+ *   DEMO_ONLY=on        — только вымышленное (вместе с DEMO_DATA=on): на карте,
+ *                         в подборе и в ответах ассистента нет ни реальных
+ *                         клиник из OSM, ни реальных клиник с демо-врачами,
+ *                         ни справочника врачей; переключатель «Выключить демо»
+ *                         в интерфейсе не показывается. Данные не удаляются.
  */
 
 export const demoDataEnabled = (env = process.env) => env.DEMO_DATA === 'on';
@@ -17,6 +22,8 @@ export const demoDataEnabled = (env = process.env) => env.DEMO_DATA === 'on';
 export const bookingModeFromEnv = (env = process.env) => demoDataEnabled(env) && env.DEMO_BOOKING !== 'off';
 
 export const publicClinicsHidden = (env = process.env) => demoDataEnabled(env) && env.PUBLIC_CLINICS !== 'on';
+
+export const demoOnlyEnabled = (env = process.env) => demoDataEnabled(env) && env.DEMO_ONLY === 'on';
 
 export const PUBLIC_OWNERSHIP = 'Государственная';
 

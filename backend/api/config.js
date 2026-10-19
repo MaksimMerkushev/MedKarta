@@ -8,7 +8,7 @@
 
 import { respondJson } from '../http/request.js';
 import { loadSqlite } from '../demo/bookingStore.js';
-import { bookingModeFromEnv, demoDataEnabled, publicClinicsHidden } from '../demo/flags.js';
+import { bookingModeFromEnv, demoDataEnabled, demoOnlyEnabled, publicClinicsHidden } from '../demo/flags.js';
 import { peekAccountContext } from './accountContext.js';
 
 /*
@@ -45,6 +45,8 @@ export default async function handler(req, res) {
     booking: bookingModeFromEnv() && Boolean(await loadSqlite()),
     // В демо государственные клиники скрыты из выдачи (PUBLIC_CLINICS=on — показать).
     publicClinics: !publicClinicsHidden(),
+    // Только вымышленные клиники и врачи (DEMO_ONLY=on): интерфейс не показывает реальные данные.
+    demoOnly: demoOnlyEnabled(),
     settings: await publicSettings(),
   });
 }
