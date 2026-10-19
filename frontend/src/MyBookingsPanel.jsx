@@ -23,7 +23,11 @@ export default function MyBookingsPanel({ bookings, inAccount = false, onChange,
     lookupBookings(bookings)
       .then((payload) => {
         if (controller.cancelled) return;
-        setStatuses(Object.fromEntries(payload.bookings.map((item, index) => [bookings[index].number, item.found ? item.status : 'NOT_FOUND'])));
+        const fresh = Object.fromEntries(payload.bookings.map((item, index) => [bookings[index].number, item.found ? item.status : 'NOT_FOUND']));
+        setStatuses(fresh);
+        // Сохраняем то, что знает сервер (отмена в другой вкладке, сброс демо), — иначе значок считает устаревшее.
+        const stale = bookings.some((item) => item.status === 'CONFIRMED' && fresh[item.number] && fresh[item.number] !== 'CONFIRMED');
+        if (stale) onChange(bookings.map((item) => (item.status === 'CONFIRMED' && fresh[item.number] ? { ...item, status: fresh[item.number] } : item)));
       })
       .catch(() => {
         if (!controller.cancelled) setError('Не удалось проверить статусы — показаны сохранённые.');

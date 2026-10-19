@@ -71,7 +71,7 @@ import { fetchServerConfig, loadDemoData, readDemoPreference, setDemoPreference 
 import MyBookingsPanel from './MyBookingsPanel';
 import PlaceDetailsModal from './PlaceDetailsModal';
 import DemoDoctorSchedule from './DemoDoctorSchedule';
-import { fetchAccountBookings, readMyBookings, toStoredBooking, writeMyBookings } from './services/demoBooking';
+import { fetchAccountBookings, isUpcomingBooking, readMyBookings, toStoredBooking, writeMyBookings } from './services/demoBooking';
 import { resetAssistantSession } from './services/ai';
 import { ForcedPasswordChange } from './ui/auth';
 import { Avatar } from './ui/kit';
@@ -1347,6 +1347,8 @@ export default function App() {
   const [myBookings, setMyBookings] = useState(EMPTY_LIST);
   const [bookingsRefresh, setBookingsRefresh] = useState(0);
   const [isMyBookingsOpen, setIsMyBookingsOpen] = useState(false);
+  // Значок считает только предстоящие подтверждённые: прошедшие и пропавшие после сброса демо — нет.
+  const upcomingBookings = myBookings.filter((item) => isUpcomingBooking(item)).length;
   // Ключ окна ассистента: после входа или выхода переписка начинается заново.
   const [assistantEpoch, setAssistantEpoch] = useState(0);
   const pendingPicksRef = useRef(null);
@@ -3967,14 +3969,14 @@ export default function App() {
                       type="button"
                       className="sidebar-icon-button relative"
                       onClick={() => setIsMyBookingsOpen((current) => !current)}
-                      aria-label={`Мои демо-записи: ${myBookings.filter((item) => item.status === 'CONFIRMED').length}`}
+                      aria-label={`Мои демо-записи: ${upcomingBookings}`}
                       aria-expanded={isMyBookingsOpen}
                       title="Мои демо-записи"
                       data-testid="my-bookings-button"
                     >
                       <CalendarCheck size={19} aria-hidden="true" />
-                      {myBookings.some((item) => item.status === 'CONFIRMED') && (
-                        <span className="absolute -right-0.5 -top-0.5 rounded-full bg-violet-600 px-1 text-[10px] leading-4 text-white">{myBookings.filter((item) => item.status === 'CONFIRMED').length}</span>
+                      {upcomingBookings > 0 && (
+                        <span className="absolute -right-0.5 -top-0.5 rounded-full bg-violet-600 px-1 text-[10px] leading-4 text-white">{upcomingBookings}</span>
                       )}
                     </button>
                   )}

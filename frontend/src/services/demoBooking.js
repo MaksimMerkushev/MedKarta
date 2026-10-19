@@ -132,7 +132,8 @@ const sanitizeStored = (item) => {
   return {
     number: item.number,
     cancelToken: item.cancelToken.slice(0, 100),
-    status: item.status === 'CANCELLED' ? 'CANCELLED' : 'CONFIRMED',
+    // NOT_FOUND — сервер такой записи не знает (демо-данные сброшены).
+    status: item.status === 'CANCELLED' || item.status === 'NOT_FOUND' ? item.status : 'CONFIRMED',
     doctorName: text(item.doctorName),
     specialty: text(item.specialty, 60),
     clinicName: text(item.clinicName),
@@ -144,6 +145,16 @@ const sanitizeStored = (item) => {
     lng: Number.isFinite(item.lng) ? item.lng : null,
     itemId: text(item.itemId, 160),
   };
+};
+
+/**
+ * Подтверждённая и ещё не прошедшая запись — её и считает значок «Мои
+ * демо-записи». Время записи — московское (Казань).
+ */
+export const isUpcomingBooking = (item, now = Date.now()) => {
+  if (item?.status !== 'CONFIRMED') return false;
+  const endsAt = item.day && item.end ? Date.parse(`${item.day}T${item.end}:00+03:00`) : NaN;
+  return !Number.isFinite(endsAt) || endsAt >= now;
 };
 
 export const readMyBookings = () => {
