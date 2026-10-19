@@ -298,19 +298,24 @@ const describeDayWindow = (date) => {
   return '';
 };
 
-const describeSimpleDate = (date) => {
-  if (date.kind === 'today') return `сегодня${describeDayWindow(date)}`;
-  if (date.kind === 'tomorrow') return `завтра${describeDayWindow(date)}`;
-  if (date.kind === 'after_tomorrow') return `послезавтра${describeDayWindow(date)}`;
+/*
+ * caption — конкретный день, который сервер вычислил по московскому «сегодня»:
+ * «завтра (вторник, 20 октября)». Без него — как раньше, одними словами.
+ */
+const describeSimpleDate = (date, caption = null) => {
+  const withCaption = (words) => `${words}${caption ? ` (${caption})` : ''}${describeDayWindow(date)}`;
+  if (date.kind === 'today') return withCaption('сегодня');
+  if (date.kind === 'tomorrow') return withCaption('завтра');
+  if (date.kind === 'after_tomorrow') return withCaption('послезавтра');
   if (date.kind === 'weekday' && date.askWeek) {
     const nearest = [3, 5, 6].includes(date.weekday) ? 'ближайшую' : date.weekday === 7 ? 'ближайшее' : 'ближайший';
     return `${date.weekday === 2 ? 'во' : 'в'} ${WEEKDAYS_ACC[date.weekday]} — ${nearest} или через неделю (уточните)`;
   }
   if (date.kind === 'weekday') {
     const prefix = date.week === 'next' ? 'на следующей неделе ' : date.week === 'this' ? 'на этой неделе ' : '';
-    return `${prefix}${date.weekday === 2 ? 'во' : 'в'} ${WEEKDAYS_ACC[date.weekday]}${describeDayWindow(date)}`;
+    return withCaption(`${prefix}${date.weekday === 2 ? 'во' : 'в'} ${WEEKDAYS_ACC[date.weekday]}`);
   }
-  if (date.kind === 'date') return `${date.day.split('-').reverse().join('.')}${describeDayWindow(date)}`;
+  if (date.kind === 'date') return withCaption(date.day.split('-').reverse().join('.'));
   return null;
 };
 
@@ -337,6 +342,7 @@ const weekdayOfDay = (day) => {
 /** Условия запроса словами — для чата и карточек: что понял ассистент и что будет проверено. */
 export const describeRequest = (request, {
   specialtyLabel = (key) => key, planName = null, doctorLabels = [], branchLabels = [], excludedDoctorLabels = [], excludedBranchLabels = [],
+  dayCaption = null,
 } = {}) => {
   const parts = [];
   if (doctorLabels.length > 0) parts.push(doctorLabels.join(' или '));
@@ -371,9 +377,9 @@ export const describeRequest = (request, {
   else if (request.visit === 'procedure') parts.push('процедура или обследование');
   if (request.visit === 'repeat') parts.push('повторный приём');
   const date = request.date || { kind: 'any' };
-  const simple = describeSimpleDate(date);
   // Названный день недели показываем рядом с датой и только если он с ней расходится.
   const mismatch = date.expectWeekday && !(date.day && weekdayOfDay(date.day) === date.expectWeekday);
+  const simple = describeSimpleDate(date, mismatch ? null : dayCaption);
   if (simple) parts.push(mismatch ? `${simple} (вы указали ${WEEKDAYS_ACC[date.expectWeekday]})` : simple);
   // «Будни после 19:00 или выходные»: дни недели с одинаковым окном — одной группой.
   const plainWeekdays = date.kind === 'any_of' && date.options.length > 3 && date.options.every((option) => option.kind === 'weekday' && !option.week);

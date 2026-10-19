@@ -306,7 +306,7 @@ describe('Контекст: сброс, вопросы не по теме, дл�
     const { action } = await chat(['ЛОР завтра после 18', 'какая погода в субботу?']);
     assert.deepEqual(action.booking.request.date, { kind: 'tomorrow' });
     assert.match(action.replyText, /С этим не подскажу/);
-    assert.match(action.replyText, /Прежний запрос помню: ЛОР, завтра, после 18:00/);
+    assert.match(action.replyText, /Прежний запрос помню: ЛОР, завтра \(вторник, 13 октября\), после 18:00/);
     const next = await requestOf(['ЛОР завтра после 18', 'какая погода в субботу?', 'а в пятницу?']);
     assert.deepEqual(next.date, { kind: 'weekday', weekday: 5 });
     assert.equal(next.timeFrom, '18:00');

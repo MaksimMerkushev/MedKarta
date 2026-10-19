@@ -18,6 +18,7 @@ import { describeRequest, describeTimeWindow, LOCALITIES, normalizeSearchRequest
 import { SPECIALTY_CANON } from '../../shared/specialties.js';
 import { addDays, moscowDay, moscowParts } from './time.js';
 import { SLOT_WINDOW_DAYS } from './generator.js';
+import { dayCaptionOf } from './search.js';
 
 const BOOKING_ACTIONS = new Set(['FIND_DOCTOR', 'GET_AVAILABLE_SLOTS']);
 // «ЛОР в клинике Ясень»: модель может ответить поиском клиники, а запись — к врачу в ней.
@@ -345,8 +346,12 @@ export const buildBookingRequest = ({ booking, execution, now, index = null }) =
 };
 
 /** Условия запроса словами — для чата; названные демо-врачи идут первыми. */
-export const summarizeBooking = ({ request, doctorLabels = [], branchLabels = [], excludedDoctorLabels = [], excludedBranchLabels = [], planName = null }) =>
-  describeRequest(request, { specialtyLabel: (key) => SPECIALTY_CANON[key] || key, doctorLabels, branchLabels, excludedDoctorLabels, excludedBranchLabels, planName });
+export const summarizeBooking = ({ request, today = null, doctorLabels = [], branchLabels = [], excludedDoctorLabels = [], excludedBranchLabels = [], planName = null }) =>
+  describeRequest(request, {
+    specialtyLabel: (key) => SPECIALTY_CANON[key] || key, doctorLabels, branchLabels, excludedDoctorLabels, excludedBranchLabels, planName,
+    // «Завтра» — какой это день по московскому времени: «завтра (вторник, 20 октября)».
+    dayCaption: dayCaptionOf(request, today),
+  });
 
 /** Текст ассистента для режима записи: что понято и что будет проверено. */
 const COUNT_PHRASES = { 1: 'одного варианта', 2: 'двух вариантов', 3: 'трёх вариантов', 4: 'четырёх вариантов', 5: 'пяти вариантов' };
@@ -362,7 +367,7 @@ const resultLimitText = (asked, shown) => [
 
 export const bookingReplyText = ({ request, booking, today = null, routeToOption = false, ...labels }) => {
   const parts = [];
-  const summary = summarizeBooking({ request, ...labels });
+  const summary = summarizeBooking({ request, today, ...labels });
   // «Не знаю» на «к кому записаться?» — терапевт, которого ассистент предложил сам.
   if (booking?.specialtyDefaulted && request.specialty === 'therapist') {
     parts.push('Тогда начнём с терапевта: он посмотрит всё вместе и при необходимости направит к узкому специалисту.');

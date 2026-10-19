@@ -147,6 +147,23 @@ export const resolveDays = (request, today, windowSize = SLOT_WINDOW_DAYS) => {
   return days;
 };
 
+/**
+ * Какой это день на самом деле: «завтра» → «вторник, 20 октября» по
+ * московскому «сегодня». Для дня недели — только число («в пятницу (23
+ * октября)»), для даты — только день недели. null, если день не один или
+ * подбор ещё спросит, какую неделю имели в виду.
+ */
+export const dayCaptionOf = (request, today) => {
+  const date = request?.date;
+  if (!today || !date || date.askWeek || !['today', 'tomorrow', 'after_tomorrow', 'weekday', 'date'].includes(date.kind)) return null;
+  const day = date.kind === 'date' ? date.day : resolveDays({ date }, today)[0];
+  if (!day) return null;
+  const [, month, dayOfMonth] = day.split('-').map(Number);
+  if (date.kind === 'date') return WEEKDAY_NAMES[weekdayOf(day)];
+  if (date.kind === 'weekday') return `${dayOfMonth} ${MONTHS_GENITIVE[month]}`;
+  return `${WEEKDAY_NAMES[weekdayOf(day)]}, ${dayOfMonth} ${MONTHS_GENITIVE[month]}`;
+};
+
 /** Окно времени приёма в минутах от полуночи: [от, до). */
 const timeWindow = (request) => {
   let from = request.timeFrom ? minutesOf(request.timeFrom) : 0;
@@ -479,6 +496,7 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
     const excludedBranchLabels = branchLabelsOf(index, request.excludeBranchIds);
     const applied = describeRequest(request, {
       specialtyLabel: index.specialtyLabel, planName: plan?.name || null, doctorLabels, branchLabels, excludedDoctorLabels, excludedBranchLabels,
+      dayCaption: dayCaptionOf(request, today),
     });
     const base = { request, applied, today, timezone: 'Europe/Moscow', demo: true };
 
