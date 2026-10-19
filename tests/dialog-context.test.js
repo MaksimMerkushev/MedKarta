@@ -350,6 +350,56 @@ describe('Контекст: сброс, вопросы не по теме, дл�
   });
 });
 
+describe('«К другому врачу»', () => {
+  it('после названного врача — тот же профиль без него, без переспроса «какой специалист?»', async () => {
+    const { action } = await chat(['Болит горло, нужен ЛОР сегодня после 18:00', 'Хочу к Зариповой', 'А можно к другому врачу?']);
+    const request = action.booking?.request;
+    assert.ok(request, action.replyText);
+    assert.equal(request.specialty, 'lor');
+    assert.deepEqual(request.doctorIds, []);
+    assert.ok(request.excludeDoctorIds.includes('demo-doc-zaripova-irina'));
+    assert.doesNotMatch(action.replyText, /какой специалист нужен/u);
+  });
+
+  it('после списка, где врача не называли, — спрашивает, кого исключить, а не повторяет список молча', async () => {
+    const { action } = await chat(['Нужен терапевт завтра утром', 'А можно к другому врачу?']);
+    assert.equal(action.booking?.request.specialty, 'therapist');
+    assert.match(action.replyText, /К какому врачу не записывать/u);
+    const next = await chat(['Нужен терапевт завтра утром', 'А можно к другому врачу?', 'а в четверг?']);
+    assert.doesNotMatch(next.action.replyText, /К какому врачу не записывать/u, 'вопрос — только на ту реплику');
+  });
+});
+
+describe('«Покажи три наиболее подходящих варианта»', () => {
+  it('после подбора — показываем три, прежние условия на месте, ответ говорит, сколько и в каком порядке', async () => {
+    const { action } = await chat(['Болит горло, нужен ЛОР сегодня после 18:00', 'Покажи три наиболее подходящих варианта']);
+    const request = action.booking?.request;
+    assert.ok(request, action.replyText);
+    assert.equal(request.limit, 3);
+    assert.equal(request.specialty, 'lor');
+    assert.equal(request.timeFrom, '18:00');
+    assert.match(action.replyText, /Покажу не больше трёх вариантов/u);
+    const next = await chat(['Болит горло, нужен ЛОР сегодня после 18:00', 'Покажи три наиболее подходящих варианта', 'а после 19?']);
+    assert.equal(next.action.booking.request.limit, 3);
+    assert.doesNotMatch(next.action.replyText, /Покажу не больше/u, 'о числе — только в ответ на саму просьбу');
+    assert.doesNotMatch(action.replyText, /Записать вас сам по тексту/u, '«три первых» — не выбор варианта');
+  });
+
+  it('число держится в разговоре, «покажи все» возвращает обычный подбор; больше пяти — честно говорим', async () => {
+    assert.equal((await requestOf(['Нужен терапевт завтра утром', 'топ-3', 'А можно к другому врачу?'])).limit, 3);
+    const all = await requestOf(['Нужен терапевт завтра утром', 'топ-3', 'покажи все варианты']);
+    assert.equal(all.limit, 5);
+    const many = await chat(['Нужен терапевт завтра утром', 'покажи 10 вариантов']);
+    assert.equal(many.action.booking.request.limit, 5);
+    assert.match(many.action.replyText, /Больше 5 вариантов за раз не показываю/u);
+  });
+
+  it('«нужны два врача» — не просьба показать два варианта', async () => {
+    const request = await requestOf(['Нужны два врача: лор и терапевт, завтра']);
+    assert.notEqual(request?.limit, 2);
+  });
+});
+
 describe('Кнопка под подбором — та же реплика, что и словами', needsSqlite, () => {
   /*
    * Для каждой кнопки подбора: фраза say, отправленная в чат следующей

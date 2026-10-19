@@ -207,7 +207,16 @@ export const buildBookingRequest = ({ booking, execution, now, index = null }) =
   const askSpecialty = Array.isArray(booking.specialtyQuestion) && booking.specialtyQuestion.length === 2;
   if (askSpecialty) booking = { ...booking, specialties: [] };
 
-  const specialty = choice ? null : booking.specialties[0] || null;
+  let specialty = choice ? null : booking.specialties[0] || null;
+  /*
+   * «Хочу к Зариповой» → «а можно к другому врачу?»: профиль словами не
+   * назывался, он — у исключённого врача. Без этого ассистент переспрашивал
+   * «какой специалист нужен?», хотя речь шла о том же ЛОРе.
+   */
+  if (!specialty && !choice && index && booking.doctorIds.length === 0 && booking.excludeDoctorIds?.length > 0) {
+    const keys = new Set(booking.excludeDoctorIds.map((id) => index.doctors.get(id)?.specialtyKey).filter(Boolean));
+    if (keys.size === 1) specialty = [...keys][0];
+  }
   /*
    * Врачи — только из разбора текста (все однофамильцы подходящей формы,
    * «но не Ефимов» — исключение), а не из выбора модели: модель могла
@@ -318,6 +327,8 @@ export const buildBookingRequest = ({ booking, execution, now, index = null }) =
     originConfirmed: Boolean(booking.originConfirmed),
     preferCheap: Boolean(booking.preferCheap),
     city: booking.city,
+    // «Покажи три варианта»: больше MAX_RESULTS не показываем — normalizeSearchRequest ограничит.
+    ...(booking.resultLimit ? { limit: booking.resultLimit } : {}),
   });
   return {
     request: normalized,
@@ -338,6 +349,17 @@ export const summarizeBooking = ({ request, doctorLabels = [], branchLabels = []
   describeRequest(request, { specialtyLabel: (key) => SPECIALTY_CANON[key] || key, doctorLabels, branchLabels, excludedDoctorLabels, excludedBranchLabels, planName });
 
 /** Текст ассистента для режима записи: что понято и что будет проверено. */
+const COUNT_PHRASES = { 1: 'одного варианта', 2: 'двух вариантов', 3: 'трёх вариантов', 4: 'четырёх вариантов', 5: 'пяти вариантов' };
+/**
+ * «Покажи три варианта»: сколько покажем и в каком порядке (его задаёт
+ * sortCandidates). Подбор ещё не выполнен — подходящих может оказаться меньше,
+ * поэтому «не больше».
+ */
+const resultLimitText = (asked, shown) => [
+  asked > shown ? `Больше ${shown} вариантов за раз не показываю.` : null,
+  `Покажу не больше ${COUNT_PHRASES[shown] || `${shown} вариантов`}: выше — те, кто лучше подходит под пожелания, затем по ближайшему времени, дороге и цене.`,
+].filter(Boolean).join(' ');
+
 export const bookingReplyText = ({ request, booking, today = null, routeToOption = false, ...labels }) => {
   const parts = [];
   const summary = summarizeBooking({ request, ...labels });
@@ -368,6 +390,10 @@ export const bookingReplyText = ({ request, booking, today = null, routeToOption
     parts.push('Показываю только варианты, которые подходят под все условия, — подбор ниже. Условия без вашего согласия не ослабляю.');
     if (routeToOption) {
       parts.push('Маршрут проложу к первому подходящему варианту; к другому — кнопкой «Маршрут» в его карточке.');
+    }
+    if (booking?.resultLimitAsked) parts.push(resultLimitText(booking.resultLimit, request.limit));
+    if (booking?.doctorOtherAsk) {
+      parts.push('К какому врачу не записывать? Назовите его — например, «не к Зариповой», — или выберите другого врача в подборе ниже: в нём все, кто подходит под условия.');
     }
     // Программа ДМС не названа: подбор спросит её (если она не выбрана в интерфейсе), ответить можно и словами.
     if (request.dms.required && !request.dms.planId) {

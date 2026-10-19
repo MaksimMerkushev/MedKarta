@@ -1034,6 +1034,30 @@ const BOOKING_INTENT = new RegExp(`(?<!${WORD})(?:запис\\p{L}*|запиш\\
  *   visit?: string, timeAny?: true, travelAny?: true}} основные поля; кроме них —
  *   флаги и пожелания, которые сводит mergeBookingTurns
  */
+const COUNT_WORDS = [['оди', 1], ['одн', 1], ['пар', 2], ['дв', 2], ['тр', 3], ['четыр', 4], ['пят', 5], ['шест', 6], ['сем', 7], ['вос', 8], ['девят', 9], ['десят', 10]];
+const COUNT_WORD = '(?:один|одного|одну|пару|пара|два|две|двух|три|трёх|трех|четыре|четырёх|четырех|пять|пяти|шесть|шести|семь|семи|восемь|восьми|девять|девяти|десять|десяти|\\d{1,2})';
+const COUNT_QUALIFIER = '(?:самых|самого|самый|наиболее|лучших|лучший|лучшего|подходящих|подходящий|подходящего|ближайших|ближайший|первых|удачных|хороших)';
+const COUNT_NOUN = '(?:вариант|врач|доктор|специалист|клиник|предложени)\\p{L}*';
+const SHOW_VERB = '(?:покажи|покажите|показать|дай|дайте|выведи|выведите|предложи|предложите|оставь|оставьте|хочу\\s+(?:увидеть|посмотреть))';
+const COUNT_PATTERNS = [
+  new RegExp(`(?<!\\p{L})${SHOW_VERB}\\s+(?:мне\\s+)?(?:только\\s+)?(${COUNT_WORD})\\s+(?:${COUNT_QUALIFIER}\\s+){0,3}${COUNT_NOUN}`, 'u'),
+  new RegExp(`(?<![\\p{L}\\d])(${COUNT_WORD})\\s+(?:${COUNT_QUALIFIER}\\s+){0,2}(?:лучших|лучший|подходящих|подходящий)\\s+${COUNT_NOUN}`, 'u'),
+  new RegExp(`(?<!\\p{L})(?:первые|лучшие)\\s+(${COUNT_WORD})(?![\\p{L}\\d:])`, 'u'),
+  /(?<!\p{L})топ[-\s]?(\d{1,2})(?!\d)/u,
+];
+/** «Покажи три варианта» → 3, «покажи все варианты» → 'all', иначе null. */
+const resultCountOf = (text) => {
+  if (new RegExp(`(?<!\\p{L})${SHOW_VERB}\\s+(?:мне\\s+)?(?:все|всех)\\s+(?:${COUNT_QUALIFIER}\\s+)?${COUNT_NOUN}`, 'u').test(text)) return 'all';
+  for (const pattern of COUNT_PATTERNS) {
+    const match = pattern.exec(text);
+    if (!match) continue;
+    const raw = match[1];
+    const value = /^\d+$/u.test(raw) ? Number(raw) : COUNT_WORDS.find(([stem]) => raw.startsWith(stem))?.[1];
+    if (value >= 1 && value <= 20) return value;
+  }
+  return null;
+};
+
 export const extractBookingConstraints = (text, { nested = false } = {}) => {
   const lower = prepare(text);
   const result = {};
@@ -1589,6 +1613,17 @@ export const extractBookingConstraints = (text, { nested = false } = {}) => {
     && !/(?<!\p{L})(?:реб[её]н\p{L}*|сын\p{L}*|доч\p{L}*|малыш\p{L}*|подрост\p{L}*|детск\p{L}*)/u.test(lower)) result.adult = true;
   // «Запиши меня к первому», «давай второй вариант» — запись делается кнопкой в карточке, не текстом.
   if (/(?<!\p{L})(?:к\s+)?(?:перв|втор|трет|четв[её]рт|пят)\p{L}*\s+(?:вариант|врач\p{L}*|доктор\p{L}*|из\s+списка)|(?:запиши|запишите|записать|оформи)\p{L}*\s+(?:меня\s+)?(?:к\s+)?(?:первому|второму|третьему|нему|ней|этому|этой)(?!\p{L})|(?:беру|выбираю)\s+(?:перв|втор|трет)\p{L}*/u.test(lower)) result.pickOption = true;
+  /*
+   * «Покажи три наиболее подходящих варианта», «топ-3», «пять лучших врачей» —
+   * сколько вариантов показать. Это просьба о показе, а не выбор варианта:
+   * «три первых варианта» — не «запиши к первому».
+   */
+  const count = resultCountOf(lower);
+  if (count === 'all') result.resultLimit = null;
+  else if (count) {
+    result.resultLimit = count;
+    delete result.pickOption;
+  }
   if (/(?<!\p{L})(?:можно\s+(?:и\s+)?платно|(?:давай(?:те)?|ладно,?|хорошо,?)\s+(?:и\s+)?платно|платно\s+тоже\s+(?:можно|подойд\p{L}*)|готов\p{L}*\s+(?:и\s+)?(?:за)?платить)/u.test(lower)) result.allowPaid = true;
   if (/(?<!\p{L})(?:(?:стаж|опыт)\p{L}*\s+(?:не\s+важ\p{L}*|неваж\p{L}*|любой)|без\s+(?:требовани\p{L}*\s+(?:к|по)\s+)?стаж\p{L}*)/u.test(lower)) result.experienceAny = true;
   if (/(?<![\p{L}])(?:в\s+любое\s+время|(?:давай(?:те)?|можно|ладно,?)\s+любое\s+время|без\s+ограничени\p{L}*\s+по\s+времени|время\s+(?:не\s+важно|неважно|любое)|неважно\s+во\s+сколько|в\s+любое\s+время\s+дня)/u.test(lower)) {
@@ -1702,6 +1737,11 @@ export const mergeBookingTurns = (turns) => {
     originConfirmed: false,
     preferCheap: false,
     pickOption: false,
+    // «К другому врачу», когда врача не называли: кого исключить — неизвестно, ответ спросит.
+    doctorOtherAsk: false,
+    // «Покажи три варианта»: сколько показать; держится до «покажи все» или новой просьбы.
+    resultLimit: null,
+    resultLimitAsked: false,
     timeWindows: null,
     excludeDays: [],
     afterHours: null,
@@ -1975,7 +2015,12 @@ export const mergeBookingTurns = (turns) => {
     if ('maxPrice' in booking && booking.maxPrice) merged.preferCheap = false;
     // «Запиши к первому» — только в этой реплике: следующая — уже о другом.
     merged.pickOption = Boolean(booking.pickOption);
+    if ('resultLimit' in booking) merged.resultLimit = booking.resultLimit;
+    // Сказать «покажу не больше трёх» — только в ответ на саму просьбу.
+    merged.resultLimitAsked = Boolean(booking.resultLimit);
 
+    // «К другому врачу» после списка, без названного врача: молча повторять тот же список нельзя — спросим, кого исключить.
+    merged.doctorOtherAsk = Boolean(booking.doctorOther && !booking.doctorIds?.length && merged.doctorIds.length === 0);
     // «К другому врачу» — не к тому, что был назван.
     if (booking.doctorOther && !booking.doctorIds?.length && merged.doctorIds.length > 0) {
       merged.excludeDoctorIds = [...new Set([...merged.excludeDoctorIds, ...merged.doctorIds])];
