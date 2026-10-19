@@ -71,6 +71,7 @@
 | `DEMO_BOOKING_DB_PATH` | `var/demo/booking.sqlite` | файл базы демо-записи | [demoBooking.js](../backend/api/demoBooking.js) |
 | `DEMO_NOW` | текущее время | «заморозить» время демо (ISO 8601); не действует при `NODE_ENV=production` | [time.js](../backend/demo/time.js) |
 | `PUBLIC_CLINICS` | в демо — скрыты | `on` — показывать государственные учреждения в демо | [flags.js](../backend/demo/flags.js) |
+| `DEMO_ONLY` | выкл. | `on` (вместе с `DEMO_DATA=on`) — только вымышленные клиники и врачи: на карте, в подборе и в ответах ассистента нет реальных клиник из OSM, реальных клиник с демо-врачами и справочника врачей; «Выключить демо» в интерфейсе нет | [flags.js](../backend/demo/flags.js) |
 
 ## Аккаунты и админ-панель
 
