@@ -4,15 +4,16 @@
  * Карточка пользователя: профиль, управление, безопасность, аудит. Кнопки
  * действий показываются по разрешениям из ответа сервера (can), но каждое
  * действие сервер проверяет заново. Пароли, токены и cookie пользователя
- * сюда не приходят — только временный пароль сразу после его выдачи.
+ * сюда не приходят; ссылка-приглашение — только в ответе на её выдачу
+ * (ручная передача) и только в окне итога.
  */
 import { useState } from 'react';
 import {
-  Archive, ArrowLeft, Copy, KeyRound, Lock, LogOut, Monitor, RotateCcw, Save, ShieldAlert, Trash2, Unlock, UserCog,
+  Archive, ArrowLeft, Ban, Copy, KeyRound, Link2, Lock, LogOut, Mail, Monitor, RotateCcw, Save, Send, ShieldAlert, Trash2, Unlock, UserCog,
 } from 'lucide-react';
 
 import { api, useApi } from '../api';
-import { BlockDialog, TemporaryPasswordDialog } from '../common';
+import { BlockDialog, DeliveryChoice, InvitationResultDialog } from '../common';
 import { describeAudit, useAdmin } from '../model';
 import {
   Avatar, Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Pagination, RoleBadge, SelectInput, Skeleton, StatusBadge, Tabs, TextInput,
@@ -58,7 +59,7 @@ function ProfileTab({ user }) {
         <Row label="Роль"><RoleBadge role={user.role} /></Row>
         <Row label="Статус">
           <span className="flex flex-wrap items-center gap-2">
-            <StatusBadge status={user.status} until={user.blockedUntil} />
+            <StatusBadge status={user.status} until={user.blockedUntil} pending={user.pending} />
             {user.blockReason && <span className="text-slate-500 dark:text-slate-400">Причина: {user.blockReason}</span>}
           </span>
         </Row>
@@ -77,7 +78,143 @@ function ProfileTab({ user }) {
 
 const Reason = ({ children }) => <p className="text-[12px] leading-5 text-slate-500 dark:text-slate-400">{children}</p>;
 
-function ManageTab({ data, onChanged, onTemporaryPassword }) {
+const LINK_TONES = { active: 'blue', opened: 'amber', used: 'green', revoked: 'slate', expired: 'slate' };
+const PURPOSE_LABELS = { invite: 'Приглашение', reset: 'Смена пароля' };
+const DELIVERY_LABELS = { sent: 'письмом', failed: 'письмо не ушло — передана вручную', manual: 'передана вручную', pending: 'отправляется' };
+
+/** Когда и чем закончилась ссылка — одной строкой. */
+const linkStatus = (item) => {
+  if (item.state === 'used') return `использована ${formatDateTime(item.usedAt)}`;
+  if (item.state === 'revoked') return `отозвана ${formatDateTime(item.revokedAt)}${item.revokedReason ? `: ${item.revokedReason}` : ''}`;
+  if (item.state === 'expired') return `истекла ${formatDateTime(item.expiresAt)}`;
+  if (item.state === 'opened') return `открыта ${formatDateTime(item.openedAt)}, пароль ещё не задан`;
+  return `действует до ${formatDateTime(item.expiresAt)}`;
+};
+
+/**
+ * Приглашение и ссылки для входа: выдать новую (письмом или вручную),
+ * посмотреть историю, отозвать действующую. Пароль администратор не видит.
+ */
+function AccessLinksCard({ data, onChanged }) {
+  const { me } = useAdmin();
+  const toast = useToast();
+  const { user, can } = data;
+  const mailEnabled = Boolean(me?.mail?.enabled);
+  const links = useApi(() => api.get(`/api/admin/users/${user.id}/invitations`), [user.id, user.version]);
+  const [dialog, setDialog] = useState(null);
+  // Итог выдачи — отдельно от окна подтверждения: то закрывается само после успеха.
+  const [issued, setIssued] = useState(null);
+  const [delivery, setDelivery] = useState('auto');
+  const invite = user.pending;
+  const live = links.data?.items.some((item) => item.state === 'active' || item.state === 'opened');
+  const why = user.status === 'blocked'
+    ? 'Аккаунт заблокирован: ссылку можно выдать после разблокировки.'
+    : user.status === 'archived'
+      ? 'Аккаунт в архиве: сначала восстановите его.'
+      : 'Нужно право «Сброс пароля» и роль выше, чем у пользователя.';
+
+  return (
+    <Card
+      title={invite ? 'Приглашение' : 'Пароль и ссылки для входа'}
+      description={invite
+        ? 'Аккаунт ждёт активации: пароль пользователь задаст сам, открыв ссылку.'
+        : 'Пароль знает только пользователь. Если он его забыл — выдайте ссылку: по ней он задаст новый.'}
+      className={invite ? 'xl:col-span-2' : ''}
+    >
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="primary" icon={invite ? Send : Link2} disabled={!can.invite} onClick={() => setDialog({ type: 'issue' })} data-testid="issue-link">
+            {invite ? (live ? 'Выслать новое приглашение' : 'Выслать приглашение') : 'Ссылка для смены пароля'}
+          </Button>
+          {!invite && (
+            <Button variant="ghost" disabled={!can.password || user.mustChangePassword} onClick={() => setDialog({ type: 'require' })}>Потребовать смену при входе</Button>
+          )}
+          {!can.invite && <Reason>{why}</Reason>}
+        </div>
+
+        {links.error && <ErrorState error={links.error} onRetry={links.reload} />}
+        {!links.data && links.loading && <Skeleton className="h-16" />}
+        {links.data && links.data.items.length === 0 && (
+          <p className="rounded-xl bg-slate-50 px-3 py-2.5 text-[13px] text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">Ссылок для этого аккаунта ещё не выдавали.</p>
+        )}
+        {links.data && links.data.items.length > 0 && (
+          <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200 dark:divide-slate-800 dark:border-slate-800" data-testid="user-invitations">
+            {links.data.items.map((item) => (
+              <li key={item.id} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3.5 py-2.5 text-[13px]" data-testid="invitation-row" data-state={item.state}>
+                <span className="inline-flex items-center gap-2 font-semibold text-slate-700 dark:text-slate-200">
+                  {item.delivery === 'email' ? <Mail size={15} className="text-slate-400" aria-hidden="true" /> : <Link2 size={15} className="text-slate-400" aria-hidden="true" />}
+                  {PURPOSE_LABELS[item.purpose] || item.purpose}
+                </span>
+                <Badge tone={LINK_TONES[item.state] || 'slate'}>{item.stateLabel}</Badge>
+                <span className="min-w-0 flex-1 text-slate-500 dark:text-slate-400">
+                  {linkStatus(item)} · выдал {item.createdBy || '—'} {formatDateTime(item.createdAt)}, {DELIVERY_LABELS[item.deliveryStatus] || item.deliveryStatus}
+                </span>
+                {(item.state === 'active' || item.state === 'opened') && (
+                  <Button size="sm" variant="dangerGhost" icon={Ban} disabled={!can.password} onClick={() => setDialog({ type: 'revoke', item })} data-testid="revoke-invitation">Отозвать</Button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {dialog?.type === 'issue' && (
+        <ConfirmDialog
+          title={invite ? 'Выслать приглашение?' : 'Выдать ссылку для смены пароля?'}
+          message={invite
+            ? 'Прежнее приглашение, если оно ещё действует, перестанет работать.'
+            : 'Текущий пароль продолжит действовать, пока пользователь не задаст новый по ссылке. Прежняя ссылка для смены пароля перестанет работать.'}
+          confirmLabel={mailEnabled && delivery === 'auto' ? 'Отправить письмо' : 'Показать ссылку'}
+          tone="primary"
+          onClose={() => setDialog(null)}
+          onConfirm={async () => {
+            const result = await api.post(`/api/admin/users/${user.id}/invitations`, { delivery: mailEnabled ? delivery : 'auto' });
+            setIssued(result);
+            links.reload();
+          }}
+        >
+          <DeliveryChoice mailEnabled={mailEnabled} value={delivery} onChange={setDelivery} />
+        </ConfirmDialog>
+      )}
+      {issued && (
+        <InvitationResultDialog
+          user={issued.user}
+          invitation={issued.invitation}
+          link={issued.link}
+          onClose={() => {
+            // Карточка обновляется после закрытия: иначе смена версии пересоздала бы вкладку вместе с окном.
+            const { user: fresh, can: rights, permissions } = issued;
+            setIssued(null);
+            onChanged({ user: fresh, can: rights, permissions });
+          }}
+        />
+      )}
+      {dialog?.type === 'revoke' && (
+        <ConfirmDialog
+          title="Отозвать ссылку?"
+          message="По ней больше нельзя будет задать пароль. Если пользователь уже открыл её, создание пароля прервётся."
+          confirmLabel="Отозвать"
+          onClose={() => setDialog(null)}
+          onConfirm={async () => {
+            await api.del(`/api/admin/users/${user.id}/invitations/${dialog.item.id}`, {});
+            toast('Ссылка отозвана.');
+            links.reload();
+          }}
+        />
+      )}
+      {dialog?.type === 'require' && (
+        <ConfirmDialog title="Потребовать смену пароля?" message="При следующем запросе пользователь увидит экран смены пароля; остальные функции будут недоступны до смены." confirmLabel="Потребовать" tone="primary" onClose={() => setDialog(null)}
+          onConfirm={async () => {
+            const result = await api.post(`/api/admin/users/${user.id}/password-require`, {});
+            toast('Пользователь сменит пароль при следующем действии.');
+            onChanged(result);
+          }} />
+      )}
+    </Card>
+  );
+}
+
+function ManageTab({ data, onChanged }) {
   const toast = useToast();
   const { user, can } = data;
   const [form, setForm] = useState({ firstName: user.firstName, lastName: user.lastName, email: user.email });
@@ -121,12 +258,22 @@ function ManageTab({ data, onChanged, onTemporaryPassword }) {
         </p>
       )}
       <div className="grid gap-5 xl:grid-cols-2">
+        {/* Аккаунт ждёт активации — приглашение главное, оно первым. */}
+        {user.pending && <AccessLinksCard data={data} onChanged={onChanged} />}
         <Card title="Имя и email" description="Email — это логин для входа.">
           <form className="grid gap-3 sm:grid-cols-2" onSubmit={save}>
             <TextInput label="Имя" value={form.firstName} disabled={!can.edit} maxLength={60} onChange={(event) => setForm({ ...form, firstName: event.target.value })} data-testid="edit-first-name" />
             <TextInput label="Фамилия" value={form.lastName} disabled={!can.edit} maxLength={60} onChange={(event) => setForm({ ...form, lastName: event.target.value })} data-testid="edit-last-name" />
             <div className="sm:col-span-2">
-              <TextInput label="Email" type="email" value={form.email} disabled={!can.edit} maxLength={254} onChange={(event) => setForm({ ...form, email: event.target.value })} />
+              <TextInput
+                label="Email"
+                type="email"
+                value={form.email}
+                disabled={!can.editEmail}
+                maxLength={254}
+                onChange={(event) => setForm({ ...form, email: event.target.value })}
+                hint={can.edit && !can.editEmail ? 'Email — логин и адрес для ссылок входа: менять его может только тот, у кого есть право «Сброс пароля».' : undefined}
+              />
             </div>
             {error && <p className="rounded-xl bg-red-50 px-3 py-2 text-[13px] text-red-700 sm:col-span-2 dark:bg-red-950/50 dark:text-red-300" role="alert">{error}</p>}
             <div className="flex items-center gap-2 sm:col-span-2">
@@ -168,12 +315,7 @@ function ManageTab({ data, onChanged, onTemporaryPassword }) {
           {user.status === 'blocked' && user.blockReason && <p className="mt-3 text-[13px] text-slate-600 dark:text-slate-300">Причина блокировки: {user.blockReason}</p>}
         </Card>
 
-        <Card title="Пароль" description="Администратор не видит и не может узнать пароль пользователя.">
-          <div className="flex flex-wrap gap-2">
-            <Button icon={KeyRound} disabled={!can.password} onClick={() => setDialog('reset')} data-testid="reset-password">Выдать временный пароль</Button>
-            <Button variant="ghost" disabled={!can.password || user.mustChangePassword} onClick={() => setDialog('require')}>Потребовать смену при входе</Button>
-          </div>
-        </Card>
+        {!user.pending && <AccessLinksCard data={data} onChanged={onChanged} />}
       </div>
 
       <Card title="Опасная зона">
@@ -218,18 +360,6 @@ function ManageTab({ data, onChanged, onTemporaryPassword }) {
       {dialog === 'restore' && (
         <ConfirmDialog title="Восстановить аккаунт?" message="Пользователь снова сможет войти." confirmLabel="Восстановить" tone="primary" onClose={() => setDialog(null)}
           onConfirm={() => act(() => api.post(`/api/admin/users/${user.id}/restore`, {}), 'Аккаунт восстановлен.')} />
-      )}
-      {dialog === 'reset' && (
-        <ConfirmDialog title="Выдать временный пароль?" message="Текущий пароль перестанет действовать, все сессии будут завершены. При входе пользователь сменит пароль." confirmLabel="Выдать" onClose={() => setDialog(null)}
-          onConfirm={async () => {
-            const result = await api.post(`/api/admin/users/${user.id}/password-reset`, {});
-            onChanged(result);
-            onTemporaryPassword(result.temporaryPassword);
-          }} />
-      )}
-      {dialog === 'require' && (
-        <ConfirmDialog title="Потребовать смену пароля?" message="При следующем запросе пользователь увидит экран смены пароля; остальные функции будут недоступны до смены." confirmLabel="Потребовать" tone="primary" onClose={() => setDialog(null)}
-          onConfirm={() => act(() => api.post(`/api/admin/users/${user.id}/password-require`, {}), 'Пользователь сменит пароль при следующем действии.')} />
       )}
       {dialog === 'delete' && (
         <ConfirmDialog
@@ -387,7 +517,6 @@ function AuditTab({ user }) {
 
 export default function UserDetail({ params }) {
   const [tab, setTab] = useState('profile');
-  const [password, setPassword] = useState(null);
   const { data, error, loading, reload, setData } = useApi(() => api.get(`/api/admin/users/${params.id}`), [params.id]);
 
   const onChanged = (result) => {
@@ -417,7 +546,7 @@ export default function UserDetail({ params }) {
           <p className="truncate text-[13px] text-slate-500 dark:text-slate-400">{user.email}</p>
           <div className="mt-1.5 flex flex-wrap gap-1.5">
             <RoleBadge role={user.role} />
-            <StatusBadge status={user.status} until={user.blockedUntil} />
+            <StatusBadge status={user.status} until={user.blockedUntil} pending={user.pending} />
             {user.mustChangePassword && <Badge tone="amber" icon={KeyRound}>Сменит пароль</Badge>}
             {user.isSelf && <Badge tone="violet">Это вы</Badge>}
             {user.isDemo && <Badge tone="amber">Демо-копия</Badge>}
@@ -430,10 +559,9 @@ export default function UserDetail({ params }) {
       </div>
       <Tabs tabs={TABS} value={tab} onChange={setTab} label="Разделы карточки" />
       {tab === 'profile' && <ProfileTab user={user} />}
-      {tab === 'manage' && <ManageTab key={user.version} data={data} onChanged={onChanged} onTemporaryPassword={setPassword} />}
+      {tab === 'manage' && <ManageTab key={user.version} data={data} onChanged={onChanged} />}
       {tab === 'security' && <SecurityTab data={data} onChanged={onChanged} />}
       {tab === 'audit' && <AuditTab user={user} />}
-      {password && <TemporaryPasswordDialog email={user.email} password={password} onClose={() => setPassword(null)} />}
     </div>
   );
 }

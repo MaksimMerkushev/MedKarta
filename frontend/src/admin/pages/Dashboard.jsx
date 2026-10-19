@@ -121,7 +121,7 @@ export default function Dashboard() {
       {data && (
         <div className={`space-y-5 transition-opacity ${loading ? 'opacity-60' : ''}`}>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <Tile label="Всего пользователей" value={formatNumber(data.users.total)} sub={`Активных ${formatNumber(data.users.active)} · в архиве ${formatNumber(data.users.archived)}`} icon={Users} testId="tile-total" />
+            <Tile label="Всего пользователей" value={formatNumber(data.users.total)} sub={`Ждут активации ${formatNumber(data.users.pending ?? 0)} · в архиве ${formatNumber(data.users.archived)}`} icon={Users} testId="tile-total" />
             <Tile label="Заблокированы" value={formatNumber(data.users.blocked)} sub={`Должны сменить пароль: ${formatNumber(data.users.mustChangePassword)}`} icon={ShieldAlert} tone="red" />
             <Tile label="Новые аккаунты" value={formatNumber(data.newAccounts.day)} sub={`за 24 часа · 7 дней: ${formatNumber(data.newAccounts.week)} · 30 дней: ${formatNumber(data.newAccounts.month)}`} icon={UserPlus} tone="green" />
             <Tile label="Активные пользователи" value={`${formatNumber(data.activity.dau)} / ${formatNumber(data.activity.wau)} / ${formatNumber(data.activity.mau)}`} sub="DAU / WAU / MAU" icon={Users} tone="violet" />

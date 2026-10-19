@@ -53,6 +53,15 @@ export const describeAudit = (item) => {
       return Object.entries(details.changes || {}).map(([key, change]) => `${key}: ${JSON.stringify(change.from)} → ${JSON.stringify(change.to)}`).join('; ');
     case 'user.password_reset':
       return details.via === 'cli' ? 'Через CLI, сессии завершены' : 'Сессии завершены';
+    case 'user.invite':
+    case 'user.reset_link':
+      return `${details.delivery === 'email' ? 'Письмом' : 'Ссылка передана вручную'}${details.expiresAt ? `, до ${formatDateTime(details.expiresAt)}` : ''}${details.via === 'cli' ? ' (CLI)' : ''}`;
+    case 'user.invite_revoke':
+      return details.purpose === 'reset' ? 'Ссылка для смены пароля' : 'Приглашение';
+    case 'user.activate':
+      return 'Пароль задан по приглашению';
+    case 'user.password_set':
+      return details.via === 'self' ? 'По ссылке, запрошенной самим пользователем' : 'По ссылке от администратора';
     case 'user.delete':
       return details.self ? 'Удалил сам' : `Роль: ${ROLE_LABELS[details.role] || details.role || '—'}`;
     default:

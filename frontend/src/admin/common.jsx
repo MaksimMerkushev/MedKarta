@@ -2,16 +2,16 @@
  * © 2026 МедКарта Казань. Все права защищены.
  *
  * Общие компоненты страниц админ-панели: ячейка пользователя, окна
- * создания пользователя, блокировки и показа временного пароля.
+ * создания пользователя (с приглашением), итога выдачи ссылки и блокировки.
  * Права, роли и расшифровка журнала — в model.js.
  */
-import { useState } from 'react';
-import { Check, Copy, KeyRound, ShieldAlert, UserPlus } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { AlertTriangle, Check, Copy, Info, Link2, Mail, MailCheck, ShieldAlert, UserPlus } from 'lucide-react';
 
 import { api } from './api';
 import { assignableRoles } from './model';
 import { Avatar, Button, ConfirmDialog, inputClass, Modal, SelectInput, TextInput } from '../ui/kit';
-import { ROLE_LABELS } from '../ui/format';
+import { formatDateTime, ROLE_LABELS } from '../ui/format';
 import { useToast } from '../ui/hooks';
 import { Link } from '../ui/router';
 
@@ -28,35 +28,108 @@ export function UserCell({ user, link = true, size = 34 }) {
   return link ? <Link to={`/admin/users/${user.id}`} className="block min-w-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-blue-300">{content}</Link> : content;
 }
 
-/** Временный пароль — показывается один раз; при закрытии окна его больше нигде нет. */
-export function TemporaryPasswordDialog({ email, password, onClose }) {
+const DELIVERY_OPTIONS = [
+  { key: 'auto', label: 'Письмом на email', icon: Mail },
+  { key: 'manual', label: 'Показать ссылку', icon: Link2 },
+];
+
+/** Как передать ссылку: письмом (если почта настроена) или показать администратору один раз. */
+export function DeliveryChoice({ mailEnabled, value, onChange }) {
+  if (!mailEnabled) {
+    return (
+      <p className="flex gap-2 rounded-xl bg-slate-50 px-3 py-2.5 text-[12.5px] leading-5 text-slate-600 dark:bg-slate-800/70 dark:text-slate-300" data-testid="delivery-manual-note">
+        <Info size={16} className="mt-0.5 shrink-0 text-slate-400" aria-hidden="true" />
+        Почта на сервере не настроена: ссылку покажем один раз — передайте её пользователю лично.
+      </p>
+    );
+  }
+  return (
+    <div>
+      <span className="mb-1 block text-[12.5px] font-semibold text-slate-600 dark:text-slate-300" id="delivery-label">Как передать приглашение</span>
+      <div className="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1 text-[13px] font-semibold dark:bg-slate-800" role="radiogroup" aria-labelledby="delivery-label">
+        {DELIVERY_OPTIONS.map((option) => {
+          const Icon = option.icon;
+          return (
+            <button key={option.key} type="button" role="radio" aria-checked={value === option.key} onClick={() => onChange(option.key)} className={`inline-flex items-center justify-center gap-1.5 rounded-lg py-1.5 transition ${value === option.key ? 'bg-white text-blue-700 shadow-sm dark:bg-slate-700 dark:text-white' : 'text-slate-500 dark:text-slate-400'}`} data-testid={`delivery-${option.key}`}>
+              <Icon size={15} aria-hidden="true" />
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Итог выдачи ссылки. Письмо ушло — сообщаем об этом. Ссылка показана
+ * (ручная передача или письмо не ушло) — только здесь и только сейчас: в
+ * ответах API, журнале и карточке пользователя её больше нет.
+ */
+export function InvitationResultDialog({ user, invitation, link = null, created = false, onClose }) {
   const [copied, setCopied] = useState(false);
+  const inputRef = useRef(null);
+  const invite = invitation.purpose === 'invite';
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(password);
+      await navigator.clipboard.writeText(link);
       setCopied(true);
     } catch {
+      // Буфер обмена недоступен (нет HTTPS или разрешения) — выделяем ссылку для ручного копирования.
+      inputRef.current?.select();
       setCopied(false);
     }
   };
+  const title = created ? 'Пользователь создан' : invite ? 'Новое приглашение' : 'Ссылка для смены пароля';
   return (
-    <Modal title="Временный пароль" description={`Для ${email}. Передайте его пользователю лично — при первом входе пароль нужно будет сменить.`} onClose={onClose} size="sm" footer={<Button variant="primary" onClick={onClose}>Готово</Button>}>
-      <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950">
-        <KeyRound size={18} className="shrink-0 text-violet-600 dark:text-violet-400" aria-hidden="true" />
-        <code className="flex-1 select-all whitespace-nowrap font-mono text-[15px] font-semibold text-slate-800 dark:text-white" data-testid="temporary-password">{password}</code>
-        <Button size="sm" icon={copied ? Check : Copy} onClick={copy}>{copied ? 'Скопировано' : 'Копировать'}</Button>
-      </div>
-      <p className="mt-3 flex gap-2 text-[12.5px] leading-5 text-amber-800 dark:text-amber-300">
-        <ShieldAlert size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
-        Пароль показывается один раз и нигде не хранится в открытом виде. Не отправляйте его в общий чат.
-      </p>
+    <Modal title={title} description={`${user.displayName} · ${user.email}`} onClose={onClose} size="sm" footer={<Button variant="primary" onClick={onClose} data-testid="invitation-done">Готово</Button>}>
+      {!link ? (
+        <div className="flex gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-3.5 text-[13.5px] leading-5 text-emerald-900 dark:border-emerald-900/70 dark:bg-emerald-950/40 dark:text-emerald-200" data-testid="invitation-sent">
+          <MailCheck size={20} className="mt-0.5 shrink-0" aria-hidden="true" />
+          <p>
+            {invite ? 'Приглашение отправлено' : 'Ссылка отправлена'} на <b className="font-semibold">{user.email}</b>. Она действует до {formatDateTime(invitation.expiresAt)} и срабатывает один раз.
+            {invite ? ' Когда пользователь задаст пароль, в панели появится уведомление.' : ''}
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-3" data-testid="invitation-link-box">
+          {invitation.deliveryStatus === 'failed' && (
+            <p className="flex gap-2 rounded-xl bg-amber-50 px-3 py-2.5 text-[12.5px] leading-5 text-amber-900 dark:bg-amber-950/50 dark:text-amber-200" role="alert">
+              <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+              Письмо не отправилось: почтовый сервер его не принял. Передайте ссылку сами.
+            </p>
+          )}
+          <label className="block text-[12.5px] font-semibold text-slate-600 dark:text-slate-300">
+            {invite ? 'Ссылка-приглашение' : 'Ссылка для смены пароля'}
+            <span className="mt-1 flex gap-2">
+              <input
+                ref={inputRef}
+                readOnly
+                value={link}
+                onClick={(event) => event.target.select()}
+                className={`${inputClass} min-w-0 flex-1 font-mono text-[12.5px]`}
+                spellCheck={false}
+                data-testid="invitation-link"
+              />
+              <Button icon={copied ? Check : Copy} onClick={copy} data-testid="invitation-copy">{copied ? 'Скопировано' : 'Копировать'}</Button>
+            </span>
+          </label>
+          <p className="flex gap-2 text-[12.5px] leading-5 text-slate-600 dark:text-slate-300">
+            <ShieldAlert size={16} className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />
+            <span>
+              Ссылка видна только сейчас — потом её не показать, можно лишь выпустить новую. Передайте её лично этому человеку, не в общий чат: по ней задаётся пароль. Действует до {formatDateTime(invitation.expiresAt)}, срабатывает один раз.
+            </span>
+          </p>
+        </div>
+      )}
     </Modal>
   );
 }
 
 export function CreateUserModal({ me, onClose, onCreated }) {
   const roles = assignableRoles(me);
-  const [form, setForm] = useState({ email: '', firstName: '', lastName: '', role: 'user' });
+  const mailEnabled = Boolean(me?.mail?.enabled);
+  const [form, setForm] = useState({ email: '', firstName: '', lastName: '', role: 'user', delivery: 'auto' });
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const set = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value }));
@@ -65,7 +138,7 @@ export function CreateUserModal({ me, onClose, onCreated }) {
     setBusy(true);
     setError('');
     try {
-      const result = await api.post('/api/admin/users', { ...form, email: form.email.trim(), firstName: form.firstName.trim(), lastName: form.lastName.trim() });
+      const result = await api.post('/api/admin/users', { ...form, email: form.email.trim(), firstName: form.firstName.trim(), lastName: form.lastName.trim(), delivery: mailEnabled ? form.delivery : 'auto' });
       onCreated(result);
     } catch (failure) {
       setError(failure.message);
@@ -76,13 +149,15 @@ export function CreateUserModal({ me, onClose, onCreated }) {
   return (
     <Modal
       title="Новый пользователь"
-      description="Пароль сгенерируется автоматически и будет показан один раз. При первом входе его нужно сменить."
+      description="Без пароля: пользователь придумает его сам по ссылке-приглашению. До этого аккаунт «ожидает активации»."
       onClose={onClose}
       busy={busy}
       footer={(
         <>
           <Button onClick={onClose} disabled={busy}>Отмена</Button>
-          <Button variant="primary" icon={UserPlus} onClick={submit} loading={busy} disabled={!ready} data-testid="create-user-submit">Создать</Button>
+          <Button variant="primary" icon={UserPlus} onClick={submit} loading={busy} disabled={!ready} data-testid="create-user-submit">
+            {mailEnabled && form.delivery === 'auto' ? 'Создать и отправить' : 'Создать'}
+          </Button>
         </>
       )}
     >
@@ -101,6 +176,9 @@ export function CreateUserModal({ me, onClose, onCreated }) {
             hint={roles.length === 1 ? 'Назначать другие роли может пользователь с правом «Назначение ролей».' : 'Можно назначить только роль ниже своей (суперадминистратор — любую).'}
             data-testid="create-user-role"
           />
+        </div>
+        <div className="sm:col-span-2">
+          <DeliveryChoice mailEnabled={mailEnabled} value={form.delivery} onChange={(delivery) => setForm((current) => ({ ...current, delivery }))} />
         </div>
         {error && <p className="rounded-xl bg-red-50 px-3 py-2 text-[13px] text-red-700 sm:col-span-2 dark:bg-red-950/50 dark:text-red-300" role="alert">{error}</p>}
         <button type="submit" className="hidden" aria-hidden="true" tabIndex={-1} />

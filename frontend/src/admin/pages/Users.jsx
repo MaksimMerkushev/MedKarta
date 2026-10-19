@@ -9,7 +9,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Download, KeyRound, Lock, Search, Unlock, UserPlus, Users as UsersIcon } from 'lucide-react';
 
 import { api, queryString, useApi } from '../api';
-import { BlockDialog, CreateUserModal, TemporaryPasswordDialog, UserCell } from '../common';
+import { BlockDialog, CreateUserModal, InvitationResultDialog, UserCell } from '../common';
 import { useAdmin } from '../model';
 import {
   Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, controlClass, inputClass, Pagination, RoleBadge, Skeleton, StatusBadge,
@@ -127,6 +127,7 @@ export default function UsersPage() {
           <select className={`${controlClass} max-sm:flex-1`} value={query.status} onChange={(event) => setQuery({ status: event.target.value })} aria-label="Статус" data-testid="users-status-filter">
             <option value="">Все статусы</option>
             <option value="active">Активные</option>
+            <option value="pending">Ожидают активации</option>
             <option value="blocked">Заблокированные</option>
             <option value="archived">В архиве</option>
           </select>
@@ -191,7 +192,7 @@ export default function UsersPage() {
                     <td className="px-3 py-2"><RoleBadge role={user.role} short /></td>
                     <td className="px-3 py-2">
                       <div className="flex flex-col items-start gap-1">
-                        <StatusBadge status={user.status} until={user.blockedUntil} />
+                        <StatusBadge status={user.status} until={user.blockedUntil} pending={user.pending} />
                         {user.mustChangePassword && <Badge tone="amber" icon={KeyRound}>Сменит пароль</Badge>}
                       </div>
                     </td>
@@ -221,18 +222,23 @@ export default function UsersPage() {
           me={me}
           onClose={() => setDialog(null)}
           onCreated={(result) => {
-            toast('Пользователь создан.');
-            setDialog({ type: 'password', email: result.user.email, password: result.temporaryPassword, id: result.user.id });
+            setDialog({ type: 'invited', result });
             reload();
           }}
         />
       )}
-      {dialog?.type === 'password' && (
-        <TemporaryPasswordDialog email={dialog.email} password={dialog.password} onClose={() => {
-          const { id } = dialog;
-          setDialog(null);
-          navigate(`/admin/users/${id}`);
-        }} />
+      {dialog?.type === 'invited' && (
+        <InvitationResultDialog
+          user={dialog.result.user}
+          invitation={dialog.result.invitation}
+          link={dialog.result.link}
+          created
+          onClose={() => {
+            const { id } = dialog.result.user;
+            setDialog(null);
+            navigate(`/admin/users/${id}`);
+          }}
+        />
       )}
       {dialog?.type === 'bulk-block' && (
         <BlockDialog title="Заблокировать выбранных" count={selected.size} onClose={() => setDialog(null)} onConfirm={(options) => runBulk('block', options)} />

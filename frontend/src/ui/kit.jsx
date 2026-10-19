@@ -8,7 +8,7 @@
  * хуки — в hooks.js, чтобы работал Fast Refresh.
  */
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Info, Loader2, Moon, Sun, X, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Clock3, ChevronLeft, ChevronRight, Info, Loader2, Moon, Sun, X, XCircle } from 'lucide-react';
 
 import { formatDate, formatNumber, initialsOf, ROLE_LABELS } from './format';
 import { ToastContext } from './hooks';
@@ -101,7 +101,9 @@ export const RoleBadge = ({ role, short = false }) => (
   <Badge tone={ROLE_TONES[role] || 'slate'}>{short && role === 'superadmin' ? 'Суперадмин' : ROLE_LABELS[role] || role}</Badge>
 );
 
-export function StatusBadge({ status, until = null }) {
+export function StatusBadge({ status, until = null, pending = false }) {
+  // Создан администратором, пароль ещё не задан: ждёт активации по приглашению.
+  if (status === 'active' && pending) return <Badge tone="amber" icon={Clock3}>Ожидает активации</Badge>;
   if (status === 'active') return <Badge tone="green" icon={CheckCircle2}>Активен</Badge>;
   if (status === 'blocked') return <Badge tone="red" icon={XCircle}>{until ? `Заблокирован до ${formatDate(until)}` : 'Заблокирован'}</Badge>;
   if (status === 'archived') return <Badge tone="slate">В архиве</Badge>;

@@ -1,19 +1,19 @@
 /*
  * © 2026 МедКарта Казань. Все права защищены.
  *
- * Оболочка админ-панели (/admin): вход, проверка прав, боковое меню,
- * маршруты разделов. Что показывать, решает ответ /api/admin/me; доступ к
+ * Оболочка админ-панели (/admin): проверка прав (без сессии — на /login),
+ * боковое меню, маршруты разделов. Что показывать, решает ответ /api/admin/me; доступ к
  * данным всё равно проверяет сервер на каждом запросе.
  */
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity, ArrowLeft, FileClock, Gauge, KeyRound, LayoutDashboard, LogOut, Menu, MonitorSmartphone, Settings, ShieldCheck, UserRound, Users, X,
 } from 'lucide-react';
 
-import { logoutAccount, loginAccount } from '../services/account';
-import { ForcedPasswordChange, LoginForm } from '../ui/auth';
+import { logoutAccount } from '../services/account';
+import { ForcedPasswordChange } from '../ui/auth';
 import { Avatar, Button, EmptyState, ErrorState, IconButton, RoleBadge, Spinner, ThemeToggle, ToastProvider } from '../ui/kit';
-import { useLoaded, useTheme } from '../ui/hooks';
+import { useLoaded, useTheme, useToast } from '../ui/hooks';
 import { Link } from '../ui/router';
 import { navigate, useLocation } from '../ui/navigation';
 import { api, AUTH_EVENT } from './api';
@@ -129,7 +129,7 @@ function Shell({ me, onLogout, children, title }) {
 function CenteredCard({ children }) {
   const theme = useTheme();
   return (
-    <div className="flex h-full items-center justify-center overflow-y-auto bg-gradient-to-br from-slate-50 via-blue-50/40 to-violet-50/40 p-4 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
+    <div className="flex h-full items-center justify-center overflow-y-auto bg-slate-50 p-4 dark:bg-slate-950">
       <div className="absolute right-4 top-4"><ThemeToggle theme={theme} /></div>
       <div className="w-full max-w-sm rounded-3xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">{children}</div>
     </div>
@@ -148,8 +148,51 @@ const resolveAccess = async () => {
   }
 };
 
+const NOTICE_POLL_MS = 30_000;
+
+/**
+ * Уведомления об активации: раз в 30 секунд (пока вкладка видна) — кто
+ * задал пароль по приглашению. Первый запрос только запоминает время:
+ * о том, что было до открытия панели, не сообщаем.
+ */
+function useActivationNotices(enabled) {
+  const toast = useToast();
+  const since = useRef(null);
+  const seen = useRef(new Set());
+  useEffect(() => {
+    if (!enabled) return undefined;
+    let timer = null;
+    let stopped = false;
+    const poll = async () => {
+      if (document.visibilityState === 'visible') {
+        try {
+          const result = await api.get('/api/admin/notifications', since.current ? { since: since.current } : undefined);
+          if (since.current) {
+            for (const item of [...result.items].reverse()) {
+              if (seen.current.has(item.id)) continue;
+              seen.current.add(item.id);
+              toast(`Аккаунт активирован: ${item.user || 'пользователь'} задал(а) пароль.`, 'success');
+            }
+          } else {
+            result.items.forEach((item) => seen.current.add(item.id));
+          }
+          since.current = result.now;
+        } catch {
+          // Нет связи или сессия кончилась (об этом сообщит оболочка) — попробуем позже.
+        }
+      }
+      if (!stopped) timer = setTimeout(poll, NOTICE_POLL_MS);
+    };
+    poll();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [enabled, toast]);
+}
+
 function AdminRoot() {
-  const { path } = useLocation();
+  const { path, search } = useLocation();
   const [state, setState, load] = useLoaded(resolveAccess, { status: 'loading', me: null, error: null });
 
   // Сессия кончилась или отозвана посреди работы — сразу на экран входа.
@@ -179,10 +222,16 @@ function AdminRoot() {
 
   const me = state.me;
   const can = useCallback((permission) => allowed(me, permission), [me]);
+  useActivationNotices(state.status === 'ready' && can('users.view'));
 
   useEffect(() => {
     document.title = `${route?.title || 'Админ-панель'} — МедКарта`;
   }, [route]);
+
+  // Нет сессии — на общую страницу входа; после входа она вернёт сюда же.
+  useEffect(() => {
+    if (state.status === 'login') navigate(`/login?next=${encodeURIComponent(`${path}${search}`)}`, { replace: true });
+  }, [state.status, path, search]);
 
   // Модератору без дашборда — сразу список пользователей.
   useEffect(() => {
@@ -194,19 +243,7 @@ function AdminRoot() {
 
   if (state.status === 'loading') return <div className="h-full bg-slate-50 dark:bg-slate-950"><Spinner label="Проверяю доступ…" /></div>;
   if (state.status === 'error') return <CenteredCard><ErrorState error={state.error} onRetry={load} /></CenteredCard>;
-  if (state.status === 'login') {
-    return (
-      <CenteredCard>
-        <h1 className="text-[20px] font-extrabold text-slate-800 dark:text-white">Вход в админ-панель</h1>
-        <p className="mb-4 mt-1 text-[13px] text-slate-500 dark:text-slate-400">МедКарта · только для сотрудников</p>
-        <LoginForm onLogin={async (credentials) => {
-          await loginAccount(credentials);
-          await load();
-        }} />
-        <a href="/" className="mt-4 inline-flex items-center gap-1 text-[12.5px] font-semibold text-slate-500 hover:underline dark:text-slate-400"><ArrowLeft size={14} aria-hidden="true" />На карту</a>
-      </CenteredCard>
-    );
-  }
+  if (state.status === 'login') return <div className="h-full bg-white dark:bg-slate-950" data-testid="admin-login-redirect" />;
   if (state.status === 'password') {
     return <div className="h-full bg-slate-50 dark:bg-slate-950"><ForcedPasswordChange onDone={load} onLogout={logout} /></div>;
   }
