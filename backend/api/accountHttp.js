@@ -16,6 +16,10 @@ export const SESSION_COOKIE = 'mk_session';
 export const DEMO_OWNER_COOKIE = 'mk_demo';
 export const DEMO_OWNER_MAX_AGE_S = 30 * 24 * 60 * 60;
 
+/** Сколько раз cookie с этим именем пришла в заголовке (подброшенная с поддомена — вторая). */
+export const cookieCount = (header, name) => String(header || '').split(';')
+  .filter((part) => part.slice(0, part.indexOf('=')).trim() === name).length;
+
 export const parseCookies = (header) => {
   const cookies = {};
   for (const part of String(header || '').split(';')) {
@@ -32,7 +36,7 @@ export const parseCookies = (header) => {
  * HTTPS. Иначе — по соединению или по X-Forwarded-Proto, но только от нашего
  * прокси: этот заголовок может прислать кто угодно.
  */
-const isSecureRequest = (req) => {
+export const isSecureRequest = (req) => {
   if (process.env.COOKIE_SECURE === 'on') return true;
   if (process.env.COOKIE_SECURE === 'off') return false;
   if (process.env.NODE_ENV === 'production') return true;
@@ -40,8 +44,8 @@ const isSecureRequest = (req) => {
   return isFromTrustedProxy(req) && String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
 };
 
-export const cookie = (req, name, value, maxAgeSeconds) => {
-  const parts = [`${name}=${value}`, 'Path=/api', 'HttpOnly', 'SameSite=Lax', `Max-Age=${Math.max(0, Math.floor(maxAgeSeconds))}`];
+export const cookie = (req, name, value, maxAgeSeconds, { path = '/api', sameSite = 'Lax' } = {}) => {
+  const parts = [`${name}=${value}`, `Path=${path}`, 'HttpOnly', `SameSite=${sameSite}`, `Max-Age=${Math.max(0, Math.floor(maxAgeSeconds))}`];
   if (isSecureRequest(req)) parts.push('Secure');
   return parts.join('; ');
 };
@@ -59,6 +63,23 @@ export const isTrustedWrite = (req) => {
   const site = req.headers['sec-fetch-site'];
   if (site && site !== 'same-origin' && site !== 'none') return false;
   return /^application\/json\b/i.test(String(req.headers['content-type'] || ''));
+};
+
+/*
+ * Адрес приложения, с которого пришёл запрос администратора, — для ссылки,
+ * которую он передаст сам, если APP_URL не задан. Origin к этому моменту уже
+ * проверен (isTrustedWrite); в письма такой адрес не попадает никогда.
+ */
+export const requestOrigin = (req) => {
+  try {
+    const origin = req.headers.origin ? new URL(req.headers.origin) : null;
+    if (origin && ['http:', 'https:'].includes(origin.protocol)) return origin.origin;
+  } catch {
+    // Некорректный Origin — ниже Host.
+  }
+  const host = String(req.headers.host || '').trim();
+  if (!/^[A-Za-z0-9.:[\]-]{1,255}$/.test(host)) return null;
+  return `${isSecureRequest(req) ? 'https' : 'http'}://${host}`;
 };
 
 export const pathOf = (url) => {

@@ -20,14 +20,17 @@
  *   user_blocks    — история блокировок;
  *   user_activity  — дни, когда пользователь пользовался сервисом (DAU/MAU);
  *   avatars        — картинка до 256 КБ без метаданных;
- *   settings, role_overrides — настройки и матрица прав из админ-панели.
+ *   settings, role_overrides — настройки и матрица прав из админ-панели;
+ *   access_tokens  — приглашения и ссылки для смены пароля: только SHA-256
+ *                    от токена (сам токен — в письме или у администратора),
+ *                    срок, кто выдал, когда открыт, использован или отозван.
  * Запросы к ассистенту, симптомы, координаты и история поиска сюда не пишутся.
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 /** Строка для поиска без учёта регистра: LIKE в SQLite не знает кириллицы. */
 export const searchTextOf = ({ firstName = '', lastName = '', email = '', id = '' }) =>
@@ -178,6 +181,40 @@ const MIGRATIONS = [
       update.run(row.display_name, searchTextOf({ firstName: row.display_name, email: row.email, id: row.id }), row.id);
     }
   },
+  /*
+   * Схема 4: приглашения вместо временных паролей. activated_at — когда
+   * человек сам задал пароль; NULL — «ожидает активации». Все прежние
+   * аккаунты с паролем (и демо-копии) считаются активированными — войти
+   * они могут как раньше.
+   */
+  `
+  ALTER TABLE users ADD COLUMN activated_at INTEGER;
+  UPDATE users SET activated_at = COALESCE(password_changed_at, created_at) WHERE password_hash IS NOT NULL OR demo_template IS NOT NULL;
+  CREATE INDEX users_pending ON users(created_at) WHERE activated_at IS NULL AND demo_template IS NULL;
+
+  CREATE TABLE access_tokens (
+    id                 TEXT PRIMARY KEY,
+    token_hash         TEXT NOT NULL UNIQUE,
+    user_id            TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    purpose            TEXT NOT NULL CHECK (purpose IN ('invite', 'reset')),
+    email              TEXT NOT NULL,
+    source             TEXT NOT NULL CHECK (source IN ('admin', 'self', 'cli')),
+    delivery           TEXT NOT NULL CHECK (delivery IN ('email', 'manual')),
+    delivery_status    TEXT NOT NULL DEFAULT 'pending' CHECK (delivery_status IN ('pending', 'sent', 'failed', 'manual')),
+    created_at         INTEGER NOT NULL,
+    expires_at         INTEGER NOT NULL,
+    created_by         TEXT,
+    created_by_label   TEXT,
+    opened_at          INTEGER,
+    used_at            INTEGER,
+    revoked_at         INTEGER,
+    revoked_reason     TEXT,
+    context_hash       TEXT UNIQUE,
+    context_expires_at INTEGER
+  );
+  CREATE INDEX access_tokens_user ON access_tokens(user_id, created_at);
+  CREATE INDEX access_tokens_expiry ON access_tokens(expires_at);
+  `,
 ];
 
 // node:sqlite работает без флага с Node 22.13; на более старой версии
@@ -213,6 +250,7 @@ const toUser = (row) => (row
     failedLogins: row.failed_logins || 0,
     lastFailedLoginAt: row.last_failed_login_at ?? null,
     createdBy: row.created_by ?? null,
+    activatedAt: row.activated_at ?? null,
     version: row.version || 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -231,6 +269,29 @@ const toSession = (row) => (row
     expiresAt: row.expires_at,
     client: row.client || null,
     ipPrefix: row.ip_prefix || null,
+  }
+  : null);
+
+const toAccessToken = (row) => (row
+  ? {
+    id: row.id,
+    tokenHash: row.token_hash,
+    userId: row.user_id,
+    purpose: row.purpose,
+    email: row.email,
+    source: row.source,
+    delivery: row.delivery,
+    deliveryStatus: row.delivery_status,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+    createdBy: row.created_by ?? null,
+    createdByLabel: row.created_by_label ?? null,
+    openedAt: row.opened_at ?? null,
+    usedAt: row.used_at ?? null,
+    revokedAt: row.revoked_at ?? null,
+    revokedReason: row.revoked_reason ?? null,
+    contextHash: row.context_hash ?? null,
+    contextExpiresAt: row.context_expires_at ?? null,
   }
   : null);
 
@@ -320,8 +381,8 @@ export const createSqliteAccountStore = ({ DatabaseSync, file }) => {
 
   const statements = {
     insertUser: db.prepare(`INSERT INTO users (id, email, display_name, first_name, last_name, password_hash, dms_plan_id,
-      demo_template, demo_owner, role, status, must_change_password, password_changed_at, created_by, search_text, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+      demo_template, demo_owner, role, status, must_change_password, password_changed_at, created_by, search_text, activated_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
     userById: db.prepare('SELECT u.*, a.etag AS avatar_etag FROM users u LEFT JOIN avatars a ON a.user_id = u.id WHERE u.id = ?'),
     userByEmail: db.prepare('SELECT u.*, a.etag AS avatar_etag FROM users u LEFT JOIN avatars a ON a.user_id = u.id WHERE u.email = ?'),
     demoCopy: db.prepare('SELECT * FROM users WHERE demo_template = ? AND demo_owner = ?'),
@@ -333,12 +394,32 @@ export const createSqliteAccountStore = ({ DatabaseSync, file }) => {
     setPassword: db.prepare(`UPDATE users SET password_hash = ?, must_change_password = ?, password_changed_at = ?,
       updated_at = ?, version = version + 1 WHERE id = ?`),
     rehashPassword: db.prepare('UPDATE users SET password_hash = ? WHERE id = ?'),
+    activateUser: db.prepare(`UPDATE users SET password_hash = ?, must_change_password = 0, password_changed_at = ?,
+      activated_at = COALESCE(activated_at, ?), failed_logins = 0, updated_at = ?, version = version + 1 WHERE id = ?`),
+
+    insertAccessToken: db.prepare(`INSERT INTO access_tokens (id, token_hash, user_id, purpose, email, source, delivery, delivery_status,
+      created_at, expires_at, created_by, created_by_label) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+    accessTokenByHash: db.prepare('SELECT * FROM access_tokens WHERE token_hash = ?'),
+    accessTokenById: db.prepare('SELECT * FROM access_tokens WHERE id = ?'),
+    accessTokenByContext: db.prepare('SELECT * FROM access_tokens WHERE context_hash = ?'),
+    userAccessTokens: db.prepare('SELECT * FROM access_tokens WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT ?'),
+    openAccessToken: db.prepare(`UPDATE access_tokens SET opened_at = ?, context_hash = ?, context_expires_at = ?
+      WHERE id = ? AND opened_at IS NULL AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?`),
+    useAccessToken: db.prepare(`UPDATE access_tokens SET used_at = ?, context_hash = NULL, context_expires_at = NULL
+      WHERE id = ? AND used_at IS NULL AND revoked_at IS NULL`),
+    revokeAccessToken: db.prepare(`UPDATE access_tokens SET revoked_at = ?, revoked_reason = ?, context_hash = NULL, context_expires_at = NULL
+      WHERE id = ? AND used_at IS NULL AND revoked_at IS NULL`),
+    revokeUserAccessTokens: db.prepare(`UPDATE access_tokens SET revoked_at = ?, revoked_reason = ?, context_hash = NULL, context_expires_at = NULL
+      WHERE user_id = ? AND used_at IS NULL AND revoked_at IS NULL AND (? IS NULL OR purpose = ?)`),
+    setAccessTokenDelivery: db.prepare('UPDATE access_tokens SET delivery_status = ? WHERE id = ?'),
+    countRecentAccessTokens: db.prepare('SELECT COUNT(*) AS count FROM access_tokens WHERE user_id = ? AND source = ? AND created_at >= ?'),
+    purgeAccessTokens: db.prepare('DELETE FROM access_tokens WHERE expires_at < ? AND (context_expires_at IS NULL OR context_expires_at < ?)'),
     recordLogin: db.prepare('UPDATE users SET last_login_at = ?, last_seen_at = ?, failed_logins = 0 WHERE id = ?'),
     recordFailedLogin: db.prepare('UPDATE users SET failed_logins = failed_logins + 1, last_failed_login_at = ? WHERE id = ?'),
     setLastSeen: db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < ?)'),
     deleteUser: db.prepare('DELETE FROM users WHERE id = ?'),
     countUsers: db.prepare('SELECT COUNT(*) AS count FROM users'),
-    countActiveSuperadmins: db.prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'superadmin' AND status = 'active' AND id <> ?"),
+    countActiveSuperadmins: db.prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'superadmin' AND status = 'active' AND activated_at IS NOT NULL AND id <> ?"),
     expiredBlocks: db.prepare("SELECT id FROM users WHERE status = 'blocked' AND blocked_until IS NOT NULL AND blocked_until <= ?"),
 
     insertSession: db.prepare(`INSERT INTO sessions (token_hash, public_id, user_id, created_at, last_seen_at, expires_at, client, ip_prefix)
@@ -416,7 +497,12 @@ export const createSqliteAccountStore = ({ DatabaseSync, file }) => {
       where.push(`u.role IN (${roles.map(() => '?').join(', ')})`);
       params.push(...roles);
     }
-    if (status) {
+    if (status === 'pending') {
+      // «Ожидает активации»: пароль ещё не задан, аккаунт не заблокирован и не в архиве.
+      where.push("u.status = 'active' AND u.activated_at IS NULL AND u.demo_template IS NULL");
+    } else if (status === 'active') {
+      where.push("u.status = 'active' AND (u.activated_at IS NOT NULL OR u.demo_template IS NOT NULL)");
+    } else if (status) {
       where.push('u.status = ?');
       params.push(status);
     }
@@ -487,14 +573,19 @@ export const createSqliteAccountStore = ({ DatabaseSync, file }) => {
 
     /* ----------------------------- пользователи ----------------------------- */
 
+    /*
+     * Аккаунт без пароля (не демо) — «ожидает активации»: activated_at
+     * появится, когда человек сам задаст пароль по приглашению.
+     */
     createUser({
       id, email, firstName = '', lastName = '', displayName = null, passwordHash = null, dmsPlanId = null,
       demoTemplate = null, demoOwner = null, role = 'user', status = 'active', mustChangePassword = false, createdBy = null, now,
     }) {
       const name = displayName || `${firstName} ${lastName}`.trim();
+      const activatedAt = passwordHash || demoTemplate ? now : null;
       statements.insertUser.run(
         id, email, name, firstName, lastName, passwordHash, dmsPlanId, demoTemplate, demoOwner, role, status,
-        mustChangePassword ? 1 : 0, passwordHash ? now : null, createdBy, searchTextOf({ firstName, lastName, email, id }), now, now,
+        mustChangePassword ? 1 : 0, passwordHash ? now : null, createdBy, searchTextOf({ firstName, lastName, email, id }), activatedAt, now, now,
       );
       return toUser(statements.userById.get(id));
     },
@@ -533,6 +624,8 @@ export const createSqliteAccountStore = ({ DatabaseSync, file }) => {
     setPassword: (id, passwordHash, { mustChange = false, now }) =>
       statements.setPassword.run(passwordHash, mustChange ? 1 : 0, now, now, id).changes > 0,
     rehashPassword: (id, passwordHash) => statements.rehashPassword.run(passwordHash, id).changes > 0,
+    /** Пароль задан по приглашению или ссылке: аккаунт активирован, требование смены снято. */
+    activateUser: (id, passwordHash, now) => statements.activateUser.run(passwordHash, now, now, now, id).changes > 0,
     recordLogin: (id, now) => statements.recordLogin.run(now, now, id).changes > 0,
     recordFailedLogin: (id, now) => statements.recordFailedLogin.run(now, id).changes > 0,
     setLastSeen: (id, now) => statements.setLastSeen.run(now, id, now).changes > 0,
@@ -612,6 +705,30 @@ export const createSqliteAccountStore = ({ DatabaseSync, file }) => {
         itemIds.forEach((itemId, index) => statements.addFavorite.run(userId, itemId, now - index));
       });
     },
+
+    /* -------------------- приглашения и ссылки для пароля -------------------- */
+
+    createAccessToken({ id, tokenHash, userId, purpose, email, source, delivery, deliveryStatus, now, expiresAt, createdBy = null, createdByLabel = null }) {
+      statements.insertAccessToken.run(id, tokenHash, userId, purpose, email, source, delivery, deliveryStatus, now, expiresAt, createdBy, createdByLabel);
+      return toAccessToken(statements.accessTokenById.get(id));
+    },
+    getAccessTokenByHash: (tokenHash) => toAccessToken(statements.accessTokenByHash.get(tokenHash)),
+    getAccessTokenById: (id) => (typeof id === 'string' ? toAccessToken(statements.accessTokenById.get(id)) : null),
+    getAccessTokenByContext: (contextHash) => toAccessToken(statements.accessTokenByContext.get(contextHash)),
+    listUserAccessTokens: (userId, limit = 20) => statements.userAccessTokens.all(userId, limit).map(toAccessToken),
+    /** Токен обменивается на контекст активации ровно один раз: второй вызов вернёт false. */
+    openAccessToken: ({ id, contextHash, contextExpiresAt, now }) =>
+      statements.openAccessToken.run(now, contextHash, contextExpiresAt, id, now).changes > 0,
+    useAccessToken: (id, now) => statements.useAccessToken.run(now, id).changes > 0,
+    revokeAccessToken: (id, reason, now) => statements.revokeAccessToken.run(now, reason, id).changes > 0,
+    /** Отозвать все неиспользованные токены пользователя (purpose — только такого вида). */
+    revokeUserAccessTokens: (userId, reason, now, { purpose = null } = {}) =>
+      statements.revokeUserAccessTokens.run(now, reason, userId, purpose, purpose).changes,
+    setAccessTokenDelivery: (id, status) => statements.setAccessTokenDelivery.run(status, id).changes > 0,
+    countRecentAccessTokens: ({ userId, source, since }) => statements.countRecentAccessTokens.get(userId, source, since).count,
+    /** Давно истёкшие токены не нужны даже для истории: удаляются при обслуживании. */
+    purgeAccessTokens: (before) => statements.purgeAccessTokens.run(before, before).changes,
+    countPendingUsers: () => db.prepare("SELECT COUNT(*) AS count FROM users WHERE activated_at IS NULL AND demo_template IS NULL AND status = 'active'").get().count,
 
     /* ---------------------------- история входов ---------------------------- */
 

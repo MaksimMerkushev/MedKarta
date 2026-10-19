@@ -14,7 +14,6 @@
  * отклоняется в той же транзакции, где проверяется.
  */
 
-import { generateTemporaryPassword, hashPassword, PasswordBusyError } from './passwords.js';
 import {
   canAssign, canManage, checkRolePermissions, DEFAULT_ROLE_PERMISSIONS, isRole, PERMISSIONS, permissionsOf, rankOf, ROLE_INFO, ROLES,
 } from './rbac.js';
@@ -49,7 +48,12 @@ export const AUDIT_ACTIONS = Object.freeze({
   'user.archive': 'Архивирование',
   'user.restore': 'Восстановление из архива',
   'user.delete': 'Удаление аккаунта',
-  'user.password_reset': 'Сброс пароля',
+  'user.password_reset': 'Сброс пароля (временный пароль)',
+  'user.invite': 'Приглашение',
+  'user.reset_link': 'Ссылка для смены пароля',
+  'user.invite_revoke': 'Отзыв ссылки',
+  'user.activate': 'Активация аккаунта',
+  'user.password_set': 'Пароль задан по ссылке',
   'user.password_require': 'Требование сменить пароль',
   'user.sessions_revoke': 'Завершение всех сессий',
   'session.revoke': 'Отзыв сессии',
@@ -77,7 +81,9 @@ const csvCell = (value) => {
  * @param {(userId: string) => Promise<void>} [deps.onAccountDeleted] отвязать демо-записи
  * @param {() => Promise<object>} [deps.systemInfo] состояние компонентов для дашборда
  */
-export const createAdminService = ({ store, accounts, onAccountDeleted = async () => {}, systemInfo = async () => null, now = () => Date.now() }) => {
+export const createAdminService = ({
+  store, accounts, invitations = null, onAccountDeleted = async () => {}, systemInfo = async () => null, now = () => Date.now(),
+}) => {
   const settings = accounts.settings;
 
   const has = (actor, permission) => Boolean(actor?.permissions?.includes(permission));
@@ -122,7 +128,9 @@ export const createAdminService = ({ store, accounts, onAccountDeleted = async (
   };
 
   /** Останется ли хотя бы один активный superadmin, если target перестанет им быть. */
-  const keepsSuperadmin = (target) => target.role !== 'superadmin' || target.status !== 'active' || store.countActiveSuperadmins({ excludeId: target.id }) > 0;
+  // Не активированный (без пароля) суперадминистратор войти не может и не считается.
+  const keepsSuperadmin = (target) => target.role !== 'superadmin' || target.status !== 'active' || !target.activatedAt
+    || store.countActiveSuperadmins({ excludeId: target.id }) > 0;
 
   /*
    * Изменение, которое может убрать последнего superadmin: проверка и запись —
@@ -161,6 +169,9 @@ export const createAdminService = ({ store, accounts, onAccountDeleted = async (
     role: user.role,
     roleLabel: ROLE_INFO[user.role]?.label || user.role,
     status: user.status,
+    // Пароль ещё не задан: аккаунт создан администратором и ждёт активации по ссылке.
+    pending: !user.demoTemplate && !user.activatedAt,
+    activatedAt: iso(user.activatedAt),
     blockedUntil: iso(user.blockedUntil),
     blockReason: user.blockReason || null,
     mustChangePassword: user.mustChangePassword,
@@ -183,10 +194,12 @@ export const createAdminService = ({ store, accounts, onAccountDeleted = async (
     const manage = !target.demoTemplate && canManage(actor, target);
     return {
       edit: manage && has(actor, 'users.edit'),
+      editEmail: manage && has(actor, 'users.edit') && has(actor, 'users.password'),
       changeRole: manage && has(actor, 'roles.assign'),
       assignableRoles: manage && has(actor, 'roles.assign') ? ROLES.filter((role) => canAssign(actor, role)) : [],
       block: manage && has(actor, 'users.block'),
       password: manage && has(actor, 'users.password'),
+      invite: manage && has(actor, 'users.password') && target.status === 'active',
       sessions: (manage || actor.id === target.id) && has(actor, 'users.sessions'),
       archive: manage && has(actor, 'users.archive'),
       delete: manage && has(actor, 'users.delete'),
@@ -203,7 +216,7 @@ export const createAdminService = ({ store, accounts, onAccountDeleted = async (
   const parseUserFilters = (query = {}) => {
     const q = typeof query.q === 'string' ? query.q.trim().slice(0, 100) : '';
     const roles = String(query.role || '').split(',').map((value) => value.trim()).filter(isRole);
-    const status = ['active', 'blocked', 'archived'].includes(query.status) ? query.status : null;
+    const status = ['active', 'pending', 'blocked', 'archived'].includes(query.status) ? query.status : null;
     const kind = ['real', 'demo', 'all'].includes(query.kind) ? query.kind : 'real';
     return { q, roles, status, kind };
   };
@@ -226,11 +239,6 @@ export const createAdminService = ({ store, accounts, onAccountDeleted = async (
     return clean || null;
   };
 
-  const busy = (error) => {
-    if (error instanceof PasswordBusyError) fail('busy', 503, 'Сервер сейчас занят — повторите через минуту.');
-    throw error;
-  };
-
   const onlyFields = (body, allowed) => {
     if (!body || typeof body !== 'object' || Array.isArray(body)) fail('bad_request', 400, 'Ожидается объект.');
     const extra = Object.keys(body).filter((key) => !allowed.includes(key));
@@ -244,6 +252,8 @@ export const createAdminService = ({ store, accounts, onAccountDeleted = async (
     guarded(actor, 'user.block', target, () => {
       store.updateUser(target.id, { status: 'blocked', blockedUntil: until, blockReason: reason }, { now: stamp });
       store.deleteUserSessions(target.id);
+      // Заблокированный не активирует аккаунт и не сменит пароль по ранее выданной ссылке.
+      store.revokeUserAccessTokens(target.id, 'blocked', stamp);
       store.addBlockEvent({ userId: target.id, at: stamp, action: 'block', until, reason, actorId: actor.id, actorLabel: userLabel(actor) });
       audit(actor, 'user.block', { target, details: { reason, until: iso(until), from: target.status } });
     });
@@ -258,16 +268,9 @@ export const createAdminService = ({ store, accounts, onAccountDeleted = async (
     });
   };
 
-  const temporaryPasswordFor = async (actor, target, action) => {
-    const temporaryPassword = generateTemporaryPassword();
-    const passwordHash = await hashPassword(temporaryPassword).catch(busy);
-    const stamp = now();
-    store.transaction(() => {
-      store.setPassword(target.id, passwordHash, { mustChange: true, now: stamp });
-      store.deleteUserSessions(target.id);
-      audit(actor, action, { target, details: { sessionsRevoked: true } });
-    });
-    return temporaryPassword;
+  const requireInvitations = () => {
+    if (!invitations) fail('unavailable', 503, 'Приглашения недоступны.');
+    return invitations;
   };
 
   return Object.freeze({
@@ -280,6 +283,8 @@ export const createAdminService = ({ store, accounts, onAccountDeleted = async (
         user: { ...adminUserView(actor, actor), avatarUrl: actor.avatarEtag ? `/api/me/avatar?v=${actor.avatarEtag}` : null },
         permissions: actor.permissions,
         roles: ROLES.map((role) => ({ key: role, ...ROLE_INFO[role] })),
+        // Уходят ли письма: от этого зависит, предлагать ли «отправить письмом».
+        mail: { enabled: Boolean(invitations?.emailEnabled) },
       };
     },
 
@@ -304,8 +309,9 @@ export const createAdminService = ({ store, accounts, onAccountDeleted = async (
       const { rows, total } = store.listUsers({ filters, sort: 'createdAt', dir: 'desc', limit: MAX_EXPORT, offset: 0, now: now() });
       const header = ['ID', 'Email', 'Имя', 'Фамилия', 'Роль', 'Статус', 'Заблокирован до', 'Создан', 'Последний вход', 'Последняя активность', 'Активных сессий', 'Нужно сменить пароль'];
       const statusLabel = { active: 'активен', blocked: 'заблокирован', archived: 'в архиве' };
+      const statusOf = (user) => (user.status === 'active' && !user.activatedAt && !user.demoTemplate ? 'ожидает активации' : statusLabel[user.status] || user.status);
       const lines = rows.map((user) => [
-        user.id, user.email, user.firstName, user.lastName, ROLE_INFO[user.role]?.label || user.role, statusLabel[user.status] || user.status,
+        user.id, user.email, user.firstName, user.lastName, ROLE_INFO[user.role]?.label || user.role, statusOf(user),
         iso(user.blockedUntil) || '', iso(user.createdAt), iso(user.lastLoginAt) || '', iso(user.lastSeenAt) || '', user.activeSessions ?? 0,
         user.mustChangePassword ? 'да' : 'нет',
       ].map(csvCell).join(';'));
@@ -325,33 +331,37 @@ export const createAdminService = ({ store, accounts, onAccountDeleted = async (
       };
     },
 
-    async createUser(actor, body = {}) {
+    /**
+     * Новый аккаунт без пароля — «ожидает активации» — и приглашение к нему:
+     * письмом, если настроена почта, иначе ссылкой, которую администратор
+     * видит один раз и передаёт сам. Пароль человек придумывает сам.
+     */
+    async createUser(actor, body = {}, { base = null } = {}) {
       requirePermission(actor, 'users.create', { action: 'user.create' });
-      const { email, firstName, lastName, role = 'user' } = onlyFields(body, ['email', 'firstName', 'lastName', 'role']);
+      const { email, firstName, lastName, role = 'user', delivery = 'auto' } = onlyFields(body, ['email', 'firstName', 'lastName', 'role', 'delivery']);
       const address = checkEmail(email);
       const first = cleanPersonName(firstName);
       const last = cleanPersonName(lastName);
       if (!first) fail('bad_name', 400, 'Укажите имя: буквы, пробел, дефис.');
       if (!last) fail('bad_name', 400, 'Укажите фамилию: буквы, пробел, дефис.');
       if (!isRole(role)) fail('bad_role', 400, 'Неизвестная роль.');
+      if (!['auto', 'manual'].includes(delivery)) fail('bad_request', 400, 'Способ доставки: auto или manual.');
       if (role !== 'user') {
         requirePermission(actor, 'roles.assign', { action: 'user.create' });
         if (!canAssign(actor, role)) denyChange(actor, 'user.create', null, 'Нельзя создать пользователя с ролью не ниже своей.');
       }
-      const temporaryPassword = generateTemporaryPassword();
-      const passwordHash = await hashPassword(temporaryPassword).catch(busy);
+      const service = requireInvitations();
       const id = accounts.__internal.newId();
       const stamp = now();
       const user = store.transaction(() => {
         if (store.getUserByEmail(address)) fail('email_taken', 409, 'Пользователь с таким email уже есть.');
-        const created = store.createUser({
-          id, email: address, firstName: first, lastName: last, passwordHash, role, mustChangePassword: true, createdBy: actor.id, now: stamp,
-        });
+        const created = store.createUser({ id, email: address, firstName: first, lastName: last, role, createdBy: actor.id, now: stamp });
         audit(actor, 'user.create', { target: created, details: { role } });
         return created;
       });
-      // Пароль возвращается один раз и нигде не сохраняется в открытом виде.
-      return { user: adminUserView(user, actor), temporaryPassword };
+      const issued = await service.issue({ user, actor, source: 'admin', delivery, base });
+      // Ссылка (только при ручной передаче или если письмо не ушло) возвращается один раз и нигде не хранится.
+      return { user: adminUserView(store.getUserById(user.id), actor), invitation: issued.invitation, link: issued.link };
     },
 
     updateUser(actor, id, body = {}) {
@@ -374,6 +384,9 @@ export const createAdminService = ({ store, accounts, onAccountDeleted = async (
         const address = checkEmail(email);
         if (address !== target.email) fields.email = address;
       }
+      // Email — это логин и адрес для ссылок «нет пароля»: сменить его — значит
+      // получить доступ к аккаунту. Поэтому нужно то же право, что и для выдачи ссылок.
+      if (fields.email) requirePermission(actor, 'users.password', { action: 'user.update', target });
       if (Object.keys(fields).length === 0) return this.getUser(actor, id);
       const first = fields.firstName ?? target.firstName;
       const last = fields.lastName ?? target.lastName;
@@ -386,6 +399,8 @@ export const createAdminService = ({ store, accounts, onAccountDeleted = async (
           searchText: searchTextOf({ firstName: first, lastName: last, email: address, id: target.id }),
         }, { now: now(), expectedVersion: expected });
         if (!updated) fail('conflict', 409, 'Данные пользователя изменились — обновите страницу и повторите.');
+        // Ссылки выданы на прежний адрес — с новым email они не действуют.
+        if (fields.email) store.revokeUserAccessTokens(target.id, 'email_changed', now());
         const details = { changed: Object.keys(fields) };
         if (fields.email) details.email = { from: maskEmail(target.email), to: maskEmail(address) };
         audit(actor, 'user.update', { target: { ...target, firstName: first, lastName: last, email: address }, details });
@@ -405,6 +420,8 @@ export const createAdminService = ({ store, accounts, onAccountDeleted = async (
       change(() => {
         const updated = store.updateUser(target.id, { role }, { now: now(), expectedVersion: expected });
         if (!updated) fail('conflict', 409, 'Данные пользователя изменились — обновите страницу и повторите.');
+        // Ссылки выданы под прежнюю роль: после повышения ими мог бы воспользоваться тот, кто уже не вправе.
+        store.revokeUserAccessTokens(target.id, 'role_changed', now());
         audit(actor, 'user.role', { target, details: { from: target.role, to: role } });
       });
       return this.getUser(actor, id);
@@ -462,6 +479,7 @@ export const createAdminService = ({ store, accounts, onAccountDeleted = async (
       guarded(actor, 'user.archive', target, () => {
         store.updateUser(target.id, { status: 'archived', blockedUntil: null }, { now: now() });
         store.deleteUserSessions(target.id);
+        store.revokeUserAccessTokens(target.id, 'archived', now());
         audit(actor, 'user.archive', { target, details: { from: target.status } });
       });
       return this.getUser(actor, id);
@@ -478,11 +496,44 @@ export const createAdminService = ({ store, accounts, onAccountDeleted = async (
       return this.getUser(actor, id);
     },
 
-    async resetPassword(actor, id) {
-      requirePermission(actor, 'users.password', { action: 'user.password_reset' });
-      const target = manageable(actor, id, 'user.password_reset');
-      const temporaryPassword = await temporaryPasswordFor(actor, target, 'user.password_reset');
-      return { ...this.getUser(actor, id), temporaryPassword };
+    /**
+     * Ссылка для входа: приглашение, если аккаунт не активирован, или ссылка
+     * для смены пароля. Прежняя ссылка того же вида отзывается. Временных
+     * паролей нет: администратор не знает и не может узнать пароль.
+     */
+    async issueAccessLink(actor, id, body = {}, { base = null } = {}) {
+      requirePermission(actor, 'users.password', { action: 'user.invite' });
+      const { delivery = 'auto' } = onlyFields(body, ['delivery']);
+      if (!['auto', 'manual'].includes(delivery)) fail('bad_request', 400, 'Способ доставки: auto или manual.');
+      const target = manageable(actor, id, 'user.invite');
+      const issued = await requireInvitations().issue({ user: target, actor, source: 'admin', delivery, base });
+      return { ...this.getUser(actor, id), invitation: issued.invitation, link: issued.link };
+    },
+
+    userInvitations(actor, id) {
+      requirePermission(actor, 'users.view');
+      const user = findUser(id);
+      return { items: requireInvitations().list(user.id), delivery: requireInvitations().describeDelivery().mode };
+    },
+
+    revokeInvitation(actor, id, invitationId) {
+      requirePermission(actor, 'users.password', { action: 'user.invite_revoke' });
+      const target = manageable(actor, id, 'user.invite_revoke');
+      const revoked = requireInvitations().revoke(target.id, invitationId, 'admin');
+      audit(actor, 'user.invite_revoke', { target, details: { purpose: revoked.purpose } });
+      return { invitation: revoked };
+    },
+
+    /** Активации и смены пароля по ссылке после since — для уведомлений в панели. */
+    notifications(actor, query = {}) {
+      requirePermission(actor, 'users.view');
+      const since = Date.parse(query.since);
+      const from = Number.isFinite(since) ? Math.max(since, now() - DAY_MS) : now() - 5 * 60 * 1000;
+      const { rows } = store.listAudit({ filters: { action: 'user.activate', from }, sort: 'at', dir: 'desc', limit: 10 });
+      return {
+        now: iso(now()),
+        items: rows.map((row) => ({ id: row.id, at: iso(row.at), action: row.action, userId: row.targetId, user: row.targetLabel })),
+      };
     },
 
     requirePasswordChange(actor, id) {
@@ -500,6 +551,8 @@ export const createAdminService = ({ store, accounts, onAccountDeleted = async (
       const target = manageable(actor, id, 'user.sessions_revoke');
       const revoked = store.transaction(() => {
         const count = store.deleteUserSessions(target.id);
+        // «Завершить все сессии» — и ссылки для смены пароля: по ним тоже можно войти.
+        store.revokeUserAccessTokens(target.id, 'sessions_revoked', now(), { purpose: 'reset' });
         audit(actor, 'user.sessions_revoke', { target, details: { count } });
         store.addAuthEvent({ at: now(), type: 'sessions_revoked', userId: target.id, reason: 'admin' });
         return count;
@@ -765,6 +818,7 @@ export const createAdminService = ({ store, accounts, onAccountDeleted = async (
           blocked: sum((row) => row.status === 'blocked'),
           archived: sum((row) => row.status === 'archived'),
           mustChangePassword: counts.reduce((total, row) => total + row.mustChange, 0),
+          pending: store.countPendingUsers(),
           byRole,
           demoCopies: store.countDemoCopies(),
         },

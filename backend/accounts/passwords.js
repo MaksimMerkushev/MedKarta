@@ -20,7 +20,9 @@ import { randomBytes, randomInt, scrypt as scryptCallback, timingSafeEqual } fro
 const PARAMS = Object.freeze({ N: 32768, r: 8, p: 3, keylen: 32 });
 const MAX_MEMORY = 64 * 1024 * 1024;
 
-export const PASSWORD_LIMITS = Object.freeze({ MIN: 8, MAX: 128 });
+import { PASSWORD_LIMITS } from '../../shared/passwordPolicy.js';
+
+export { PASSWORD_LIMITS };
 
 const scrypt = (password, salt, { N, r, p, keylen }) =>
   new Promise((resolve, reject) => {
@@ -99,26 +101,8 @@ export const verifyPassword = async (password, stored) => {
   return timingSafeEqual(actual, expected) && typeof stored === 'string' && stored.length > 0;
 };
 
-// Самые частые пароли из утечек — их подбирают первыми. Список короткий:
-// это отсечение очевидного, а не замена лимитам.
-const COMMON_PASSWORDS = new Set([
-  'password', 'password1', 'password123', 'qwertyui', 'qwerty123', 'qwertyuiop', '1q2w3e4r', '1q2w3e4r5t', 'q1w2e3r4',
-  'iloveyou', 'abcdefgh', 'abc12345', 'asdfghjk', 'zxcvbnm1', 'zaq12wsx', 'admin123', 'welcome1', 'letmein1',
-  'йцукенгш', 'пароль123', 'qazwsxedc', 'aaaaaaaa', 'medkarta', 'medkarta1', 'medkarta123', 'kazan2026',
-]);
-
-/** Пустая строка — пароль подходит; иначе — что не так, по-русски. */
-export const passwordProblem = (password, { email = '' } = {}) => {
-  if (typeof password !== 'string') return 'Введите пароль.';
-  if (password.length < PASSWORD_LIMITS.MIN) return `Пароль — не короче ${PASSWORD_LIMITS.MIN} символов.`;
-  if (password.length > PASSWORD_LIMITS.MAX) return `Пароль — не длиннее ${PASSWORD_LIMITS.MAX} символов.`;
-  if (/^\d+$/.test(password)) return 'Пароль не должен состоять только из цифр.';
-  if (COMMON_PASSWORDS.has(password.toLowerCase())) return 'Этот пароль слишком распространён — его подбирают первым.';
-  if (/^(.)\1+$/u.test(password)) return 'Пароль из одного повторяющегося символа слишком простой.';
-  const local = String(email).split('@')[0].toLowerCase();
-  if (local.length >= 4 && password.toLowerCase().includes(local)) return 'Пароль не должен содержать email.';
-  return '';
-};
+// Правила пароля общие с интерфейсом: shared/passwordPolicy.js.
+export { passwordChecks, passwordProblem } from '../../shared/passwordPolicy.js';
 
 /** Хэш посчитан со старыми параметрами — при входе его стоит пересчитать. */
 export const needsRehash = (stored) => {

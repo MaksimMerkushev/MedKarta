@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 
 import accountHandler, { ACCOUNT_PATHS } from './api/account.js';
 import { getAccountContext } from './api/accountContext.js';
+import activationHandler, { ACTIVATION_PATHS } from './api/activation.js';
 import adminHandler, { ADMIN_PREFIX } from './api/admin.js';
 import meHandler, { ME_PREFIX } from './api/me.js';
 import chatHandler from './api/chat.js';
@@ -201,6 +202,8 @@ const API_HANDLERS = new Map([
   ['/api/config', configHandler],
   // Личный кабинет: вход, программа ДМС, избранное (backend/api/account.js).
   ...ACCOUNT_PATHS.map((apiPath) => [apiPath, accountHandler]),
+  // Приглашения, активация аккаунта и ссылки для смены пароля (backend/api/activation.js).
+  ...ACTIVATION_PATHS.map((apiPath) => [apiPath, activationHandler]),
   // Демо-запись (только DEMO_DATA=on): подбор, слоты, запись, отмена.
   ...DEMO_BOOKING_PATHS.map((apiPath) => [apiPath, demoBookingHandler]),
 ]);

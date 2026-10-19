@@ -8,13 +8,13 @@
  * запуск ничего не меняет — ни пароль, ни имя, ни роль существующего
  * аккаунта. Пароль нигде не хранится в открытом виде и не пишется в журнал.
  *
- * Тестовые пользователи — только командой CLI: пароли показываются один раз
- * в терминале, и при первом входе их нужно сменить.
+ * Тестовые пользователи — только командой CLI: без паролей, с приглашениями;
+ * ссылки (если почта не настроена) показываются один раз в терминале.
  */
 
 import { randomBytes } from 'node:crypto';
 
-import { generateTemporaryPassword, hashPassword, passwordProblem } from './passwords.js';
+import { hashPassword, passwordProblem } from './passwords.js';
 import { checkEmail, userLabel } from './service.js';
 
 export const DEFAULT_SUPERADMIN = Object.freeze({ email: 'maximka2703@bk.ru', firstName: 'Максим', lastName: '' });
@@ -49,23 +49,26 @@ export const bootstrapSuperadmin = async ({ store, email = DEFAULT_SUPERADMIN.em
   return user ? { status: 'created', user } : { status: 'exists', user: store.getUserByEmail(address) };
 };
 
-/** Три тестовых пользователя с временными паролями; существующие пропускаются. */
-export const createTestUsers = async ({ store, now = () => Date.now(), users = TEST_USERS }) => {
+/**
+ * Три тестовых пользователя — «ожидают активации», как созданные в
+ * админ-панели: для каждого выдаётся приглашение (письмом, если настроена
+ * почта, иначе ссылкой для ручной передачи). Существующие пропускаются.
+ */
+export const createTestUsers = async ({ store, invitations, base = null, now = () => Date.now(), users = TEST_USERS }) => {
   const results = [];
   for (const seed of users) {
     if (store.getUserByEmail(seed.email)) {
       results.push({ email: seed.email, status: 'exists' });
       continue;
     }
-    const password = generateTemporaryPassword();
-    const passwordHash = await hashPassword(password);
     const stamp = now();
     const user = store.transaction(() => {
-      const created = store.createUser({ id: newId(), email: seed.email, firstName: seed.firstName, lastName: seed.lastName, passwordHash, mustChangePassword: true, now: stamp });
+      const created = store.createUser({ id: newId(), email: seed.email, firstName: seed.firstName, lastName: seed.lastName, now: stamp });
       store.addAudit({ at: stamp, action: 'user.create', actorLabel: 'Система (CLI)', targetId: created.id, targetLabel: userLabel(created), result: 'ok', details: { role: 'user', test: true } });
       return created;
     });
-    results.push({ email: seed.email, status: 'created', password, id: user.id });
+    const issued = await invitations.issue({ user, actor: null, source: 'cli', base });
+    results.push({ email: seed.email, status: 'created', id: user.id, link: issued.link, delivery: issued.invitation.deliveryStatus, expiresAt: issued.invitation.expiresAt });
   }
   return results;
 };

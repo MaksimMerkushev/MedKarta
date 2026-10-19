@@ -2,7 +2,7 @@
  * © 2026 МедКарта Казань. Все права защищены.
  *
  * Аккаунты, роли и админ-панель через настоящий HTTP: вход, блокировки,
- * роли, временные пароли, сессии, аудит, настройки, CSRF, лимиты,
+ * роли, приглашения вместо временных паролей, сессии, аудит, настройки, CSRF, лимиты,
  * инъекции и сохранность данных после перезапуска. База — SQLite в памяти
  * (и в файле — для перезапуска).
  */
@@ -21,6 +21,7 @@ import { createSqliteAccountStore, loadSqlite } from '../backend/accounts/sqlite
 import { createAccountHandler, createFailureCounter } from '../backend/api/account.js';
 import { createAccountContext } from '../backend/api/accountContext.js';
 import { SESSION_COOKIE } from '../backend/api/accountHttp.js';
+import { createActivationHandler } from '../backend/api/activation.js';
 import { createAdminHandler } from '../backend/api/admin.js';
 import { createChatAccessGate, withChatAccess } from '../backend/api/chatAccess.js';
 import { createMeHandler } from '../backend/api/me.js';
@@ -47,8 +48,10 @@ const startServer = async (context, { authLimit = unlimited } = {}) => {
   const meHandler = createMeHandler({ getService, apiLimit: unlimited, passwordLimit: unlimited });
   const adminHandler = createAdminHandler({ getContext: async () => context, limit: unlimited, systemInfo: async () => ({ components: [], process: { nodeVersion: process.version } }) });
   const chat = withChatAccess(async (req, res) => respondJson(res, 200, { replyText: 'ok' }), createChatAccessGate({ getService }));
+  const activationHandler = createActivationHandler({ getContext: async () => context, activationLimit: unlimited, requestLimit: unlimited, emailWindow: () => true });
   const server = http.createServer((req, res) => {
     if (req.url.startsWith('/api/admin')) return adminHandler(req, res);
+    if (req.url.startsWith('/api/auth/activation') || req.url === '/api/auth/access-link') return activationHandler(req, res);
     if (req.url === '/api/me' || req.url.startsWith('/api/me/') || req.url.startsWith('/api/me?')) return meHandler(req, res);
     if (req.url === '/api/chat') return chat(req, res);
     return accountHandler(req, res);
@@ -96,6 +99,21 @@ const browserFor = (base) => {
   };
 };
 
+const tokenOfLink = (link) => new URL(link).hash.replace(/^#token=/, '');
+
+/** Пройти приглашение как человек в новом браузере: подтвердить ссылку и задать пароль. */
+const acceptLink = async (base, link, password) => {
+  const tab = browserFor(base);
+  const token = tokenOfLink(link);
+  const peek = await tab.call('/api/auth/activation/peek', { method: 'POST', body: { token } });
+  assert.equal(peek.status, 200, JSON.stringify(peek.body));
+  const started = await tab.call('/api/auth/activation/start', { method: 'POST', body: { token } });
+  assert.equal(started.status, 200, JSON.stringify(started.body));
+  const done = await tab.call('/api/auth/activation/complete', { method: 'POST', body: { password } });
+  assert.equal(done.status, 200, JSON.stringify(done.body));
+  return { tab, user: done.body.user };
+};
+
 describe('Права: матрица и правила', () => {
   it('superadmin — все разрешения; у user — ни одного; зависимости проверяются', () => {
     assert.deepEqual(DEFAULT_ROLE_PERMISSIONS.superadmin, PERMISSION_KEYS);
@@ -116,13 +134,13 @@ describe('Админ-панель: сценарии', { skip: !DatabaseSync && '
   let server;
   let base;
   let root;
-  const passwords = {};
+  const links = {};
 
   before(async () => {
     context = createAccountContext({ store: createSqliteAccountStore({ DatabaseSync, file: ':memory:' }), isKnownPlan: (id) => PLANS.has(id), onAccountDeleted: async () => {} });
     await bootstrapSuperadmin({ store: context.store, email: 'root@medkarta.test', firstName: 'Максим', password: ROOT_PASSWORD });
-    for (const item of await createTestUsers({ store: context.store })) passwords[item.email] = item.password;
     ({ server, base } = await startServer(context));
+    for (const item of await createTestUsers({ store: context.store, invitations: context.invitations, base })) links[item.email] = item.link;
     root = browserFor(base);
     assert.equal((await root.login('root@medkarta.test', ROOT_PASSWORD)).status, 200);
   });
@@ -131,14 +149,11 @@ describe('Админ-панель: сценарии', { skip: !DatabaseSync && '
 
   const findId = async (email) => (await root.call(`/api/admin/users?q=${encodeURIComponent(email)}`)).body.items[0].id;
 
-  /** Создать пользователя от имени root и сменить ему временный пароль. */
+  /** Создать пользователя от имени root и активировать его по приглашению. */
   const createActive = async ({ email, role = 'user', firstName = 'Тест', lastName = 'Тестов', password = 'Постоянный-пароль-1' }) => {
     const created = await root.call('/api/admin/users', { method: 'POST', body: { email, firstName, lastName, role } });
     assert.equal(created.status, 201, JSON.stringify(created.body));
-    const tab = browserFor(base);
-    assert.equal((await tab.login(email, created.body.temporaryPassword)).status, 200);
-    const changed = await tab.call('/api/me/password', { method: 'POST', body: { currentPassword: created.body.temporaryPassword, newPassword: password } });
-    assert.equal(changed.status, 200, JSON.stringify(changed.body));
+    const { tab } = await acceptLink(base, created.body.link, password);
     return { tab, id: created.body.user.id, password };
   };
 
@@ -155,34 +170,42 @@ describe('Админ-панель: сценарии', { skip: !DatabaseSync && '
     assert.deepEqual(me.body.permissions, PERMISSION_KEYS);
   });
 
-  it('три тестовых пользователя: разные данные, роль user, нужно сменить пароль', async () => {
+  it('три тестовых пользователя: без паролей, «ожидают активации», у каждого своё приглашение', async () => {
     const list = await root.call('/api/admin/users?q=medkarta.test&role=user&sort=email&dir=asc');
     assert.equal(list.status, 200);
     assert.deepEqual(list.body.items.map((user) => user.email), [...TEST_USERS.map((user) => user.email)].sort());
-    assert.ok(list.body.items.every((user) => user.role === 'user' && user.status === 'active' && user.mustChangePassword && /^[a-f0-9]{32}$/.test(user.id)));
+    assert.ok(list.body.items.every((user) => user.role === 'user' && user.status === 'active' && user.pending && !user.mustChangePassword && /^[a-f0-9]{32}$/.test(user.id)));
     assert.equal(new Set(list.body.items.map((user) => user.lastName)).size, 3);
-    assert.ok(Object.values(passwords).every((password) => /^[\w]{4}(-[\w]{4}){4}$/.test(password)));
+    const tokens = Object.values(links).map(tokenOfLink);
+    assert.ok(tokens.every((token) => /^[A-Za-z0-9_-]{43}$/.test(token)));
+    assert.equal(new Set(tokens).size, 3);
+    assert.equal((await root.call('/api/admin/users?status=pending&q=medkarta.test')).body.total >= 3, true);
   });
 
-  it('вход: успех, неверный пароль, несуществующий email — без раскрытия, есть ли аккаунт', async () => {
+  it('вход: успех, неверный пароль, несуществующий email, неактивированный — без раскрытия, есть ли аккаунт', async () => {
     const tab = browserFor(base);
-    const wrong = await tab.login('anna.smirnova@medkarta.test', 'неверный-пароль-1');
+    const pending = await tab.login('anna.smirnova@medkarta.test', 'неверный-пароль-1');
     const missing = await tab.login('nobody@medkarta.test', 'неверный-пароль-1');
-    assert.equal(wrong.status, 401);
+    assert.equal(pending.status, 401);
     assert.equal(missing.status, 401);
+    assert.deepEqual(pending.body, missing.body, 'аккаунт без пароля отвечает так же, как несуществующий');
+    await acceptLink(base, links['anna.smirnova@medkarta.test'], 'Анна-свой-пароль-1');
+    const wrong = await tab.login('anna.smirnova@medkarta.test', 'неверный-пароль-1');
     assert.deepEqual(wrong.body, missing.body);
-    const ok = await tab.login('Anna.Smirnova@medkarta.test', passwords['anna.smirnova@medkarta.test']);
+    const ok = await tab.login('Anna.Smirnova@medkarta.test', 'Анна-свой-пароль-1');
     assert.equal(ok.status, 200);
-    assert.equal(ok.body.user.mustChangePassword, true);
+    assert.equal(ok.body.user.mustChangePassword, false);
     assert.equal(ok.body.user.firstName, 'Анна');
     assert.ok(tab.jar.get(SESSION_COOKIE));
     assert.equal(JSON.stringify(ok.body).includes('passwordHash'), false);
   });
 
-  it('временный пароль: до смены доступны только профиль и смена пароля', async () => {
+  it('аккаунт со старым временным паролем (до схемы 4): вход работает, до смены — только профиль и смена пароля', async () => {
     const tab = browserFor(base);
-    const temporary = passwords['timur.khairullin@medkarta.test'];
-    await tab.login('timur.khairullin@medkarta.test', temporary);
+    const temporary = 'Abcd-Efgh-Jkmn-Pqrs-Tuvw';
+    const { hashPassword } = await import('../backend/accounts/passwords.js');
+    context.store.createUser({ id: 'f'.repeat(32), email: 'legacy@medkarta.test', firstName: 'Тимур', lastName: 'Старый', passwordHash: await hashPassword(temporary), mustChangePassword: true, now: Date.now() });
+    assert.equal((await tab.login('legacy@medkarta.test', temporary)).body.user.mustChangePassword, true);
     assert.equal((await tab.call('/api/account/favorites', { method: 'POST', body: { action: 'add', ids: ['x'] } })).body.code, 'password_change_required');
     assert.equal((await tab.call('/api/chat', { method: 'POST', body: { messages: [] } })).body.code, 'password_change_required');
     assert.equal((await tab.call('/api/me/sessions')).body.code, 'password_change_required');
@@ -194,16 +217,27 @@ describe('Админ-панель: сценарии', { skip: !DatabaseSync && '
     assert.equal((await tab.call('/api/chat', { method: 'POST', body: { messages: [] } })).status, 200);
   });
 
-  it('создание пользователя: временный пароль один раз, дубль email — 409', async () => {
+  it('создание пользователя: без пароля, ссылка — один раз и только создателю, дубль email — 409', async () => {
     const created = await root.call('/api/admin/users', { method: 'POST', body: { email: 'New.User@Medkarta.test', firstName: 'Новый', lastName: 'Пользователь', role: 'user' } });
     assert.equal(created.status, 201);
     assert.equal(created.body.user.email, 'new.user@medkarta.test');
-    assert.match(created.body.temporaryPassword, /^\w{4}(-\w{4}){4}$/);
-    assert.equal((await root.call(`/api/admin/users/${created.body.user.id}`)).text.includes(created.body.temporaryPassword), false, 'пароль больше нигде не показывается');
+    assert.equal(created.body.user.pending, true);
+    assert.equal(created.body.temporaryPassword, undefined, 'временных паролей нет');
+    assert.equal(created.body.invitation.delivery, 'manual', 'почта не настроена — ссылку передают вручную');
+    assert.equal(created.body.invitation.state, 'active');
+    const token = tokenOfLink(created.body.link);
+    assert.match(created.body.link, /\/activate#token=[A-Za-z0-9_-]{43}$/);
+    const card = await root.call(`/api/admin/users/${created.body.user.id}`);
+    const invitations = await root.call(`/api/admin/users/${created.body.user.id}/invitations`);
+    const audit = await root.call(`/api/admin/audit?targetId=${created.body.user.id}`);
+    for (const response of [card, invitations, audit]) assert.equal(response.text.includes(token), false, 'токен больше нигде не показывается');
+    assert.equal(invitations.body.items.length, 1);
+    assert.deepEqual(audit.body.items.map((item) => item.action).sort(), ['user.create', 'user.invite']);
     const duplicate = await root.call('/api/admin/users', { method: 'POST', body: { email: 'new.user@medkarta.test', firstName: 'Дубль', lastName: 'Дублев' } });
     assert.equal(duplicate.status, 409);
-    const tab = browserFor(base);
-    assert.equal((await tab.login('new.user@medkarta.test', created.body.temporaryPassword)).body.user.mustChangePassword, true);
+    const { tab } = await acceptLink(base, created.body.link, 'Новый-пароль-навсегда');
+    assert.equal((await tab.call('/api/me')).body.user.email, 'new.user@medkarta.test');
+    assert.equal((await root.call(`/api/admin/users/${created.body.user.id}`)).body.user.pending, false);
   });
 
   it('без прав нельзя ни создать пользователя, ни открыть админ-панель', async () => {
@@ -283,28 +317,34 @@ describe('Админ-панель: сценарии', { skip: !DatabaseSync && '
     await bootstrapSuperadmin({ store, email: 'boss@medkarta.test', password: ROOT_PASSWORD, now: () => clock });
     const boss = (await local.accounts.login({ email: 'boss@medkarta.test', password: ROOT_PASSWORD })).user;
     const actor = { ...store.getUserById(boss.id), permissions: PERMISSION_KEYS };
-    const { user, temporaryPassword } = await local.admin.createUser(actor, { email: 'temp@medkarta.test', firstName: 'Врем', lastName: 'Блок' });
+    const { user, link } = await local.admin.createUser(actor, { email: 'temp@medkarta.test', firstName: 'Врем', lastName: 'Блок' }, { base: 'http://localhost' });
+    const opened = local.invitations.start(tokenOfLink(link));
+    await local.invitations.complete(opened.contextToken, 'Временно-закрытый-1');
     local.admin.block(actor, user.id, { reason: 'Остыть', until: new Date(clock + 60 * 60 * 1000).toISOString() });
-    await assert.rejects(local.accounts.login({ email: 'temp@medkarta.test', password: temporaryPassword }), (error) => error.code === 'account_blocked' && Boolean(error.extra.blockedUntil));
+    await assert.rejects(local.accounts.login({ email: 'temp@medkarta.test', password: 'Временно-закрытый-1' }), (error) => error.code === 'account_blocked' && Boolean(error.extra.blockedUntil));
     clock += 61 * 60 * 1000;
-    assert.ok((await local.accounts.login({ email: 'temp@medkarta.test', password: temporaryPassword })).session.token);
+    assert.ok((await local.accounts.login({ email: 'temp@medkarta.test', password: 'Временно-закрытый-1' })).session.token);
     assert.equal(store.getUserById(user.id).status, 'active');
     assert.deepEqual(store.listBlockEvents(user.id).map((event) => event.action), ['expired', 'block']);
   });
 
-  it('сброс пароля: временный пароль, сессии завершены, нужна смена', async () => {
+  it('смена пароля по ссылке от администратора: старый пароль и сессии перестают работать', async () => {
     const target = await createActive({ email: 'reset@medkarta.test' });
-    const reset = await root.call(`/api/admin/users/${target.id}/password-reset`, { method: 'POST', body: {} });
-    assert.equal(reset.status, 200);
-    assert.match(reset.body.temporaryPassword, /^\w{4}(-\w{4}){4}$/);
-    assert.equal(reset.body.user.mustChangePassword, true);
-    assert.equal((await target.tab.call('/api/me')).status, 401);
+    const issued = await root.call(`/api/admin/users/${target.id}/invitations`, { method: 'POST', body: {} });
+    assert.equal(issued.status, 200, JSON.stringify(issued.body));
+    assert.equal(issued.body.invitation.purpose, 'reset');
+    assert.equal(issued.body.user.mustChangePassword, false, 'временного пароля нет');
+    assert.equal((await target.tab.call('/api/me')).status, 200, 'до смены пароля человек работает как раньше');
+    const { tab } = await acceptLink(base, issued.body.link, 'Новый-пароль-по-ссылке');
+    assert.equal((await target.tab.call('/api/me')).status, 401, 'прежние сессии завершены');
     assert.equal((await browserFor(base).login('reset@medkarta.test', target.password)).status, 401, 'старый пароль больше не подходит');
-    const tab = browserFor(base);
-    assert.equal((await tab.login('reset@medkarta.test', reset.body.temporaryPassword)).body.user.mustChangePassword, true);
-    const audit = await root.call(`/api/admin/audit?targetId=${target.id}&action=user.password_reset`);
-    assert.equal(audit.body.total, 1);
-    assert.equal(JSON.stringify(audit.body).includes(reset.body.temporaryPassword), false, 'пароль не попал в журнал');
+    assert.equal((await browserFor(base).login('reset@medkarta.test', 'Новый-пароль-по-ссылке')).status, 200);
+    assert.equal((await tab.call('/api/me')).status, 200);
+    const audit = await root.call(`/api/admin/audit?targetId=${target.id}`);
+    assert.ok(audit.body.items.some((item) => item.action === 'user.reset_link'));
+    assert.ok(audit.body.items.some((item) => item.action === 'user.password_set' && item.actorId === target.id));
+    assert.equal(audit.text.includes(tokenOfLink(issued.body.link)), false, 'токен не попал в журнал');
+    assert.equal((await root.call(`/api/admin/users/${target.id}/password-reset`, { method: 'POST', body: {} })).status, 404, 'временных паролей больше нет');
   });
 
   it('смена своего пароля: текущий обязателен, другие сессии закрываются, новая cookie', async () => {
@@ -613,7 +653,7 @@ describe('Админ-панель: лимит входов и сохраннос
     assert.equal(card.body.user.status, 'blocked');
     assert.equal(card.body.user.blockReason, 'Проверка перезапуска');
     const audit = await rebooted.call('/api/admin/audit?sort=at&dir=asc');
-    assert.deepEqual(audit.body.items.map((item) => item.action), ['account.bootstrap', 'user.create', 'user.block']);
+    assert.deepEqual(audit.body.items.map((item) => item.action), ['account.bootstrap', 'user.create', 'user.invite', 'user.block']);
     assert.equal((await bootstrapSuperadmin({ store, email: 'root@medkarta.test', password: 'другой-пароль-2026' })).status, 'exists');
     server.close();
     store.close();

@@ -9,7 +9,7 @@
  *   GET    /api/admin/me                           кто вошёл и что ему можно
  *   GET    /api/admin/dashboard?period=7d          дашборд (24h, 7d, 30d, 90d)
  *   GET    /api/admin/users                        список: q, role, status, kind, sort, dir, page, pageSize
- *   POST   /api/admin/users                        создать (временный пароль — в ответе, один раз)
+ *   POST   /api/admin/users                        создать без пароля + приглашение (ссылка — в ответе, только при ручной передаче)
  *   GET    /api/admin/users/export                 CSV с теми же фильтрами (или ids=…)
  *   POST   /api/admin/users/bulk                   массово заблокировать / разблокировать
  *   GET    /api/admin/users/:id                    карточка
@@ -20,7 +20,10 @@
  *   POST   /api/admin/users/:id/unblock            разблокировать
  *   POST   /api/admin/users/:id/archive            в архив
  *   POST   /api/admin/users/:id/restore            из архива
- *   POST   /api/admin/users/:id/password-reset     временный пароль (в ответе, один раз)
+ *   GET    /api/admin/users/:id/invitations        приглашения и ссылки для входа (без токенов)
+ *   POST   /api/admin/users/:id/invitations        новая ссылка: приглашение или смена пароля ({delivery})
+ *   DELETE /api/admin/users/:id/invitations/:inv   отозвать ссылку
+ *   GET    /api/admin/notifications?since=…        кто недавно активировал аккаунт
  *   POST   /api/admin/users/:id/password-require   потребовать смену пароля
  *   POST   /api/admin/users/:id/sessions/revoke    завершить все сессии
  *   GET    /api/admin/users/:id/sessions|logins|blocks|audit|avatar
@@ -39,7 +42,7 @@ import { createRateLimiter, getClientIp } from '../http/rateLimit.js';
 import { createRouter } from '../http/router.js';
 import { logger } from '../observability/safeLogger.js';
 import { getAccountContext } from './accountContext.js';
-import { isTrustedWrite, pathOf, queryOf, readJsonObject, requireSession, sendError } from './accountHttp.js';
+import { isTrustedWrite, pathOf, queryOf, readJsonObject, requestOrigin, requireSession, sendError } from './accountHttp.js';
 import { sendImage } from './me.js';
 
 const MAX_BODY_BYTES = 32 * 1024;
@@ -60,7 +63,10 @@ const route = createRouter([
   ['POST', '/api/admin/users/:id/unblock', 'unblock'],
   ['POST', '/api/admin/users/:id/archive', 'archive'],
   ['POST', '/api/admin/users/:id/restore', 'restore'],
-  ['POST', '/api/admin/users/:id/password-reset', 'resetPassword'],
+  ['GET', '/api/admin/users/:id/invitations', 'userInvitations'],
+  ['POST', '/api/admin/users/:id/invitations', 'issueAccessLink'],
+  ['DELETE', '/api/admin/users/:id/invitations/:invitation', 'revokeInvitation'],
+  ['GET', '/api/admin/notifications', 'notifications'],
   ['POST', '/api/admin/users/:id/password-require', 'requirePasswordChange'],
   ['POST', '/api/admin/users/:id/sessions/revoke', 'revokeUserSessions'],
   ['GET', '/api/admin/users/:id/sessions', 'userSessions'],
@@ -80,7 +86,7 @@ const route = createRouter([
 ]);
 
 // Операции с телом запроса: остальные тело не читают.
-const WITH_BODY = new Set(['createUser', 'bulk', 'updateUser', 'deleteUser', 'setRole', 'block', 'updateRole', 'updateSettings']);
+const WITH_BODY = new Set(['createUser', 'bulk', 'updateUser', 'deleteUser', 'setRole', 'block', 'updateRole', 'updateSettings', 'issueAccessLink']);
 
 const collectSystemInfo = async () => (await import('./systemInfo.js')).collectSystemInfo();
 
@@ -128,7 +134,7 @@ export const createAdminHandler = ({ getContext = getAccountContext, limit = def
         case 'me': result = admin.me(actor); break;
         case 'dashboard': result = await admin.dashboard(actor, query.period); break;
         case 'listUsers': result = admin.listUsers(actor, query); break;
-        case 'createUser': result = await admin.createUser(actor, body); res.statusCode = 201; break;
+        case 'createUser': result = await admin.createUser(actor, body, { base: requestOrigin(req) }); res.statusCode = 201; break;
         case 'exportUsers': {
           const { csv, count } = admin.exportUsers(actor, query);
           const stamp = new Date().toISOString().slice(0, 10);
@@ -149,7 +155,10 @@ export const createAdminHandler = ({ getContext = getAccountContext, limit = def
         case 'unblock': result = admin.unblock(actor, params.id); break;
         case 'archive': result = admin.archive(actor, params.id); break;
         case 'restore': result = admin.restore(actor, params.id); break;
-        case 'resetPassword': result = await admin.resetPassword(actor, params.id); break;
+        case 'issueAccessLink': result = await admin.issueAccessLink(actor, params.id, body, { base: requestOrigin(req) }); break;
+        case 'userInvitations': result = admin.userInvitations(actor, params.id); break;
+        case 'revokeInvitation': result = admin.revokeInvitation(actor, params.id, params.invitation); break;
+        case 'notifications': result = admin.notifications(actor, query); break;
         case 'requirePasswordChange': result = admin.requirePasswordChange(actor, params.id); break;
         case 'revokeUserSessions': result = admin.revokeUserSessions(actor, params.id); break;
         case 'userSessions': result = admin.userSessions(actor, params.id); break;

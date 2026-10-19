@@ -45,6 +45,8 @@ export const SETTINGS = Object.freeze([
   { key: 'sessions.maxDays', group: 'Сессии и вход', label: 'Предельный срок сессии, дней', type: 'number', default: 30, validate: integer(1, 90), description: 'После него нужен новый вход, даже при активности.' },
   { key: 'sessions.maxPerUser', group: 'Сессии и вход', label: 'Сессий на пользователя', type: 'number', default: 10, validate: integer(1, 50), description: 'Самая старая вытесняется новым входом.' },
   { key: 'auth.maxFailedPerEmail', group: 'Сессии и вход', label: 'Неудачных входов на email за 15 минут', type: 'number', default: 10, validate: integer(3, 50) },
+  { key: 'auth.inviteTtlHours', group: 'Приглашения', label: 'Срок действия приглашения, часов', type: 'number', default: 24, validate: integer(1, 168), description: 'Ссылка одноразовая; новая ссылка заменяет прежнюю.' },
+  { key: 'auth.resetTtlMinutes', group: 'Приглашения', label: 'Срок ссылки для смены пароля, минут', type: 'number', default: 60, validate: integer(15, 1440) },
   { key: 'retention.authEventsDays', group: 'Хранение журналов', label: 'История входов, дней', type: 'number', default: 90, validate: integer(30, 365) },
   { key: 'retention.auditDays', group: 'Хранение журналов', label: 'Журнал действий, дней', type: 'number', default: 365, validate: integer(90, 1825) },
 ].map((item) => Object.freeze({ public: false, description: '', ...item })));

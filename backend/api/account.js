@@ -10,6 +10,7 @@
  *   POST   /api/auth/login         — вход по email и паролю
  *   POST   /api/auth/demo          — вход в демо-аккаунт (если DEMO_DATA=on)
  *   POST   /api/auth/logout        — выход
+ * Приглашения, активация и ссылки для смены пароля — в api/activation.js.
  *
  * Публичной регистрации нет: аккаунты создаёт администратор (api/admin.js).
  * Профиль, пароль и сессии — в api/me.js.
@@ -26,7 +27,7 @@ import { respondJson } from '../http/request.js';
 import { createRateLimiter, getClientIp } from '../http/rateLimit.js';
 import { logger } from '../observability/safeLogger.js';
 import { metrics } from '../observability/metrics.js';
-import { forgetDemoBookings, getDefaultAccountService } from './accountContext.js';
+import { forgetDemoBookings, getDefaultAccountService, peekAccountContext } from './accountContext.js';
 import {
   clientContext, cookie, DEMO_OWNER_COOKIE, DEMO_OWNER_MAX_AGE_S, isTrustedWrite, parseCookies, pathOf, readJsonObject, requireSession,
   sendError, SESSION_COOKIE, sessionCookie, tokenOf,
@@ -128,6 +129,8 @@ export const createAccountHandler = ({
   demoLimit = defaultDemoLimit,
   failures = defaultFailures,
   features = defaultFeatures,
+  // Письма со ссылками для входа настроены — интерфейс предложит запросить ссылку самому.
+  emailLinks = async () => Boolean((await peekAccountContext())?.invitations?.emailEnabled),
 } = {}) =>
   async function accountHandler(req, res) {
     // В dev-режиме Vite (connect) отрезает от req.url путь подключения — полный путь в originalUrl.
@@ -154,7 +157,7 @@ export const createAccountHandler = ({
     }
 
     const service = await getService();
-    const flags = { available: Boolean(service), ...features(service) };
+    const flags = { available: Boolean(service), ...features(service), emailLinks: service ? await emailLinks() : false };
     // Кнопки «Войти как …»: только имя и описание программы, без email.
     flags.demoAccounts = flags.available && flags.demo
       ? DEMO_ACCOUNTS.map(({ key, displayName, note }) => ({ key, displayName, note }))

@@ -10,18 +10,23 @@
  *       главный суперадминистратор; пароль — из ADMIN_BOOTSTRAP_PASSWORD
  *       или вводится в терминале (не отображается). Повторный запуск
  *       ничего не меняет.
- *   npm run accounts -- seed-test-users
- *       три тестовых пользователя; пароли показываются один раз, при входе
- *       их нужно сменить. В production — только с --allow-production.
+ *   npm run accounts -- seed-test-users [--base http://localhost:3001]
+ *       три тестовых пользователя без паролей, с приглашениями: письмом,
+ *       если настроена почта, иначе ссылки печатаются один раз.
+ *       В production — только с --allow-production.
+ *   npm run accounts -- access-link --email адрес [--base …]
+ *       одноразовая ссылка для входа: приглашение (аккаунт не активирован)
+ *       или смена пароля. Прежняя ссылка того же вида отзывается.
  *   npm run accounts -- reset-password --email адрес
- *       временный пароль (показывается один раз), все сессии завершаются.
+ *       то же, что access-link, плюс завершает все сессии пользователя.
  *   npm run accounts -- restore-admin --email адрес
  *       вернуть аккаунту роль superadmin и статус «активен» (потеря доступа).
  *   npm run accounts -- list-staff | status
  *   npm run accounts -- backup --out файл.sqlite
  *
- * Пароли выводятся только в терминал (TTY): при перенаправлении вывода в
+ * Ссылки выводятся только в терминал (TTY): при перенаправлении вывода в
  * файл или журнал команда откажется, если не передан --print-secrets.
+ * Адрес в ссылке — APP_URL, иначе --base, иначе http://localhost:PORT.
  */
 
 import path from 'node:path';
@@ -38,10 +43,9 @@ if (typeof process.loadEnvFile === 'function') {
 }
 
 const { bootstrapSuperadmin, createTestUsers, DEFAULT_SUPERADMIN } = await import('../backend/accounts/bootstrap.js');
-const { generateTemporaryPassword, hashPassword } = await import('../backend/accounts/passwords.js');
 const { normalizeEmail, userLabel } = await import('../backend/accounts/service.js');
 const { createSqliteAccountStore, loadSqlite } = await import('../backend/accounts/sqliteStore.js');
-const { defaultAccountsDbPath } = await import('../backend/api/accountContext.js');
+const { createAccountContext, defaultAccountsDbPath } = await import('../backend/api/accountContext.js');
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -79,6 +83,31 @@ const DatabaseSync = await loadSqlite();
 if (!DatabaseSync) die('Нужен Node 22.13+ (node:sqlite).');
 const file = defaultAccountsDbPath();
 const store = createSqliteAccountStore({ DatabaseSync, file });
+const context = createAccountContext({ store, onAccountDeleted: async () => {}, systemInfo: async () => null });
+const linkBase = () => {
+  const base = option('base') || `http://localhost:${process.env.PORT || 3001}`;
+  try {
+    return new URL(base).origin;
+  } catch {
+    return die('--base: некорректный адрес');
+  }
+};
+const printLink = (user, issued) => {
+  const until = new Date(issued.invitation.expiresAt).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' });
+  const kind = issued.invitation.purpose === 'invite' ? 'Приглашение' : 'Ссылка для смены пароля';
+  // Письмо не ушло, а вывод перенаправлен в файл или журнал — ссылку туда не пишем.
+  if (issued.link && !secretsAllowed()) {
+    console.log(`${kind} для ${user.email}: письмо отправить не удалось, а вывод не в терминал — ссылка не показана. Повторите команду в терминале или с --print-secrets.`);
+    return;
+  }
+  if (issued.link) {
+    console.log(`${kind} для ${user.email} (действует до ${until} МСК, показывается один раз):`);
+    console.log(`  ${issued.link}`);
+    if (issued.invitation.deliveryStatus === 'failed') console.log('  Письмо отправить не удалось — передайте ссылку сами.');
+  } else {
+    console.log(`${kind} отправлено письмом на ${user.email} (действует до ${until} МСК).`);
+  }
+};
 const audit = (action, target, details = null) => store.addAudit({ at: Date.now(), action, actorLabel: 'Система (CLI)', targetId: target?.id || null, targetLabel: target ? userLabel(target) : null, result: 'ok', details });
 
 const findByEmail = (email) => {
@@ -93,7 +122,7 @@ switch (command) {
   case 'bootstrap': {
     const email = option('email') || process.env.ADMIN_BOOTSTRAP_EMAIL || DEFAULT_SUPERADMIN.email;
     if (store.getUserByEmail(normalizeEmail(email))) {
-      console.log('Аккаунт уже есть — ничего не изменено. Для сброса пароля: reset-password --email …');
+      console.log('Аккаунт уже есть — ничего не изменено. Ссылка для смены пароля: access-link --email …');
       break;
     }
     let password = process.env.ADMIN_BOOTSTRAP_PASSWORD;
@@ -115,27 +144,39 @@ switch (command) {
     if (isProduction() && !flag('allow-production')) {
       die('Это production: тестовых пользователей создают вручную в админ-панели или с флагом --allow-production.');
     }
-    if (!secretsAllowed()) die('Пароли выводятся только в терминал. Запустите без перенаправления вывода или с --print-secrets.');
-    const results = await createTestUsers({ store });
-    console.log('Тестовые пользователи (пароль показывается один раз, при первом входе его нужно сменить):');
+    if (!context.delivery.emailEnabled && !secretsAllowed()) die('Ссылки выводятся только в терминал. Запустите без перенаправления вывода или с --print-secrets.');
+    const results = await createTestUsers({ store, invitations: context.invitations, base: linkBase() });
+    console.log('Тестовые пользователи (без паролей: пароль каждый задаёт сам по приглашению):');
     for (const item of results) {
-      console.log(item.status === 'created' ? `  ${item.email}  ${item.password}` : `  ${item.email}  — уже есть, пароль не менялся`);
+      if (item.status !== 'created') {
+        console.log(`  ${item.email} — уже есть, ничего не изменено`);
+      } else if (item.link && !secretsAllowed()) {
+        console.log(`  ${item.email} — письмо не ушло, а вывод не в терминал: ссылка не показана (access-link --email …)`);
+      } else if (item.link) {
+        console.log(`  ${item.email}\n    ${item.link}`);
+      } else {
+        console.log(`  ${item.email} — приглашение отправлено письмом`);
+      }
     }
     break;
   }
+  case 'access-link':
   case 'reset-password': {
-    if (!secretsAllowed()) die('Пароль выводится только в терминал. Запустите без перенаправления вывода или с --print-secrets.');
+    if (!context.delivery.emailEnabled && !secretsAllowed()) die('Ссылка выводится только в терминал. Запустите без перенаправления вывода или с --print-secrets.');
     const user = findByEmail(option('email'));
     if (user.demoTemplate) die('У демо-копии нет пароля.');
-    const password = generateTemporaryPassword();
-    const passwordHash = await hashPassword(password);
-    store.transaction(() => {
-      store.setPassword(user.id, passwordHash, { mustChange: true, now: Date.now() });
-      store.deleteUserSessions(user.id);
-      audit('user.password_reset', user, { via: 'cli', sessionsRevoked: true });
-    });
-    console.log(`Временный пароль для ${user.email} (показывается один раз): ${password}`);
-    console.log('Все сессии пользователя завершены; при входе потребуется новый пароль.');
+    if (command === 'reset-password') {
+      store.transaction(() => {
+        store.deleteUserSessions(user.id);
+        audit('user.sessions_revoke', user, { via: 'cli' });
+      });
+      console.log('Все сессии пользователя завершены.');
+    }
+    try {
+      printLink(user, await context.invitations.issue({ user, actor: null, source: 'cli', base: linkBase() }));
+    } catch (error) {
+      die(error.message);
+    }
     break;
   }
   case 'restore-admin': {
@@ -145,6 +186,7 @@ switch (command) {
       audit('user.role', user, { from: user.role, to: 'superadmin', status: { from: user.status, to: 'active' }, via: 'cli' });
     });
     console.log(`${user.email}: роль superadmin, статус «активен».`);
+    if (!user.activatedAt) console.log('Аккаунт ещё не активирован — выдайте ссылку: npm run accounts -- access-link --email …');
     break;
   }
   case 'list-staff': {
@@ -159,7 +201,10 @@ switch (command) {
     console.log(`База: ${file}`);
     console.log(`Схема: ${health.schemaVersion}, размер ${(health.bytes / 1024).toFixed(0)} КБ, проверка: ${health.ok ? 'ок' : 'ОШИБКА'}`);
     for (const row of counts) console.log(`  ${row.role.padEnd(11)} ${row.status.padEnd(9)} ${row.count}`);
+    console.log(`Ожидают активации: ${store.countPendingUsers()}`);
     console.log(`Активных суперадминистраторов: ${store.countActiveSuperadmins()}`);
+    const mail = context.delivery.describe();
+    console.log(mail.mode === 'smtp' ? `Почта: SMTP ${mail.host}, ссылки ведут на ${mail.appUrl}` : `Почта: не настроена — ссылки передаются вручную${mail.problems.length ? ` (${mail.problems.join('; ')})` : ''}`);
     break;
   }
   case 'backup': {
@@ -174,7 +219,7 @@ switch (command) {
     break;
   }
   default:
-    console.log('Команды: bootstrap, seed-test-users, reset-password, restore-admin, list-staff, status, backup. Подробности — docs/accounts.md.');
+    console.log('Команды: bootstrap, seed-test-users, access-link, reset-password, restore-admin, list-staff, status, backup. Подробности — docs/accounts.md.');
     if (command) process.exitCode = 1;
 }
 

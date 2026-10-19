@@ -198,6 +198,10 @@ export const AUTH_EVENT_LABELS = Object.freeze({
   password_changed: 'Смена пароля',
   session_revoked: 'Сессия завершена',
   sessions_revoked: 'Завершены все сессии',
+  access_link_requested: 'Запрошена ссылка для входа',
+  access_link_opened: 'Открыта ссылка для входа',
+  account_activated: 'Аккаунт активирован',
+  password_reset: 'Пароль задан по ссылке',
 });
 
 export const authEventView = (event) => ({
@@ -496,6 +500,8 @@ export const createAccountService = ({ store, settings = null, isKnownPlan = () 
       const session = store.transaction(() => {
         store.setPassword(user.id, passwordHash, { mustChange: false, now: stamp });
         store.deleteUserSessions(user.id);
+        // Ссылки для смены пароля, выданные раньше, после смены не нужны.
+        store.revokeUserAccessTokens(user.id, 'password_changed', stamp, { purpose: 'reset' });
         return startSession(user, context);
       });
       store.addAuthEvent({ at: stamp, type: 'password_changed', userId: user.id, sessionId: session.publicId, client: context.client || null, ipPrefix: context.ipPrefix || null });
@@ -592,6 +598,8 @@ export const createAccountService = ({ store, settings = null, isKnownPlan = () 
       store.purgeAuthEvents(stamp - config.get('retention.authEventsDays') * DAY_MS);
       store.purgeAudit(stamp - config.get('retention.auditDays') * DAY_MS);
       store.purgeActivity(moscowDay(stamp - ACCOUNT_LIMITS.ACTIVITY_RETENTION_DAYS * DAY_MS));
+      // Ссылки для входа, истёкшие больше 30 дней назад, — и для истории уже не нужны.
+      store.purgeAccessTokens?.(stamp - 30 * DAY_MS);
       return store.purgeExpiredSessions(stamp);
     },
 

@@ -76,6 +76,14 @@ export const collectComponentHealth = async () => {
     label: 'База аккаунтов (SQLite)',
     ...status(storage ? storage.ok : false, storage ? `аккаунтов: ${storage.users}, ${(storage.bytes / 1024 / 1024).toFixed(1)} МБ, схема ${storage.schemaVersion}` : 'недоступна'),
   });
+  // Почта для приглашений: SMTP или ручная передача ссылок. Пароль и адрес ящика не показываются.
+  const mail = context?.delivery?.describe() || null;
+  components.push({
+    key: 'mail',
+    label: 'Письма с приглашениями',
+    status: mail?.mode === 'smtp' ? 'ok' : 'off',
+    detail: mail?.mode === 'smtp' ? `SMTP ${mail.host}` : mail?.problems?.length ? `не настроены: ${mail.problems.join('; ')}` : 'не настроены — ссылки передаёт администратор',
+  });
 
   if (process.env.DEMO_DATA === 'on' && process.env.DEMO_BOOKING !== 'off') {
     const { getDefaultDemoBookingService } = await import('./demoBooking.js');

@@ -1,8 +1,8 @@
 /*
  * © 2026 МедКарта Казань. Все права защищены.
  *
- * Сборка кабинета: хранилище, настройки, сервис входа и административный
- * сервис — один набор на процесс. Без node:sqlite или при ACCOUNTS=off
+ * Сборка кабинета: хранилище, настройки, сервис входа, приглашения с
+ * доставкой ссылок и административный сервис — один набор на процесс. Без node:sqlite или при ACCOUNTS=off
  * кабинет выключается (null), остальной сайт работает.
  *
  * При запуске: миграции базы, первый суперадминистратор из
@@ -16,6 +16,8 @@ import { fileURLToPath } from 'node:url';
 import { demoInsurance } from '../../data/demo/insurance.js';
 import { createAdminService } from '../accounts/adminService.js';
 import { bootstrapSuperadmin, DEFAULT_SUPERADMIN } from '../accounts/bootstrap.js';
+import { createDelivery } from '../accounts/delivery.js';
+import { createInvitationService } from '../accounts/invitations.js';
 import { createAccountService } from '../accounts/service.js';
 import { createSettingsService } from '../accounts/settings.js';
 import { createSqliteAccountStore, loadSqlite } from '../accounts/sqliteStore.js';
@@ -53,12 +55,14 @@ export const createAccountContext = ({
   isKnownPlan = (planId) => KNOWN_PLANS.has(planId),
   onAccountDeleted = forgetDemoBookings,
   systemInfo = componentHealth,
+  delivery = createDelivery(),
   now = () => Date.now(),
 }) => {
   const settings = createSettingsService({ store, now });
   const accounts = createAccountService({ store, settings, isKnownPlan, now });
-  const admin = createAdminService({ store, accounts, onAccountDeleted, systemInfo, now });
-  return Object.freeze({ store, settings, accounts, admin });
+  const invitations = createInvitationService({ store, accounts, delivery, now });
+  const admin = createAdminService({ store, accounts, invitations, onAccountDeleted, systemInfo, now });
+  return Object.freeze({ store, settings, accounts, invitations, delivery, admin });
 };
 
 let defaultContext;
