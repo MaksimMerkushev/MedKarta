@@ -57,7 +57,7 @@ export function TextAction({ children, className = '', ...rest }) {
   );
 }
 
-const fieldClass = (invalid) => `block h-12 w-full rounded-[10px] border bg-white px-3.5 text-[16px] text-slate-900 shadow-[0_1px_2px_rgba(15,23,42,0.05)] outline-none transition-[border-color,box-shadow] placeholder:text-slate-400 focus:ring-4 dark:bg-slate-900 dark:text-slate-50 dark:placeholder:text-slate-500 ${invalid
+const fieldClass = (invalid) => `block h-12 w-full rounded-[10px] border bg-white px-3.5 text-[16px] text-slate-900 shadow-[0_1px_2px_rgba(15,23,42,0.05)] outline-none transition-[border-color,box-shadow] placeholder:text-slate-500 focus:ring-4 dark:bg-slate-900 dark:text-slate-50 dark:placeholder:text-slate-400 ${invalid
   ? 'border-red-500 focus:border-red-500 focus:ring-red-500/15 dark:border-red-400'
   : 'border-slate-300 hover:border-slate-400 focus:border-blue-600 focus:ring-blue-600/15 dark:border-slate-700 dark:hover:border-slate-600 dark:focus:border-blue-400 dark:focus:ring-blue-400/20'}`;
 

@@ -82,9 +82,10 @@ export default function UsersPage() {
   const { data, error, loading, reload } = useApi(() => api.get('/api/admin/users', query), [search]);
   const items = data?.items || [];
 
+  // Новый порядок — с первой страницы: вторая страница прежнего порядка в новом ничего не значит.
   const toggleSort = (key) => {
-    if (query.sort === key) setQuery({ dir: query.dir === 'asc' ? 'desc' : 'asc' }, { resetPage: false });
-    else setQuery({ sort: key, dir: key === 'name' || key === 'email' ? 'asc' : 'desc' }, { resetPage: false });
+    if (query.sort === key) setQuery({ dir: query.dir === 'asc' ? 'desc' : 'asc' });
+    else setQuery({ sort: key, dir: key === 'name' || key === 'email' ? 'asc' : 'desc' });
   };
 
   const selectable = items.filter((user) => !user.isSelf && !user.isDemo);

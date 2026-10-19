@@ -246,6 +246,25 @@ try {
     await old.close();
   });
 
+  // На 375 px имя в шапке карточки сжималось до «Ж…», а текст приглашения — до узкой колонки.
+  await step('12а. Карточка пользователя на телефоне: имя и приглашение не сжимаются', async () => {
+    await admin.setViewportSize({ width: 375, height: 812 });
+    try {
+      await admin.waitForTimeout(300);
+      const nameWidth = await admin.locator('[data-testid=user-detail-name]').evaluate((el) => el.getBoundingClientRect().width);
+      expect(nameWidth > 150, `имя сжато до ${Math.round(nameWidth)} px`);
+      const row = await admin.locator('[data-testid=invitation-row][data-state=active]').evaluate((el) => ({
+        row: el.getBoundingClientRect().width,
+        text: Math.max(...[...el.querySelectorAll('span')].map((span) => span.getBoundingClientRect().width)),
+      }));
+      expect(row.text > row.row * 0.7, `текст приглашения ${Math.round(row.text)} из ${Math.round(row.row)} px`);
+      expect(await admin.evaluate(() => document.scrollingElement.scrollWidth <= window.innerWidth), 'горизонтальная прокрутка');
+      await shot(admin, '06b-user-detail-375');
+    } finally {
+      await admin.setViewportSize({ width: 1440, height: 900 });
+    }
+  });
+
   await step('13. История входов', async () => {
     await openUser('timur.khairullin@medkarta.test');
     await tab(admin, 'Безопасность');

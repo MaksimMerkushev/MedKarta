@@ -146,7 +146,8 @@ function AccessLinksCard({ data, onChanged }) {
                   {PURPOSE_LABELS[item.purpose] || item.purpose}
                 </span>
                 <Badge tone={LINK_TONES[item.state] || 'slate'}>{item.stateLabel}</Badge>
-                <span className="min-w-0 flex-1 text-slate-500 dark:text-slate-400">
+                {/* На узком экране — своей строкой, а не столбиком по слову рядом с бейджем. */}
+                <span className="w-full min-w-0 text-slate-500 sm:w-auto sm:flex-1 dark:text-slate-400">
                   {linkStatus(item)} · выдал {item.createdBy || '—'} {formatDateTime(item.createdAt)}, {DELIVERY_LABELS[item.deliveryStatus] || item.deliveryStatus}
                 </span>
                 {(item.state === 'active' || item.state === 'opened') && (
@@ -542,7 +543,8 @@ export default function UserDetail({ params }) {
       <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <Avatar name={user.displayName} src={user.avatarUrl} seed={user.id} size={64} />
         <div className="min-w-0 flex-1">
-          <h2 className="truncate text-[20px] font-extrabold text-slate-800 dark:text-white" data-testid="user-detail-name">{user.displayName}</h2>
+          {/* На телефоне длинное имя переносится на вторую строку, а не обрезается до пары букв. */}
+          <h2 className="line-clamp-2 break-words text-[20px] font-extrabold leading-tight text-slate-800 sm:line-clamp-none sm:truncate dark:text-white" title={user.displayName} data-testid="user-detail-name">{user.displayName}</h2>
           <p className="truncate text-[13px] text-slate-500 dark:text-slate-400">{user.email}</p>
           <div className="mt-1.5 flex flex-wrap gap-1.5">
             <RoleBadge role={user.role} />
@@ -552,7 +554,8 @@ export default function UserDetail({ params }) {
             {user.isDemo && <Badge tone="amber">Демо-копия</Badge>}
           </div>
         </div>
-        <div className="text-right text-[12px] text-slate-500 dark:text-slate-400">
+        {/* На телефоне — отдельной строкой: рядом с ней имя сжималось до одной буквы. */}
+        <div className="w-full text-[12px] text-slate-500 sm:w-auto sm:text-right dark:text-slate-400">
           <p>Последний вход: {user.lastLoginAt ? formatRelative(user.lastLoginAt) : 'не входил'}</p>
           <p>Активных сессий: {user.activeSessions}</p>
         </div>
