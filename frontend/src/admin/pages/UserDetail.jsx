@@ -331,7 +331,7 @@ function ManageTab({ data, onChanged }) {
       {dialog === 'role' && (
         <ConfirmDialog
           title="Сменить роль?"
-          message={`${user.displayName}: ${ROLE_LABELS[user.role]} → ${ROLE_LABELS[role]}. Права изменятся сразу, без повторного входа.`}
+          message={`${user.displayName}: ${ROLE_LABELS[user.role]} → ${ROLE_LABELS[role]}. Права изменятся сразу, без повторного входа. ${user.pending ? 'Приглашение будет отозвано — после смены роли вышлите новое.' : 'Действующие ссылки для входа будут отозваны.'}`}
           confirmLabel="Назначить"
           tone="primary"
           onClose={() => setDialog(null)}
