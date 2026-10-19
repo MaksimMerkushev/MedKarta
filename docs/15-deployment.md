@@ -36,7 +36,7 @@ npm run dev            # Vite + обработчики API; демо-набор 
 npm ci
 npm run build                                   # dist/
 cp .env.example .env                            # при необходимости заполнить
-DEMO_DATA=on npm start                          # http://127.0.0.1:3001
+DEMO_DATA=on npm start                          # http://127.0.0.1:3001 (то же: npm run start:demo)
 ```
 
 С «замороженным» временем демо:

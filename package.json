@@ -11,6 +11,7 @@
     "dev": "vite",
     "build": "vite build",
     "start": "node backend/server.js",
+    "start:demo": "DEMO_DATA=on node backend/server.js",
     "build:graph": "node scripts/build-road-graph.mjs",
     "report:searches": "node scripts/search-report.mjs",
     "data:collect": "node scripts/data-collect.mjs",

@@ -153,12 +153,13 @@ SMTP_URL=smtps://noreply%40medkarta.example.ru:ПАРОЛЬ_ПРИЛОЖЕНИЯ
 |---|---|
 | `npm run dev` | Vite с обработчиками API; демо включено по умолчанию |
 | `npm run build` | сборка фронтенда в `dist/` |
-| `npm start` | `node backend/server.js` |
+| `npm start` | `node backend/server.js`; демо-набор и демо-запись **выключены**, пока не задан `DEMO_DATA=on` |
+| `npm run start:demo` | то же с `DEMO_DATA=on`: демо-клиники, демо-аккаунты и симуляция записи — для локальной проверки и демо-стенда, не для production с настоящими пользователями |
 | `npm run preview` | `vite preview` |
 | `npm test` | все тесты `node --test tests/*.test.js` |
 | `npm run test:hybrid` | то же при `PRIVACY_OUTBOUND_MODE=hybrid` |
 | `npm run test:security` | оба прогона подряд |
-| `npm run test:e2e` | сквозная проверка аккаунтов и админ-панели в Chromium ([e2e-admin.mjs](../scripts/e2e-admin.mjs)); нужны `dist/` и Playwright |
+| `npm run test:e2e` | сквозные проверки в Chromium: админ-панель ([e2e-admin.mjs](../scripts/e2e-admin.mjs)) и вход с приглашениями ([e2e-auth.mjs](../scripts/e2e-auth.mjs)); нужны `dist/` и Playwright |
 | `npm run accounts -- <команда>` | суперадминистратор, тестовые пользователи, сброс пароля, восстановление доступа, резервная копия ([accounts.md](accounts.md#первый-запуск)) |
 | `npm run lint`, `npm run lint:fix` | ESLint |
 | `npm run eval:privacy` | проверка обезличивания на размеченном наборе ([privacy-evaluation.md](privacy-evaluation.md)) |
