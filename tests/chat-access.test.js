@@ -85,6 +85,19 @@ describe('Ассистент только после входа', { skip: !Datab
     assert.equal(seen.length, before);
   });
 
+  it('CSRF: не JSON или с чужого сайта — 403, даже с действующей сессией', async () => {
+    const cookie = await demoLogin('anna');
+    const before = seen.length;
+    const body = JSON.stringify({ messages: [{ role: 'user', content: 'нужен лор на завтра' }], sessionId: 'session-abcdef123456' });
+    const plain = await fetch(`${base}/api/chat`, { method: 'POST', headers: { 'content-type': 'text/plain', origin: base, cookie }, body });
+    assert.equal(plain.status, 403);
+    const crossSite = await fetch(`${base}/api/chat`, { method: 'POST', headers: { 'content-type': 'application/json', 'sec-fetch-site': 'cross-site', cookie }, body });
+    assert.equal(crossSite.status, 403);
+    const foreign = await fetch(`${base}/api/chat`, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://evil.example', cookie }, body });
+    assert.equal(foreign.status, 403);
+    assert.equal(seen.length, before, 'до ассистента запрос не дошёл');
+  });
+
   it('вошедший проходит; в тело запроса ассистента кабинет ничего не добавляет', async () => {
     const cookie = await demoLogin('anna');
     const response = await ask(cookie);

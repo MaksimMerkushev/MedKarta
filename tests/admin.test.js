@@ -463,7 +463,14 @@ describe('Админ-панель: сценарии', { skip: !DatabaseSync && '
   it('экспорт CSV: без хэшей и с защитой от формул', async () => {
     const formula = await root.call('/api/admin/users', { method: 'POST', body: { email: '=1+2@formula.test', firstName: 'Формула', lastName: 'Тест' } });
     assert.equal(formula.status, 201);
-    const response = await root.call('/api/admin/users/export?kind=real', { raw: true });
+    // Переход с чужого сайта (cookie SameSite=Lax уходит при навигации) — отказ, экспорт не пишется.
+    const before = (await root.call('/api/admin/audit?action=users.export')).body.total;
+    const crossSite = await root.call('/api/admin/users/export?kind=real', { raw: true, headers: { 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate' } });
+    assert.equal(crossSite.status, 403);
+    assert.equal((await root.call('/api/admin/users', { raw: true, headers: { 'sec-fetch-site': 'same-site' } })).status, 403);
+    assert.equal((await root.call('/api/admin/audit?action=users.export')).body.total, before);
+    assert.equal((await root.call('/api/admin/users/export?kind=real', { raw: true, headers: { 'sec-fetch-site': 'none' } })).status, 200, 'набранный адрес');
+    const response = await root.call('/api/admin/users/export?kind=real', { raw: true, headers: { 'sec-fetch-site': 'same-origin' } });
     assert.equal(response.status, 200);
     assert.match(response.headers.get('content-type'), /text\/csv/);
     const bytes = Buffer.from(await response.arrayBuffer());
@@ -494,6 +501,11 @@ describe('Админ-панель: сценарии', { skip: !DatabaseSync && '
     const person = await createActive({ email: 'profile@medkarta.test' });
     const updated = await person.tab.call('/api/me', { method: 'PATCH', body: { firstName: 'Профиль', lastName: 'Обновлённый' } });
     assert.equal(updated.body.user.displayName, 'Профиль Обновлённый');
+    for (const body of [{ firstName: null }, { lastName: 42 }, { firstName: { a: 1 } }]) {
+      const wrong = await person.tab.call('/api/me', { method: 'PATCH', body });
+      assert.equal(wrong.status, 400, JSON.stringify(body));
+      assert.equal(wrong.body.code, 'bad_name');
+    }
     const png = 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFnRFWHRDb21tZW50AFNFQ1JFVC1DT01NRU5UsD4XwwAAABZJREFUeNpjOGFkRBJiGNUwqmH4agAAFAQsEONjdYwAAAAASUVORK5CYII=';
     const avatar = await person.tab.call('/api/me/avatar', { method: 'PUT', body: { image: `data:image/png;base64,${png}` } });
     assert.equal(avatar.status, 200);
@@ -614,6 +626,12 @@ describe('Админ-панель: сценарии', { skip: !DatabaseSync && '
     assert.equal(body.users.byRole.superadmin, 1 + 0);
     assert.ok(Array.isArray(body.recentAudit) && body.recentAudit.length > 0);
     assert.equal((await root.call('/api/admin/dashboard?period=1y')).body.period, '7d');
+    // Ключи прототипа — не периоды (раньше — 500).
+    for (const period of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
+      const response = await root.call(`/api/admin/dashboard?period=${period}`);
+      assert.equal(response.status, 200, period);
+      assert.equal(response.body.period, '7d');
+    }
   });
 });
 

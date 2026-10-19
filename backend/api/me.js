@@ -116,6 +116,12 @@ export const createMeHandler = ({ getService = getDefaultAccountService, apiLimi
             respondJson(res, 400, { error: `Недопустимые поля: ${extra.slice(0, 5).join(', ')}.`, code: 'unexpected_field' });
             return;
           }
+          // Имя и фамилия — строки; null, число или объект — ошибка, а не «оставить как было» с ответом 200.
+          const wrongType = ['firstName', 'lastName'].find((key) => key in body && typeof body[key] !== 'string');
+          if (wrongType) {
+            respondJson(res, 400, { error: wrongType === 'firstName' ? 'Укажите имя: буквы, пробел, дефис.' : 'Фамилия: буквы, пробел, дефис.', code: 'bad_name' });
+            return;
+          }
           respondJson(res, 200, service.updateProfile(user, { firstName: body.firstName ?? user.firstName, lastName: body.lastName ?? user.lastName }));
           return;
         }

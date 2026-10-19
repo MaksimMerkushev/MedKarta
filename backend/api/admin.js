@@ -111,6 +111,16 @@ export const createAdminHandler = ({ getContext = getAccountContext, limit = def
       respondJson(res, 403, { error: 'Запрос отклонён.', code: 'csrf' });
       return;
     }
+    /*
+     * Чтение — тоже только со своей страницы (или по набранному адресу):
+     * переход с чужого сайта на /api/admin/users/export с cookie (SameSite=Lax
+     * её пропускает) скачивал бы CSV администратору и писал экспорт в журнал.
+     */
+    const site = req.headers['sec-fetch-site'];
+    if (req.method === 'GET' && site && site !== 'same-origin' && site !== 'none') {
+      respondJson(res, 403, { error: 'Запрос отклонён.', code: 'csrf' });
+      return;
+    }
 
     const context = await getContext();
     if (!context) {

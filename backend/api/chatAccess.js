@@ -10,18 +10,28 @@
  */
 
 import { chatRequiresAccount, getDefaultAccountService, parseCookies, SESSION_COOKIE } from './account.js';
+import { isTrustedWrite } from './accountHttp.js';
 import { respondJson } from '../http/request.js';
 import { logger } from '../observability/safeLogger.js';
 
 /**
  * true — запрос можно передать ассистенту; иначе ответ уже отправлен:
- * 401 login_required, 403 password_change_required, 503 accounts_unavailable
+ * 403 csrf (не JSON или с чужого сайта), 401 login_required, 403 password_change_required, 503 accounts_unavailable
  * или assistant_disabled (выключен в настройках админ-панели).
  */
 export const createChatAccessGate = ({ getService = getDefaultAccountService, isRequired = chatRequiresAccount } = {}) =>
   async function chatAccessGate(req, res) {
     // OPTIONS и неверный метод обработчик чата отклоняет сам.
     if (req.method !== 'POST') return true;
+    /*
+     * Та же защита от CSRF, что у кабинета: только JSON со своей страницы.
+     * Cookie сессии и так не уходит с чужого сайта (SameSite=Lax), но
+     * запрос с текстом жалобы не должен приниматься из формы чужой страницы.
+     */
+    if (!isTrustedWrite(req)) {
+      respondJson(res, 403, { error: 'Запрос отклонён.', code: 'csrf' });
+      return false;
+    }
 
     let service;
     try {

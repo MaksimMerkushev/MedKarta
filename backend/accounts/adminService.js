@@ -780,8 +780,9 @@ export const createAdminService = ({
 
     async dashboard(actor, period = '7d') {
       requirePermission(actor, 'dashboard.view');
-      const config = PERIODS[period] || PERIODS['7d'];
-      const key = PERIODS[period] ? period : '7d';
+      // Только собственные ключи: «__proto__» и «constructor» из адреса — не период (раньше — 500).
+      const key = typeof period === 'string' && Object.hasOwn(PERIODS, period) ? period : '7d';
+      const config = PERIODS[key];
       const stamp = now();
       const since = config.bucketMs === HOUR_MS
         ? Math.floor(stamp / HOUR_MS) * HOUR_MS - (config.buckets - 1) * HOUR_MS
