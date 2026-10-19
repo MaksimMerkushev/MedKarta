@@ -55,3 +55,13 @@ export const fetchMyLogins = () => request('/api/me/logins');
 export const uploadAvatar = (image) => request('/api/me/avatar', { method: 'PUT', body: { image } });
 export const removeAvatar = () => request('/api/me/avatar', { method: 'DELETE', body: {} });
 export const fetchPublicConfig = () => request('/api/config');
+
+/*
+ * Приглашения и ссылки для входа. Токен из ссылки уходит только в теле
+ * POST — не в адресе запроса; контекст активации — в cookie HttpOnly.
+ */
+export const requestAccessLink = (email) => request('/api/auth/access-link', { method: 'POST', body: { email } });
+export const peekActivation = (token) => request('/api/auth/activation/peek', { method: 'POST', body: { token } });
+export const startActivation = (token) => request('/api/auth/activation/start', { method: 'POST', body: { token } });
+export const fetchActivationContext = () => request('/api/auth/activation');
+export const completeActivation = (password) => request('/api/auth/activation/complete', { method: 'POST', body: { password } });

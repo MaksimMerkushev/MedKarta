@@ -4681,6 +4681,7 @@ export default function App() {
               onClose={closeAccountPanel}
               isMobile={isMobile}
               intro={chatAfterSignIn ? 'Войдите, чтобы поговорить с ассистентом: переписка будет только вашей.' : null}
+              support={{ email: siteSettings?.supportEmail || null, phone: siteSettings?.supportPhone || null }}
             />
           </Suspense>
         )}

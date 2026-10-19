@@ -22,7 +22,7 @@ import {
   UserRound,
 } from 'lucide-react';
 
-import { LoginForm } from './ui/auth';
+import AuthFlow from './auth/AuthFlow';
 import { Avatar as PhotoAvatar } from './ui/kit';
 import { Link } from './ui/router';
 
@@ -75,7 +75,7 @@ const Section = ({ icon, title, aside, children }) => {
 
 /* ---------- Гость ---------- */
 
-const GuestView = ({ account, onBusy }) => {
+const GuestView = ({ account, support, onBusy }) => {
   const [error, setError] = useState('');
   const [pending, setPending] = useState(null);
 
@@ -106,19 +106,23 @@ const GuestView = ({ account, onBusy }) => {
 
   return (
     <div className="space-y-4">
-      <Section icon={LogIn} title="Вход по email">
-        <LoginForm
-          autoFocus
+      <section className="mk-auth rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800/60" data-testid="login-form">
+        <AuthFlow
+          headingLevel={3}
+          title="Вход по email"
+          description="Введите email, на который создан ваш аккаунт."
+          features={features}
+          support={support}
           onLogin={async (credentials) => {
             onBusy?.(true);
             try {
-              await account.login(credentials);
+              return await account.login(credentials);
             } finally {
               onBusy?.(false);
             }
           }}
         />
-      </Section>
+      </section>
 
       {features.demo && features.demoAccounts?.length > 0 && (
         <Section icon={Sparkles} title="Демо-аккаунты">
@@ -353,7 +357,7 @@ const UserView = ({ account, insurance, today, planId, onSelectPlan, favorites, 
   );
 };
 
-export default function AccountPanel({ account, insurance, today, planId, onSelectPlan, favorites, onFocusFavorite, onRemoveFavorite, onClose, isMobile, intro = null }) {
+export default function AccountPanel({ account, insurance, today, planId, onSelectPlan, favorites, onFocusFavorite, onRemoveFavorite, onClose, isMobile, intro = null, support = null }) {
   const [busy, setBusy] = useState(false);
   const closeRef = useRef(null);
 
@@ -432,7 +436,7 @@ export default function AccountPanel({ account, insurance, today, planId, onSele
               onBusy={setBusy}
             />
           ) : (
-            <GuestView account={account} onBusy={setBusy} />
+            <GuestView account={account} support={support} onBusy={setBusy} />
           )}
         </div>
       </div>

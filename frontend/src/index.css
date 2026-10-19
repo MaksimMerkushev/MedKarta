@@ -397,6 +397,20 @@ html.dark .leaflet-control-attribution {
   outline-color: #60a5fa;
 }
 
+/*
+ * Экраны входа и приглашения (.mk-auth): общее кольцо фокуса остаётся, но
+ * не меняет скругление кнопок и полей; у полей ввода фокус — своя рамка и
+ * подсветка; заголовок, получивший фокус программно, без кольца.
+ */
+.mk-auth :focus-visible {
+  border-radius: revert-layer;
+}
+
+.mk-auth input:focus-visible,
+.mk-auth [tabindex="-1"]:focus-visible {
+  outline: none;
+}
+
 /* Пользователи, попросившие уменьшить анимацию, получают статичный интерфейс. */
 @media (prefers-reduced-motion: reduce) {
   *,

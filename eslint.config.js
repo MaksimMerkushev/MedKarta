@@ -29,8 +29,8 @@ export default defineConfig([
       // Секреты не должны попасть в бандл: правило ловит любые переменные
       // окружения *API_KEY, *SECRET_KEY, *ACCESS_TOKEN, *PASSWORD
       // (import.meta.env.VITE_..._API_KEY, process.env.…) и такие же константы
-      // в ВЕРХНЕМ_РЕГИСТРЕ. Поля API в camelCase (user.mustChangePassword,
-      // temporaryPassword из ответа администратору) — не конфигурация и не ловятся.
+      // в ВЕРХНЕМ_РЕГИСТРЕ. Поля API в camelCase (user.mustChangePassword) —
+      // не конфигурация и не ловятся.
       'no-restricted-syntax': [
         'error',
         {

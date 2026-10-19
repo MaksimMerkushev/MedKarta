@@ -1,15 +1,16 @@
 /*
  * © 2026 МедКарта Казань. Все права защищены.
  *
- * Вход и смена пароля — одни и те же формы на карте, в профиле и в
- * админ-панели. Регистрации нет: аккаунты выдаёт администратор.
+ * Смена пароля — в профиле и (для старых временных паролей) обязательным
+ * окном. Вход — auth/AuthFlow.jsx. Регистрации нет: аккаунты выдаёт
+ * администратор по приглашению.
  */
 import { useEffect, useId, useRef, useState } from 'react';
-import { Eye, EyeOff, KeyRound, Lock, LogIn, Mail, ShieldAlert } from 'lucide-react';
+import { Eye, EyeOff, KeyRound, Lock } from 'lucide-react';
 
+import { passwordProblem } from '@shared/passwordPolicy.js';
 import { changePassword } from '../services/account';
 import { Button, inputClass } from './kit';
-import { formatDateTime } from './format';
 
 function PasswordInput({ id, value, onChange, autoComplete, label, inputRef = null, testId }) {
   const [visible, setVisible] = useState(false);
@@ -42,93 +43,16 @@ function PasswordInput({ id, value, onChange, autoComplete, label, inputRef = nu
   );
 }
 
-/** Понятное сообщение об ошибке входа; о блокировке — с причиной и сроком. */
-const loginErrorText = (error) => {
-  if (!error) return '';
-  if (error.code === 'account_blocked') {
-    const until = error.payload?.blockedUntil ? ` до ${formatDateTime(error.payload.blockedUntil)} (МСК)` : '';
-    const reason = error.payload?.reason ? ` Причина: ${error.payload.reason}` : '';
-    return `Аккаунт заблокирован${until}.${reason}`;
-  }
-  return error.message || 'Не получилось войти.';
-};
-
-export function LoginForm({ onLogin, autoFocus = true, submitLabel = 'Войти' }) {
-  const ids = useId();
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState(null);
-  const [pending, setPending] = useState(false);
-  const emailRef = useRef(null);
-
-  useEffect(() => {
-    if (autoFocus) emailRef.current?.focus();
-  }, [autoFocus]);
-
-  const submit = async (event) => {
-    event.preventDefault();
-    if (pending) return;
-    setError(null);
-    setPending(true);
-    try {
-      await onLogin({ email: email.trim(), password });
-    } catch (failure) {
-      setError(failure);
-      setPassword('');
-    } finally {
-      setPending(false);
-    }
-  };
-
-  const blocked = error?.code === 'account_blocked' || error?.code === 'account_inactive';
-  return (
-    <form className="space-y-3" onSubmit={submit} noValidate data-testid="login-form">
-      <div>
-        <label htmlFor={`${ids}-email`} className="mb-1 block text-[12.5px] font-semibold text-slate-600 dark:text-slate-300">Email</label>
-        <div className="relative">
-          <Mail size={16} className="pointer-events-none absolute left-3 top-3 text-slate-400" aria-hidden="true" />
-          <input
-            id={`${ids}-email`}
-            ref={emailRef}
-            type="email"
-            inputMode="email"
-            autoComplete="username"
-            maxLength={254}
-            className={`${inputClass} pl-9`}
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            data-testid="login-email"
-          />
-        </div>
-      </div>
-      <PasswordInput id={`${ids}-password`} label="Пароль" value={password} onChange={setPassword} autoComplete="current-password" testId="login-password" />
-      {error && (
-        <p className={`flex gap-2 rounded-xl px-3 py-2 text-[13px] leading-5 ${blocked ? 'bg-amber-50 text-amber-900 dark:bg-amber-950/50 dark:text-amber-200' : 'bg-red-50 text-red-700 dark:bg-red-950/50 dark:text-red-300'}`} role="alert" data-testid="login-error">
-          {blocked && <ShieldAlert size={16} className="mt-0.5 shrink-0" aria-hidden="true" />}
-          <span>{loginErrorText(error)}</span>
-        </p>
-      )}
-      <Button type="submit" variant="primary" size="lg" icon={LogIn} loading={pending} disabled={!email || !password} className="w-full" data-testid="login-submit">
-        {submitLabel}
-      </Button>
-      <p className="text-center text-[12px] leading-5 text-slate-500 dark:text-slate-400">
-        Регистрации нет: аккаунт выдаёт администратор. Забыли пароль — обратитесь к нему.
-      </p>
-    </form>
-  );
-}
-
-/** Подсказка к новому паролю — та же логика, что на сервере (passwords.js), чтобы ошибок было меньше. */
-const hint = (password, repeat) => {
+/** Подсказка к новому паролю — те же правила, что на сервере (shared/passwordPolicy.js). */
+const hint = (password, repeat, email) => {
   if (!password) return '';
-  if (password.length < 8) return 'Не короче 8 символов.';
-  if (/^\d+$/.test(password)) return 'Не только цифры.';
-  if (/^(.)\1+$/u.test(password)) return 'Не один повторяющийся символ.';
+  const problem = passwordProblem(password, { email });
+  if (problem) return problem;
   if (repeat && repeat !== password) return 'Пароли не совпадают.';
   return '';
 };
 
-export function PasswordChangeForm({ onDone, temporary = false, autoFocus = temporary, submitLabel = 'Сменить пароль' }) {
+export function PasswordChangeForm({ onDone, temporary = false, autoFocus = temporary, submitLabel = 'Сменить пароль', email = '' }) {
   const ids = useId();
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
@@ -142,7 +66,7 @@ export function PasswordChangeForm({ onDone, temporary = false, autoFocus = temp
     if (autoFocus) firstRef.current?.focus();
   }, [autoFocus]);
 
-  const problem = hint(next, repeat);
+  const problem = hint(next, repeat, email);
   const ready = current && next && repeat && !problem;
 
   const submit = async (event) => {
@@ -169,7 +93,7 @@ export function PasswordChangeForm({ onDone, temporary = false, autoFocus = temp
       <PasswordInput id={`${ids}-next`} label="Новый пароль" value={next} onChange={setNext} autoComplete="new-password" testId="password-next" />
       <PasswordInput id={`${ids}-repeat`} label="Повторите новый пароль" value={repeat} onChange={setRepeat} autoComplete="new-password" testId="password-repeat" />
       <p className={`text-[12px] ${problem ? 'text-amber-700 dark:text-amber-300' : 'text-slate-500 dark:text-slate-400'}`}>
-        {problem || 'Не короче 8 символов, не только цифры и не содержит email. После смены все другие сессии завершатся.'}
+        {problem || 'Не короче 8 символов, не из списка распространённых и не содержит email. После смены все другие сессии завершатся.'}
       </p>
       {error && <p className="rounded-xl bg-red-50 px-3 py-2 text-[13px] text-red-700 dark:bg-red-950/50 dark:text-red-300" role="alert">{error}</p>}
       <Button type="submit" variant="primary" icon={KeyRound} loading={pending} disabled={!ready} data-testid="password-submit">{submitLabel}</Button>
@@ -190,7 +114,7 @@ export function ForcedPasswordChange({ user, onDone, onLogout }) {
           {user?.displayName ? `${user.displayName}, в` : 'В'}ы вошли с паролем, который выдал администратор. Придумайте свой — до этого остальные функции недоступны.
         </p>
         <div className="mt-4">
-          <PasswordChangeForm temporary onDone={onDone} submitLabel="Сохранить и продолжить" />
+          <PasswordChangeForm temporary email={user?.email} onDone={onDone} submitLabel="Сохранить и продолжить" />
         </div>
         {onLogout && (
           <button type="button" onClick={onLogout} className="mt-3 text-[12.5px] font-semibold text-slate-500 hover:underline dark:text-slate-400">Выйти</button>

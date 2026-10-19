@@ -8,9 +8,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Camera, Clock3, LayoutDashboard, LogOut, Monitor, ShieldCheck, Trash2 } from 'lucide-react';
 
 import {
-  fetchMe, fetchMyLogins, fetchMySessions, loginAccount, logoutAccount, removeAvatar, revokeMySession, revokeOtherSessions, updateMe, uploadAvatar,
+  fetchMe, fetchMyLogins, fetchMySessions, logoutAccount, removeAvatar, revokeMySession, revokeOtherSessions, updateMe, uploadAvatar,
 } from '../services/account';
-import { ForcedPasswordChange, LoginForm, PasswordChangeForm } from '../ui/auth';
+import { ForcedPasswordChange, PasswordChangeForm } from '../ui/auth';
 import {
   Avatar, Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, RoleBadge, Skeleton, Spinner, StatusBadge, TextInput, ThemeToggle, ToastProvider,
 } from '../ui/kit';
@@ -321,6 +321,11 @@ function ProfileContent() {
     document.title = 'Профиль — МедКарта';
   }, []);
 
+  // Без сессии — на общую страницу входа; после входа она вернёт в профиль.
+  useEffect(() => {
+    if (state.status === 'guest') navigate('/login?next=%2Fprofile', { replace: true });
+  }, [state.status]);
+
   const setUser = useCallback((user) => setState((current) => ({ ...current, user })), [setState]);
   const logout = useCallback(async () => {
     try {
@@ -329,8 +334,7 @@ function ProfileContent() {
       // Сессия истечёт сама; здесь выходим в любом случае.
     }
     setState({ status: 'guest', user: null, error: null });
-    toast('Вы вышли из аккаунта.', 'info');
-  }, [setState, toast]);
+  }, [setState]);
 
   const { status, user } = state;
   return (
@@ -339,16 +343,7 @@ function ProfileContent() {
       <main className="mx-auto max-w-5xl px-4 py-6">
         {status === 'loading' && <Spinner label="Загружаю профиль…" />}
         {status === 'error' && <ErrorState error={state.error} onRetry={load} />}
-        {status === 'guest' && (
-          <div className="mx-auto max-w-sm">
-            <Card title="Вход в МедКарту" description="Войдите, чтобы открыть свой профиль.">
-              <LoginForm onLogin={async (credentials) => {
-                await loginAccount(credentials);
-                await load();
-              }} />
-            </Card>
-          </div>
-        )}
+        {status === 'guest' && <Spinner label="Открываю вход…" />}
         {status === 'ready' && user && (
           <>
             {user.mustChangePassword && <ForcedPasswordChange user={user} onDone={(fresh) => setUser(fresh)} onLogout={logout} />}
@@ -360,7 +355,7 @@ function ProfileContent() {
                 <NameCard key={`${user.firstName}|${user.lastName}`} user={user} onChange={setUser} />
                 {!user.isDemo && (
                   <Card title="Пароль" description="Смена пароля завершит все остальные сессии.">
-                    <PasswordChangeForm onDone={(fresh) => {
+                    <PasswordChangeForm email={user.email} onDone={(fresh) => {
                       setUser(fresh);
                       toast('Пароль изменён. Другие сессии завершены.');
                     }} />

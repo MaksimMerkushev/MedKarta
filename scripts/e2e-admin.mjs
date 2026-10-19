@@ -4,10 +4,12 @@
  *
  * Сквозная проверка аккаунтов и админ-панели в настоящем браузере: вход,
  * имя и роль в интерфейсе, дашборд, поиск, карточка, правка имени и роли,
- * блокировка с отзывом сессии, разблокировка, сброс пароля, история входов,
- * журнал, создание пользователя, вход обычного пользователя со сменой
- * временного пароля, правка профиля, завершение сессии, перезапуск сервера,
- * отсутствие регистрации.
+ * активация по приглашению, блокировка с отзывом сессии, разблокировка,
+ * новое приглашение (прежнее отзывается), история входов, журнал, создание
+ * пользователя с приглашением, вход обычного пользователя, правка профиля,
+ * завершение сессии, перезапуск сервера, отсутствие регистрации, повторное
+ * использование ссылки. Экраны входа и приглашения подробно —
+ * scripts/e2e-auth.mjs.
  *
  * Нужны собранный фронтенд (npm run build) и Playwright с Chromium
  * (npm i --no-save playwright && npx playwright install chromium).
@@ -103,11 +105,15 @@ const expect = (condition, message) => {
 let browser;
 try {
   await startServer();
-  // Тестовые пользователи — как командой CLI: пароли знает только этот процесс.
+  // Тестовые пользователи — как командой CLI: без паролей, со ссылками-приглашениями,
+  // которые знает только этот процесс (почта не настроена — ручная передача).
   const { createSqliteAccountStore, loadSqlite } = await import('../backend/accounts/sqliteStore.js');
   const { createTestUsers } = await import('../backend/accounts/bootstrap.js');
+  const { createAccountContext } = await import('../backend/api/accountContext.js');
+  const { createDelivery } = await import('../backend/accounts/delivery.js');
   const seedStore = createSqliteAccountStore({ DatabaseSync: await loadSqlite(), file: env.ACCOUNTS_DB_PATH });
-  const testUsers = Object.fromEntries((await createTestUsers({ store: seedStore })).map((item) => [item.email, item.password]));
+  const seedContext = createAccountContext({ store: seedStore, delivery: createDelivery({ env: {} }) });
+  const invites = Object.fromEntries((await createTestUsers({ store: seedStore, invitations: seedContext.invitations, base: BASE })).map((item) => [item.email, item.link]));
   seedStore.close();
 
   browser = await chromium.launch();
@@ -123,13 +129,21 @@ try {
       window.dispatchEvent(new Event('medkarta:navigate'));
     }, to);
   };
-  const changeTemporaryPassword = async (page, temporary, next) => {
-    await page.waitForSelector('[data-testid=forced-password-change]');
-    await page.fill('[data-testid=password-current]', temporary);
-    await page.fill('[data-testid=password-next]', next);
-    await page.fill('[data-testid=password-repeat]', next);
-    await page.click('[data-testid=password-submit]');
-    await page.waitForSelector('[data-testid=forced-password-change]', { state: 'detached' });
+  // Вход в два шага: email → пароль.
+  const signIn = async (page, email, password) => {
+    await page.fill('[data-testid=login-email]', email);
+    await page.click('[data-testid=login-continue]');
+    await page.fill('[data-testid=login-password]', password);
+    await page.click('[data-testid=login-submit]');
+  };
+  // Приглашение: открыть ссылку, принять, задать пароль — вход выполнен.
+  const activate = async (page, link, password) => {
+    await page.goto(link, { waitUntil: 'domcontentloaded' });
+    await page.click('[data-testid=activation-accept]');
+    await page.fill('[data-testid=activation-password-input]', password);
+    await page.click('[data-testid=activation-submit]');
+    await page.waitForSelector('[data-testid=activation-success]');
+    expect(!page.url().includes('token='), 'токен остался в адресе');
   };
   const openUser = async (email) => {
     await goto(admin, `/admin/users?q=${encodeURIComponent(email)}`);
@@ -143,9 +157,7 @@ try {
   await step('1–3. Открыть МедКарту, войти администратором, увидеть имя и роль', async () => {
     await admin.goto(BASE, { waitUntil: 'domcontentloaded' });
     await admin.click('[data-testid=sign-in-button]');
-    await admin.fill('[data-testid=login-email]', ROOT_EMAIL);
-    await admin.fill('[data-testid=login-password]', ROOT_PASSWORD);
-    await admin.click('[data-testid=login-submit]');
+    await signIn(admin, ROOT_EMAIL, ROOT_PASSWORD);
     await admin.waitForSelector('[data-testid=user-chip-name]');
     await admin.keyboard.press('Escape');
     expect((await admin.textContent('[data-testid=user-chip-name]')).includes('Максим'), 'нет имени в шапке');
@@ -184,12 +196,10 @@ try {
   });
 
   const timur = await browser.newPage({ viewport: { width: 1280, height: 860 } });
-  await step('9–11. Заблокировать — сессия перестаёт работать; разблокировать', async () => {
+  await step('9–11. Активировать по приглашению; заблокировать — сессия перестаёт работать; разблокировать', async () => {
+    await activate(timur, invites['timur.khairullin@medkarta.test'], 'Тимур-пароль-2026');
+    await timur.waitForURL((url) => url.pathname === '/');
     await timur.goto(`${BASE}/profile`, { waitUntil: 'domcontentloaded' });
-    await timur.fill('[data-testid=login-email]', 'timur.khairullin@medkarta.test');
-    await timur.fill('[data-testid=login-password]', testUsers['timur.khairullin@medkarta.test']);
-    await timur.click('[data-testid=login-submit]');
-    await changeTemporaryPassword(timur, testUsers['timur.khairullin@medkarta.test'], 'Тимур-пароль-2026');
     await timur.waitForSelector('[data-testid=profile-name]');
 
     await openUser('timur.khairullin@medkarta.test');
@@ -201,13 +211,12 @@ try {
 
     const status = await timur.evaluate(() => fetch('/api/me').then((response) => response.status));
     expect(status === 401, `сессия заблокированного ответила ${status}`);
+    // Профиль без сессии ведёт на /login?next=/profile.
     await timur.reload();
-    await timur.waitForSelector('[data-testid=login-form]');
-    await timur.fill('[data-testid=login-email]', 'timur.khairullin@medkarta.test');
-    await timur.fill('[data-testid=login-password]', 'Тимур-пароль-2026');
-    await timur.click('[data-testid=login-submit]');
-    await timur.waitForSelector('[data-testid=login-error]');
-    expect((await timur.textContent('[data-testid=login-error]')).includes('Проверка блокировки'), 'нет причины блокировки');
+    await timur.waitForURL((url) => url.pathname === '/login');
+    await signIn(timur, 'timur.khairullin@medkarta.test', 'Тимур-пароль-2026');
+    await timur.waitForSelector('[data-testid=auth-error]');
+    expect((await timur.textContent('[data-testid=auth-error]')).includes('Проверка блокировки'), 'нет причины блокировки');
     await shot(timur, '05-blocked-login');
 
     await admin.click('[data-testid=unblock-user]');
@@ -215,18 +224,26 @@ try {
     await admin.waitForSelector('[data-testid=block-user]');
     await timur.fill('[data-testid=login-password]', 'Тимур-пароль-2026');
     await timur.click('[data-testid=login-submit]');
+    await timur.waitForURL((url) => url.pathname === '/profile');
     await timur.waitForSelector('[data-testid=profile-name]');
   });
 
-  await step('12. Сбросить пароль пользователя', async () => {
+  await step('12. Выслать новое приглашение — прежнее отзывается', async () => {
     await openUser('elena.kovaleva@medkarta.test');
+    expect((await admin.textContent('[data-testid=user-detail-name] + p + div')).includes('Ожидает активации'), 'нет статуса «Ожидает активации»');
     await tab(admin, 'Управление');
-    await admin.click('[data-testid=reset-password]');
+    await admin.click('[data-testid=issue-link]');
     await admin.click('[data-testid=confirm-action]');
-    const password = (await admin.textContent('[data-testid=temporary-password]')).trim();
-    expect(/^\w{4}(-\w{4}){4}$/.test(password), `временный пароль: ${password}`);
-    await shot(admin, '06-temporary-password');
-    await admin.keyboard.press('Escape');
+    const link = await admin.inputValue('[data-testid=invitation-link]');
+    expect(/\/activate#token=[\w-]{43}$/.test(link), `ссылка: ${link.replace(/token=.*/, 'token=…')}`);
+    await shot(admin, '06-invitation-link');
+    await admin.click('[data-testid=invitation-done]');
+    await admin.waitForSelector('[data-testid=invitation-row][data-state=revoked]');
+    expect(await admin.$('[data-testid=invitation-row][data-state=active]'), 'нет нового приглашения');
+    const old = await browser.newPage();
+    await old.goto(invites['elena.kovaleva@medkarta.test'], { waitUntil: 'domcontentloaded' });
+    await old.waitForSelector('[data-testid=activation-problem][data-code=link_revoked]');
+    await old.close();
   });
 
   await step('13. История входов', async () => {
@@ -242,35 +259,32 @@ try {
     await goto(admin, '/admin/audit');
     await admin.waitForSelector('[data-testid=audit-table]');
     const text = await admin.textContent('[data-testid=audit-table]');
-    for (const label of ['Изменение профиля', 'Изменение роли', 'Блокировка', 'Разблокировка', 'Сброс пароля']) {
+    for (const label of ['Изменение профиля', 'Изменение роли', 'Блокировка', 'Разблокировка', 'Приглашение', 'Активация аккаунта']) {
       expect(text.includes(label), `в журнале нет «${label}»`);
     }
     expect(text.includes('Максим'), 'в журнале нет инициатора');
     await shot(admin, '08-audit');
   });
 
-  let newPassword = '';
-  await step('15. Создать пользователя вручную', async () => {
+  let olgaLink = '';
+  await step('15. Создать пользователя — без пароля, с приглашением', async () => {
     await goto(admin, '/admin/users');
     await admin.click('[data-testid=create-user]');
     await admin.fill('[data-testid=create-user-email]', 'olga.petrova@medkarta.test');
     await admin.fill('[data-testid=create-user-first-name]', 'Ольга');
     await admin.fill('[data-testid=create-user-last-name]', 'Петрова');
     await admin.click('[data-testid=create-user-submit]');
-    newPassword = (await admin.textContent('[data-testid=temporary-password]')).trim();
-    await admin.click('text=Готово');
+    olgaLink = await admin.inputValue('[data-testid=invitation-link]');
+    await admin.click('[data-testid=invitation-done]');
     await admin.waitForSelector('[data-testid=user-detail-name] >> text=Ольга Петрова');
+    // Ссылка видна один раз: в карточке и журнале её нет.
+    expect(!(await admin.content()).includes(olgaLink.split('#token=')[1]), 'токен остался на странице');
   });
 
   const olga = await browser.newPage({ viewport: { width: 1280, height: 860 } });
-  await step('16–17. Войти обычным пользователем и изменить профиль', async () => {
-    await olga.goto(BASE, { waitUntil: 'domcontentloaded' });
-    await olga.click('[data-testid=sign-in-button]');
-    await olga.fill('[data-testid=login-email]', 'olga.petrova@medkarta.test');
-    await olga.fill('[data-testid=login-password]', newPassword);
-    await olga.click('[data-testid=login-submit]');
-    await changeTemporaryPassword(olga, newPassword, 'Ольга-пароль-2026');
-    await olga.keyboard.press('Escape');
+  await step('16–17. Активировать аккаунт обычного пользователя и изменить профиль', async () => {
+    await activate(olga, olgaLink, 'Ольга-пароль-2026');
+    await olga.waitForURL((url) => url.pathname === '/');
     await olga.waitForSelector('[data-testid=user-chip-name] >> text=Ольга Петрова');
     expect(!(await olga.$('[data-testid=user-chip-admin]')), 'обычному пользователю видна админ-панель');
     await olga.click('[data-testid=user-chip-profile]');
@@ -312,6 +326,13 @@ try {
     await guest.waitForSelector('[data-testid=login-form]');
     expect(!(await guest.$('text=Создать аккаунт')), 'в интерфейсе есть регистрация');
     await guest.close();
+  });
+
+  await step('21. Ссылку нельзя использовать повторно', async () => {
+    const again = await browser.newPage();
+    await again.goto(olgaLink, { waitUntil: 'domcontentloaded' });
+    await again.waitForSelector('[data-testid=activation-problem][data-code=link_used]');
+    await again.close();
   });
 
   await step('Ошибок JavaScript на страницах нет', async () => {
