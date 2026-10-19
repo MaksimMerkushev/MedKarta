@@ -102,21 +102,23 @@ http(s); телефон — цифры и разделители; координ
 
 Режимы доступа и приоритет правил — [10-medical-search-and-data.md](10-medical-search-and-data.md).
 
-## SQLite: аккаунты (схема 3)
+## SQLite: аккаунты (схема 4)
 
 [backend/accounts/sqliteStore.js](../backend/accounts/sqliteStore.js); файл
 `ACCOUNTS_DB_PATH` (по умолчанию `var/accounts/medkarta.sqlite`). Прагмы:
 `foreign_keys = ON`, `busy_timeout = 2000`, `secure_delete = ON`, WAL для
 файла; миграции — по `user_version` в транзакции: 1 — пользователи, сессии,
-избранное; 2 — демо-копии; 3 — роли, статусы, журналы, аватары, настройки.
-Отката миграций нет: перед обновлением — `npm run accounts -- backup`.
+избранное; 2 — демо-копии; 3 — роли, статусы, журналы, аватары, настройки;
+4 — приглашения: `users.activated_at` и таблица `access_tokens`; у всех
+аккаунтов с паролем и у демо-копий `activated_at` заполняется при миграции
+(никто не теряет вход). Отката миграций нет: перед обновлением — `npm run accounts -- backup`.
 
 ```sql
 CREATE TABLE users (
   id            TEXT PRIMARY KEY,               -- 32 hex, случайный
   email         TEXT NOT NULL UNIQUE COLLATE NOCASE,
   display_name  TEXT NOT NULL,                  -- «Имя Фамилия», для совместимости
-  password_hash TEXT,                           -- scrypt$N$r$p$соль$хэш; у демо-аккаунтов NULL
+  password_hash TEXT,                           -- scrypt$N$r$p$соль$хэш; у демо и неактивированных — NULL
   dms_plan_id   TEXT,
   demo_key      TEXT UNIQUE,                    -- устарел, не заполняется
   created_at    INTEGER NOT NULL,
@@ -139,7 +141,23 @@ CREATE TABLE users (
   last_failed_login_at INTEGER,
   created_by    TEXT,                           -- id сотрудника; NULL — CLI или старая регистрация
   version       INTEGER NOT NULL DEFAULT 1,     -- оптимистическая блокировка правок
-  search_text   TEXT NOT NULL DEFAULT ''        -- id, email, имя в нижнем регистре (кириллица — в JS)
+  search_text   TEXT NOT NULL DEFAULT '',       -- id, email, имя в нижнем регистре (кириллица — в JS)
+  activated_at  INTEGER                         -- схема 4: пароль задан; NULL — «ожидает активации»
+);
+CREATE TABLE access_tokens (                    -- схема 4: приглашения и ссылки для смены пароля
+  id               TEXT PRIMARY KEY,            -- 24 hex, публичный id для отзыва (не токен)
+  token_hash       TEXT NOT NULL UNIQUE,        -- SHA-256 от токена ссылки; сам токен не хранится
+  user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  purpose          TEXT NOT NULL CHECK (purpose IN ('invite', 'reset')),
+  email            TEXT NOT NULL,               -- адрес на момент выдачи: сменили — ссылка не действует
+  source           TEXT NOT NULL CHECK (source IN ('admin', 'self', 'cli')),
+  delivery         TEXT NOT NULL CHECK (delivery IN ('email', 'manual')),
+  delivery_status  TEXT NOT NULL DEFAULT 'pending' CHECK (delivery_status IN ('pending', 'sent', 'failed', 'manual')),
+  created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+  created_by TEXT, created_by_label TEXT,       -- кто выдал (проверяется и при использовании)
+  opened_at INTEGER, used_at INTEGER, revoked_at INTEGER, revoked_reason TEXT,
+  context_hash       TEXT UNIQUE,               -- SHA-256 от контекста активации (cookie mk_activation)
+  context_expires_at INTEGER                    -- 30 минут на пароль после «Принять приглашение»
 );
 CREATE TABLE sessions (
   token_hash   TEXT PRIMARY KEY,                -- SHA-256 от токена из cookie
@@ -155,10 +173,12 @@ CREATE TABLE favorites (user_id, item_id, created_at, PRIMARY KEY (user_id, item
 
 CREATE TABLE auth_events (id, at, type, user_id, session_id, client, ip_prefix, reason);
   -- type: login_ok | login_failed | login_denied | logout | password_changed
-  --       | session_revoked | sessions_revoked; хранится retention.authEventsDays (90)
+  --       | session_revoked | sessions_revoked | access_link_requested | access_link_opened
+  --       | account_activated | password_reset; хранится retention.authEventsDays (90)
 CREATE TABLE audit_log (id, at, action, actor_id, actor_label, target_id, target_label,
   result CHECK (result IN ('ok', 'denied', 'failed')), details, search_text);
-  -- action: user.create, user.role, user.block, …, settings.update; details — JSON без секретов;
+  -- action: user.create, user.role, user.block, user.invite, user.reset_link, user.invite_revoke,
+  --         user.activate, user.password_set, …, settings.update; details — JSON без секретов и ссылок;
   -- хранится retention.auditDays (365)
 CREATE TABLE user_blocks (id, user_id → users ON DELETE CASCADE, at,
   action CHECK (action IN ('block', 'unblock', 'expired')), until, reason, actor_id, actor_label);
@@ -169,7 +189,9 @@ CREATE TABLE settings (key PRIMARY KEY, value JSON, updated_at, updated_by);
 CREATE TABLE role_overrides (role PRIMARY KEY, permissions JSON, updated_at, updated_by);
 ```
 
-Индексы: `users(role)`, `users(status)`, `users(created_at)`, демо-копии;
+Индексы: `users(role)`, `users(status)`, `users(created_at)`, демо-копии,
+неактивированные (`users_pending`); `access_tokens(user_id, created_at)`,
+`access_tokens(expires_at)`;
 `sessions(user_id)`, `sessions(expires_at)`; журналы — по `(user_id, at)`,
 `(type, at)`, `(target_id, at)`, `(actor_id, at)`, `(action, at)`, `at`.
 
@@ -178,7 +200,8 @@ CREATE TABLE role_overrides (role PRIMARY KEY, permissions JSON, updated_at, upd
 избранного — до 500 записей; демо-копия без входов 30 дней удаляется, копий —
 до 10 000 ([service.js](../backend/accounts/service.js), `ACCOUNT_LIMITS`).
 Раз в час сервер удаляет просроченные сессии, окончившиеся блокировки
-переводит в «активен», журналы старше срока хранения — удаляет. Подробности
+переводит в «активен», журналы старше срока хранения — удаляет, ссылки,
+истёкшие больше 30 дней назад, — тоже. Подробности
 о ролях и безопасности — [accounts.md](accounts.md).
 
 ## SQLite: демо-запись

@@ -22,8 +22,11 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
 
 Ленивые чанки: `AIAssistant`, `AccountPanel`, `BookingDialog` подключаются
 через `React.lazy` в [App.jsx](../frontend/src/App.jsx); админ-панель
-(`/admin…`, каждый раздел — свой чанк) и профиль (`/profile`) — в
-[Root.jsx](../frontend/src/Root.jsx), карта их код не загружает. Демо-набор
+(`/admin…`, каждый раздел — свой чанк), профиль (`/profile`), вход (`/login`)
+и приглашение (`/activate`) — в [Root.jsx](../frontend/src/Root.jsx), карта
+их код не загружает. Анимации экранов входа — **Motion for React**
+(пакет `motion`, импорт `motion/react`); в чанк карты он попадает только с
+окном кабинета. Демо-набор
 загружается отдельным чанком из [demoMode.js](../frontend/src/demoMode.js).
 
 > Важно: если `data/doctors.full.js` существует, он попадает в бандл и
@@ -62,13 +65,18 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
 | [SearchFilters.jsx](../frontend/src/SearchFilters.jsx) | панель фильтров |
 | [DmsPanel.jsx](../frontend/src/DmsPanel.jsx) | «Мой ДМС»: страховая и программа |
 | [AccountPanel.jsx](../frontend/src/AccountPanel.jsx), [hooks/useAccount.js](../frontend/src/hooks/useAccount.js) | личный кабинет на карте; плашка пользователя «Аватар · Имя · Профиль · Выйти» — в [App.jsx](../frontend/src/App.jsx) |
-| [Root.jsx](../frontend/src/Root.jsx) | выбор приложения по пути: карта, `/profile` или `/admin…` |
+| [Root.jsx](../frontend/src/Root.jsx) | выбор приложения по пути: карта, `/profile`, `/login`, `/activate` или `/admin…` |
+| [auth/AuthFlow.jsx](../frontend/src/auth/AuthFlow.jsx) | вход в два шага (email → пароль), «Нет пароля или забыли его?», «Проверьте почту»; одна форма для `/login` и окна кабинета на карте |
+| [auth/LoginPage.jsx](../frontend/src/auth/LoginPage.jsx), [auth/ActivationPage.jsx](../frontend/src/auth/ActivationPage.jsx) | `/login?next=…` и `/activate#token=…` (токен убирается из адреса сразу) |
+| [auth/AuthLayout.jsx](../frontend/src/auth/AuthLayout.jsx), [auth/CityIllustration.jsx](../frontend/src/auth/CityIllustration.jsx) | каркас экранов входа; от 1024 px — иллюстрация: кварталы, зоны 5/10/15 минут, маршрут прорисовывается один раз |
+| [auth/parts.jsx](../frontend/src/auth/parts.jsx), [auth/AutoHeight.jsx](../frontend/src/auth/AutoHeight.jsx), [auth/motion.js](../frontend/src/auth/motion.js) | поля, кнопки, ошибка, требования к паролю, знак успеха; плавная высота; параметры движения |
+| [auth/environment.js](../frontend/src/auth/environment.js) | куда вести после входа (`safeNext` — только пути внутри приложения), сессия и контакты поддержки |
 | [profile/ProfilePage.jsx](../frontend/src/profile/ProfilePage.jsx) | профиль: фото, имя, пароль, свои сессии, история входов |
-| [admin/AdminApp.jsx](../frontend/src/admin/AdminApp.jsx), [admin/pages/](../frontend/src/admin/pages/) | админ-панель: оболочка с меню по разрешениям, вход, разделы |
+| [admin/AdminApp.jsx](../frontend/src/admin/AdminApp.jsx), [admin/pages/](../frontend/src/admin/pages/) | админ-панель: оболочка с меню по разрешениям (без сессии — на `/login?next=…`), уведомления об активации, разделы |
 | [admin/charts.jsx](../frontend/src/admin/charts.jsx) | графики дашборда на SVG: подсказка, клавиатура, таблица вместо графика |
-| [admin/api.js](../frontend/src/admin/api.js), [admin/model.js](../frontend/src/admin/model.js), [admin/common.jsx](../frontend/src/admin/common.jsx) | запросы к `/api/admin`, права и подписи журнала, общие окна |
+| [admin/api.js](../frontend/src/admin/api.js), [admin/model.js](../frontend/src/admin/model.js), [admin/common.jsx](../frontend/src/admin/common.jsx) | запросы к `/api/admin`, права и подписи журнала, общие окна (создание с приглашением, итог выдачи ссылки) |
 | [ui/kit.jsx](../frontend/src/ui/kit.jsx), [ui/format.js](../frontend/src/ui/format.js), [ui/hooks.js](../frontend/src/ui/hooks.js) | общие компоненты профиля и панели, даты по Москве, уведомления, тема, загрузка данных |
-| [ui/auth.jsx](../frontend/src/ui/auth.jsx) | форма входа, смена пароля, обязательная смена временного пароля |
+| [ui/auth.jsx](../frontend/src/ui/auth.jsx) | смена пароля в профиле и обязательная смена (старые временные пароли, «Потребовать смену») |
 | [ui/navigation.js](../frontend/src/ui/navigation.js), [ui/router.jsx](../frontend/src/ui/router.jsx) | переходы без перезагрузки (`history.pushState`) и ссылка `Link` |
 | [ChatLoginNotice.jsx](../frontend/src/ChatLoginNotice.jsx) | предупреждение гостю вместо чата: ассистент только после входа |
 | [FeedbackWidgets.jsx](../frontend/src/FeedbackWidgets.jsx) | «Нашли, куда обратиться?», «Данные неверны» |
@@ -214,6 +222,33 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
   (`sendBeacon` на `pagehide` и `visibilitychange`);
 - при Do Not Track или Global Privacy Control события не отправляются вовсе.
 
+## Экраны входа и приглашения
+
+- **Шаги.** `/login`: email → пароль (первый шаг на сервер не ходит — по нему
+  нельзя узнать, есть ли аккаунт); «Нет пароля или забыли его?» → ссылка на
+  почту или, без почты, объяснение, что ссылку присылает администратор.
+  `/activate`: «Принять приглашение» → пароль с требованиями → «Аккаунт
+  активирован» → переход (сотрудник — в `/admin`, остальные — на карту).
+- **Движение** (Motion for React): смена шага — 220 мс, сдвиг на 16 px по
+  направлению; высота формы — пружина без скачков; ошибки появляются плавно,
+  без тряски; знак успеха прорисовывается один раз; кнопки — лёгкий подъём
+  при наведении и нажатие. `MotionConfig reducedMotion="user"` и
+  `useReducedMotion`: при `prefers-reduced-motion` — без сдвигов и анимации
+  высоты, только прозрачность.
+- **Доступность.** Фокус — в главное поле шага (или на заголовок, если поля
+  нет); смена шага озвучивается (`aria-live`); ошибки — `role="alert"` и
+  `aria-describedby`; требования к паролю — список с текстом «выполнено /
+  пока нет», итог — вежливо, без спама на каждый символ; кнопка «Показать
+  пароль» — `aria-pressed`. Кнопки 48 px, текст полей 16 px (iOS не
+  увеличивает страницу).
+- **Менеджеры паролей.** Обычные `input` с `autocomplete="username"`,
+  `current-password` и `new-password`; на шаге пароля — скрытое поле с email.
+  Пароли и токены в `localStorage` и `sessionStorage` не пишутся.
+- **Темы** — светлая и тёмная (общий переключатель); сдержанная палитра:
+  синий действия, красная метка МедКарты, без градиентов и стекла.
+- **Проверка** — [scripts/e2e-auth.mjs](../scripts/e2e-auth.mjs): 375, 768
+  и 1440 px, тёмная тема, только клавиатура, reduced motion, две вкладки.
+
 ## Безопасность клиента
 
 - Секретов в клиентском коде нет: правило ESLint `no-restricted-syntax`
@@ -221,7 +256,7 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
   (`import.meta.env.*`, `process.env.*`) и константам в верхнем регистре с
   `API_KEY`, `SECRET_KEY`, `ACCESS_TOKEN`, `PASSWORD` в имени
   ([eslint.config.js](../eslint.config.js)). Поля ответов API в camelCase
-  (`mustChangePassword`, `temporaryPassword`) правило не трогает.
+  (`mustChangePassword`) правило не трогает.
 - Права в интерфейсе только прячут кнопки и разделы; каждое действие
   проверяет сервер. Временный пароль показывается один раз и не сохраняется
   ни в состоянии после закрытия окна, ни в хранилище браузера.

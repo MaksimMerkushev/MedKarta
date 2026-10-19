@@ -33,6 +33,8 @@ OpenAPI-спецификация не приводится: запросы `/api
 | GET, PATCH, DELETE | `/api/account` | кабинет: профиль, программа ДМС, удаление | [account.js](../backend/api/account.js) |
 | POST | `/api/account/favorites` | избранное | [account.js](../backend/api/account.js) |
 | POST | `/api/auth/login`, `/api/auth/demo`, `/api/auth/logout` | вход, демо-вход, выход (регистрации нет) | [account.js](../backend/api/account.js) |
+| POST | `/api/auth/access-link` | «нет пароля или забыли его?» — ссылка на почту; ответ одинаков для любого адреса | [activation.js](../backend/api/activation.js) |
+| GET, POST | `/api/auth/activation`, `/api/auth/activation/peek`, `/start`, `/complete` | приглашение и ссылка для смены пароля: проверить, принять, задать пароль | [activation.js](../backend/api/activation.js) |
 | GET, PATCH, POST, PUT, DELETE | `/api/me/*` | свой профиль, пароль, сессии, история входов, аватар | [me.js](../backend/api/me.js) |
 | GET, POST, PATCH, PUT, DELETE | `/api/admin/*` | админ-панель (по разрешениям роли) | [admin.js](../backend/api/admin.js) |
 | POST | `/api/demo/search` | строгий подбор | [demoBooking.js](../backend/api/demoBooking.js) |
@@ -334,14 +336,17 @@ Content-Type: application/json
 | `POST /api/auth/logout` | `{}` | `{user: null, …}`, cookie стирается | 300 за 5 мин |
 
 `features` — `{available, registration, demo, assistant, chatRequiresAccount,
-demoAccounts}`; `registration` всегда `false` (`POST /api/auth/register` —
-`404`), в `demoAccounts` — только ключ, имя и описание программы, без email.
+demoAccounts, emailLinks}`; `registration` всегда `false` (`POST /api/auth/register` —
+`404`), в `demoAccounts` — только ключ, имя и описание программы, без email;
+`emailLinks` — настроена ли почта (свойство сервера, не адреса).
 
 Вход заблокированного аккаунта (пароль верный) — `403 account_blocked` с
 `blockedUntil` и причиной, архивного — `403 account_inactive`; при неверном
-пароле — всегда `401 invalid_credentials`, статус аккаунта не раскрывается.
-У пользователя с временным паролем `user.mustChangePassword: true`: до смены
-пароля остальные маршруты `/api/me/*` и `/api/admin/*` отвечают
+пароле, несуществующем email и **неактивированном** аккаунте — одинаково
+`401 bad_credentials`, статус аккаунта не раскрывается.
+У пользователя, которому до схемы 4 выдали временный пароль или для которого
+администратор включил «Потребовать смену при входе», `user.mustChangePassword: true`:
+до смены пароля остальные маршруты `/api/me/*` и `/api/admin/*` отвечают
 `403 password_change_required`.
 
 Пример демо-входа:
@@ -388,6 +393,30 @@ Set-Cookie: mk_session=<token>; Path=/api; HttpOnly; SameSite=Lax; Max-Age=43199
 `ACCOUNTS=off`), при этом `GET /api/account` отвечает гостю `200`. Ошибки
 сервиса кабинета возвращают `{error, code}` со статусом из
 [service.js](../backend/accounts/service.js).
+
+### Приглашения и ссылки для входа
+
+Логика — [invitations.js](../backend/accounts/invitations.js), устройство и
+гарантии — [accounts.md](accounts.md#приглашения-и-ссылки-для-входа). Токен
+ссылки (`/activate#token=…`, 43 символа base64url) передаётся только в теле
+`POST`. Все `POST` — с той же защитой от CSRF, что и вход (`application/json`,
+свой `Origin`).
+
+| Метод и путь | Тело | Ответ | Лимит на адрес |
+|---|---|---|---|
+| `POST /api/auth/access-link` | `{email}` | `202 {ok, message}` — **одинаково** для любого адреса; письмо (приглашение или смена пароля) уходит после ответа и только владельцу действующего аккаунта. Почта не настроена — `409 mail_disabled` для всех | 5 за 15 мин; 3 в час на email |
+| `POST /api/auth/activation/peek` | `{token}` | `{link: {purpose: "invite"\|"reset", firstName, email (маской), expiresAt, invitedBy}}` — ничего не меняет | 30 за 15 мин |
+| `POST /api/auth/activation/start` | `{token}` | `{context: {purpose, email, firstName, lastName, expiresAt}}` + cookie `mk_activation` (`HttpOnly; SameSite=Strict; Path=/api/auth/activation`, 30 мин; по HTTPS — `__Secure-mk_activation`). Токен больше не действует; тот же браузер с действующей cookie получает контекст снова | 30 за 15 мин |
+| `GET /api/auth/activation` | — | `{context}` по cookie или `404 no_context` | 30 за 15 мин |
+| `POST /api/auth/activation/complete` | `{password}` | `{user, favorites, purpose}` + cookie сессии; cookie контекста стирается, прежняя сессия этого браузера завершается | 30 за 15 мин |
+
+Ошибки: `404 invalid_link` — токена нет или он искажён; `410 link_expired`,
+`410 link_revoked`, `410 link_used`; `410 activation_expired` — 30 минут на
+пароль истекли, пароль уже задан в другой вкладке или cookie контекста
+подменена; `403 account_blocked` / `account_inactive` — аккаунт заблокирован
+или в архиве (ошибку видит только тот, у кого есть сама ссылка);
+`400 weak_password` — пароль не прошёл правила
+([passwordPolicy.js](../shared/passwordPolicy.js)); `429 rate_limited`.
 
 ---
 
@@ -439,22 +468,25 @@ Set-Cookie: mk_session=<token>; Path=/api; HttpOnly; SameSite=Lax; Max-Age=43199
 
 | Метод и путь | Разрешение | Тело или параметры | Ответ |
 |---|---|---|---|
-| `GET /api/admin/me` | `admin.access` | — | `{user, permissions, roles}` |
+| `GET /api/admin/me` | `admin.access` | — | `{user, permissions, roles, mail: {enabled}}` |
 | `GET /api/admin/dashboard` | `dashboard.view` | `?period=24h\|7d\|30d\|90d` | счётчики, ряды для графиков, последние пользователи и действия, состояние компонентов |
-| `GET /api/admin/users` | `users.view` | `?q&role&status&kind=real\|demo\|all&sort&dir&page&pageSize=10\|25\|50\|100` | `{items, total, page, pageSize, sort, dir}` |
-| `POST /api/admin/users` | `users.create` | `{email, firstName, lastName, role}` | `201 {user, temporaryPassword}` — пароль показывается один раз |
+| `GET /api/admin/users` | `users.view` | `?q&role&status=active\|pending\|blocked\|archived&kind=real\|demo\|all&sort&dir&page&pageSize=10\|25\|50\|100` | `{items, total, page, pageSize, sort, dir}`; у каждого `pending` — ждёт ли активации |
+| `POST /api/admin/users` | `users.create` (роль выше `user` — и `roles.assign`) | `{email, firstName, lastName, role, delivery: "auto"\|"manual"}` | `201 {user, invitation, link}` — аккаунт без пароля («ожидает активации»); `link` — только при ручной передаче или если письмо не ушло, **один раз** |
 | `GET /api/admin/users/export` | `users.export` | те же фильтры или `?ids=a,b` | CSV (UTF-8 с BOM, `;`), до 10 000 строк |
 | `POST /api/admin/users/bulk` | `users.block` | `{action: "block"\|"unblock", ids, reason, until}` до 100 id | `{succeeded, failed, results: [{id, ok, error}]}` |
 | `GET /api/admin/users/:id` | `users.view` | — | `{user, can, permissions}`: что текущий сотрудник может сделать с этим аккаунтом |
-| `PATCH /api/admin/users/:id` | `users.edit` | `{firstName, lastName, email, version}` | `{user, can, …}`; устаревшая `version` — `409 conflict` |
+| `PATCH /api/admin/users/:id` | `users.edit`; смена email — ещё и `users.password` | `{firstName, lastName, email, version}` | `{user, can, …}`; устаревшая `version` — `409 conflict`; смена email отзывает ссылки |
 | `DELETE /api/admin/users/:id` | `users.delete` | `{confirmEmail}` | `{deleted: true}` |
-| `POST /api/admin/users/:id/role` | `roles.assign` | `{role, version}` | `{user, can, …}` |
+| `POST /api/admin/users/:id/role` | `roles.assign` | `{role, version}` | `{user, can, …}`; ссылки пользователя отзываются |
 | `POST /api/admin/users/:id/block` | `users.block` | `{reason, until}` (`until` — ISO-дата или `null` — бессрочно) | `{user, can, …}`; все сессии завершены |
 | `POST /api/admin/users/:id/unblock` | `users.block` | `{}` | `{user, can, …}` |
 | `POST /api/admin/users/:id/archive`, `/restore` | `users.archive` | `{}` | `{user, can, …}` |
-| `POST /api/admin/users/:id/password-reset` | `users.password` | `{}` | `{user, can, …, temporaryPassword}`; все сессии завершены |
+| `GET /api/admin/users/:id/invitations` | `users.view` | — | `{items: [{id, purpose, state, stateLabel, delivery, deliveryStatus, createdAt, expiresAt, openedAt, usedAt, revokedAt, revokedReason, createdBy}], delivery}` — без токенов и хэшей |
+| `POST /api/admin/users/:id/invitations` | `users.password` | `{delivery: "auto"\|"manual"}` | `{user, can, …, invitation, link}` — приглашение (не активирован) или ссылка для смены пароля; прежняя того же вида отозвана; заблокированному или архивному — `409` |
+| `DELETE /api/admin/users/:id/invitations/:invitation` | `users.password` | `{}` | `{invitation}`; уже использованная или отозванная — `409 bad_state` |
+| `GET /api/admin/notifications` | `users.view` | `?since=ISO` | `{now, items: [{id, at, userId, user}]}` — активации после `since` (не раньше суток) |
 | `POST /api/admin/users/:id/password-require` | `users.password` | `{}` | `{user, can, …}` |
-| `POST /api/admin/users/:id/sessions/revoke` | `users.sessions` | `{}` | `{revoked}` |
+| `POST /api/admin/users/:id/sessions/revoke` | `users.sessions` | `{}` | `{revoked}`; ссылки для смены пароля отозваны |
 | `GET /api/admin/users/:id/sessions` | `users.sessions` | — | `{items}` |
 | `GET /api/admin/users/:id/logins` | `users.view` | `?page&type=failed` | `{items, total, page, pageSize}` |
 | `GET /api/admin/users/:id/blocks` | `users.view` | — | `{items}` |
