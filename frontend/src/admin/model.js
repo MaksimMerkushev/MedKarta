@@ -16,7 +16,8 @@ export const RANKS = { user: 0, moderator: 1, admin: 2, superadmin: 3 };
 /** Роли, которые этот администратор может назначить (сервер проверит то же самое). */
 export const assignableRoles = (me) => {
   if (!me?.permissions?.includes('roles.assign')) return ['user'];
-  return Object.keys(RANKS).filter((role) => me.user.role === 'superadmin' || RANKS[role] < RANKS[me.user.role]);
+  // Суперадминистратора не назначают: эта роль только у владельца (как на сервере).
+  return Object.keys(RANKS).filter((role) => role !== 'superadmin' && (me.user.role === 'superadmin' || RANKS[role] < RANKS[me.user.role]));
 };
 
 const FIELD_LABELS = { firstName: 'имя', lastName: 'фамилия', email: 'email' };

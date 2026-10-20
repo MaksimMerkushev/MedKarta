@@ -41,7 +41,6 @@ const startServer = async (context, { authLimit = unlimited } = {}) => {
     onAccountDeleted: async () => {},
     authLimit,
     apiLimit: unlimited,
-    demoLimit: unlimited,
     failures: createFailureCounter(),
     features: () => ({ registration: false, demo: true, chatRequiresAccount: true }),
   });
@@ -537,9 +536,18 @@ describe('Админ-панель: сценарии', { skip: !DatabaseSync && '
     assert.equal(context.store.getUserById(rootId).role, 'superadmin');
     const denied = await root.call('/api/admin/audit?result=denied&q=призрак');
     assert.ok(denied.body.total >= 3, 'попытки остались в журнале');
-    // С вторым суперадминистратором первого можно понизить — но не себя.
+    // Суперадминистратора не назначает никто, даже суперадминистратор: роль только у владельца.
     const second = await createActive({ email: 'second@medkarta.test', role: 'user' });
-    await root.call(`/api/admin/users/${second.id}/role`, { method: 'POST', body: { role: 'superadmin' } });
+    const promote = await root.call(`/api/admin/users/${second.id}/role`, { method: 'POST', body: { role: 'superadmin' } });
+    assert.equal(promote.status, 403);
+    assert.equal(context.store.getUserById(second.id).role, 'user');
+    const invited = await root.call('/api/admin/users', { method: 'POST', body: { email: 'boss2@medkarta.test', firstName: 'Второй', lastName: 'Владелец', role: 'superadmin', delivery: 'manual' } });
+    assert.equal(invited.status, 403);
+    assert.equal(context.store.getUserByEmail('boss2@medkarta.test'), null);
+    const card = await root.call(`/api/admin/users/${second.id}`);
+    assert.equal(card.body.can.assignableRoles.includes('superadmin'), false);
+    // Второй суперадминистратор из старой базы (до запрета) понижается — но не себя.
+    context.store.updateUser(second.id, { role: 'superadmin' }, { now: Date.now() });
     assert.equal((await root.call(`/api/admin/users/${second.id}/role`, { method: 'POST', body: { role: 'user' } })).status, 200);
   });
 

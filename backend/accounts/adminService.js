@@ -348,6 +348,7 @@ export const createAdminService = ({
       if (!['auto', 'manual'].includes(delivery)) fail('bad_request', 400, 'Способ доставки: auto или manual.');
       if (role !== 'user') {
         requirePermission(actor, 'roles.assign', { action: 'user.create' });
+        if (role === 'superadmin') denyChange(actor, 'user.create', null, 'Роль суперадминистратора не выдаётся: она только у владельца.');
         if (!canAssign(actor, role)) denyChange(actor, 'user.create', null, 'Нельзя создать пользователя с ролью не ниже своей.');
       }
       const service = requireInvitations();
@@ -415,8 +416,9 @@ export const createAdminService = ({
       const target = manageable(actor, id, 'user.role');
       const expected = checkVersion(target, version);
       if (role === target.role) return this.getUser(actor, id);
+      if (role === 'superadmin') denyChange(actor, 'user.role', target, 'Роль суперадминистратора не выдаётся: она только у владельца.');
       if (!canAssign(actor, role)) denyChange(actor, 'user.role', target, 'Нельзя назначить роль не ниже своей.');
-      const change = role === 'superadmin' ? (work) => store.transaction(work) : (work) => guarded(actor, 'user.role', target, work);
+      const change = (work) => guarded(actor, 'user.role', target, work);
       change(() => {
         const updated = store.updateUser(target.id, { role }, { now: now(), expectedVersion: expected });
         if (!updated) fail('conflict', 409, 'Данные пользователя изменились — обновите страницу и повторите.');

@@ -117,9 +117,13 @@ export const canManage = (actor, target) => {
   return rankOf(actor.role) > rankOf(target.role);
 };
 
-/** Может ли actor назначить роль role. */
+/**
+ * Может ли actor назначить роль role. Роль суперадминистратора не назначается
+ * никому — ни через админ-панель, ни через API: она только у владельца,
+ * созданного командой `npm run accounts -- bootstrap` в терминале сервера.
+ */
 export const canAssign = (actor, role) => {
-  if (!actor || !isRole(role)) return false;
+  if (!actor || !isRole(role) || role === 'superadmin') return false;
   if (actor.role === 'superadmin') return true;
   return rankOf(role) < rankOf(actor.role);
 };

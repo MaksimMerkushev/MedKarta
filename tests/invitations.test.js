@@ -50,7 +50,7 @@ const capturingDelivery = (outbox, env = {}) => createDelivery({
 const startServer = async (context, { activationLimit = unlimited, requestLimit = unlimited, emailWindow = () => true } = {}) => {
   const getService = async () => context.accounts;
   const accountHandler = createAccountHandler({
-    getService, onAccountDeleted: async () => {}, authLimit: unlimited, apiLimit: unlimited, demoLimit: unlimited,
+    getService, onAccountDeleted: async () => {}, authLimit: unlimited, apiLimit: unlimited,
     failures: createFailureCounter(), features: () => ({ registration: false, demo: false, chatRequiresAccount: true }),
     emailLinks: async () => context.invitations.emailEnabled,
   });
@@ -398,7 +398,7 @@ describe('Приглашения: сценарии через HTTP', { skip: !Da
     assert.equal((await browserFor(base).start(token)).body.code, 'link_revoked');
   });
 
-  it('смена роли отзывает ссылки: администратор не получит аккаунт, повышенный до суперадминистратора', async () => {
+  it('смена роли отзывает ссылки: выдавший не получит аккаунт, повышенный до администратора', async () => {
     const adminUser = await invite('issuer-admin@medkarta.test', { role: 'admin' });
     const admin = browserFor(base);
     await admin.start(adminUser.token);
@@ -406,7 +406,7 @@ describe('Приглашения: сценарии через HTTP', { skip: !Da
     const created = await admin.call('/api/admin/users', { method: 'POST', body: { email: 'promoted@medkarta.test', firstName: 'Пётр', lastName: 'Повышенный', delivery: 'manual' } });
     assert.equal(created.status, 201);
     const card = await root.call(`/api/admin/users/${created.body.user.id}`);
-    assert.equal((await root.call(`/api/admin/users/${created.body.user.id}/role`, { method: 'POST', body: { role: 'superadmin', version: card.body.user.version } })).status, 200);
+    assert.equal((await root.call(`/api/admin/users/${created.body.user.id}/role`, { method: 'POST', body: { role: 'admin', version: card.body.user.version } })).status, 200);
     const attempt = browserFor(base);
     assert.equal((await attempt.start(tokenOfLink(created.body.link))).body.code, 'link_revoked');
   });
