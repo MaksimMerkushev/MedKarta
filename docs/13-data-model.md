@@ -124,7 +124,7 @@ CREATE TABLE users (
   created_at    INTEGER NOT NULL,
   updated_at    INTEGER NOT NULL,               -- у демо-копии — время последнего входа
   demo_template TEXT,                           -- схема 2: ключ демо-профиля
-  demo_owner    TEXT,                           -- схема 2: SHA-256 от cookie mk_demo
+  demo_owner    TEXT,                           -- схема 2: SHA-256 от cookie mk_demo (демо-вход убран 20.10.2026)
   first_name    TEXT NOT NULL DEFAULT '',       -- схема 3 и ниже
   last_name     TEXT NOT NULL DEFAULT '',
   role          TEXT NOT NULL DEFAULT 'user'    -- user | moderator | admin | superadmin
@@ -228,7 +228,7 @@ CREATE UNIQUE INDEX slots_doctor_start ON slots(doctor_id, start_at);
 CREATE INDEX slots_day ON slots(day);
 CREATE TABLE bookings (
   id TEXT PRIMARY KEY,
-  number TEXT NOT NULL UNIQUE,              -- DEMO-ГГММДД-XXXXX
+  number TEXT NOT NULL UNIQUE,              -- DEMO-ДДММГГ-XXXXX (дата оформления)
   slot_id TEXT NOT NULL REFERENCES slots(id),
   status TEXT NOT NULL CHECK (status IN ('CONFIRMED', 'CANCELLED')),
   idempotency_key TEXT UNIQUE,

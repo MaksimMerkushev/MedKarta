@@ -32,7 +32,7 @@ OpenAPI-спецификация не приводится: запросы `/api
 | GET, HEAD | `/api/config` | флаги демо-режима и публичные настройки | [config.js](../backend/api/config.js) |
 | GET, PATCH, DELETE | `/api/account` | кабинет: профиль, программа ДМС, удаление | [account.js](../backend/api/account.js) |
 | POST | `/api/account/favorites` | избранное | [account.js](../backend/api/account.js) |
-| POST | `/api/auth/login`, `/api/auth/demo`, `/api/auth/logout` | вход, демо-вход, выход (регистрации нет) | [account.js](../backend/api/account.js) |
+| POST | `/api/auth/login`, `/api/auth/logout` | вход по email и паролю, выход (регистрации и демо-входа нет) | [account.js](../backend/api/account.js) |
 | POST | `/api/auth/access-link` | «нет пароля или забыли его?» — ссылка на почту; ответ одинаков для любого адреса | [activation.js](../backend/api/activation.js) |
 | GET, POST | `/api/auth/activation`, `/api/auth/activation/peek`, `/start`, `/complete` | приглашение и ссылка для смены пароля: проверить, принять, задать пароль | [activation.js](../backend/api/activation.js) |
 | GET, PATCH, POST, PUT, DELETE | `/api/me/*` | свой профиль, пароль, сессии, история входов, аватар | [me.js](../backend/api/me.js) |
@@ -332,12 +332,11 @@ Content-Type: application/json
 | `DELETE /api/account` | `{"confirm": true}`; только роль `user`, у сотрудников — `403 staff_account` | `{user: null, …}`, cookie стирается | 300 за 5 мин |
 | `POST /api/account/favorites` | `{action: "add" \| "remove" \| "merge", ids: [...]}` | `{favorites}` | 300 за 5 мин |
 | `POST /api/auth/login` | `{email, password}` | `{user, favorites, features}` + cookie | 20 за 15 мин |
-| `POST /api/auth/demo` | `{account: "anna" \| "family" \| "kids" \| "basic"}` | демо-сессия на 12 часов в копии профиля этого браузера + cookie `mk_demo` (30 дней); при выключенном демо — `403` | 200 за 15 мин |
 | `POST /api/auth/logout` | `{}` | `{user: null, …}`, cookie стирается | 300 за 5 мин |
 
-`features` — `{available, registration, demo, assistant, chatRequiresAccount,
-demoAccounts, emailLinks}`; `registration` всегда `false` (`POST /api/auth/register` —
-`404`), в `demoAccounts` — только ключ, имя и описание программы, без email;
+`features` — `{available, registration, assistant, chatRequiresAccount,
+emailLinks}`; `registration` всегда `false` (`POST /api/auth/register` —
+`404`), гостевого демо-входа нет (`POST /api/auth/demo` — `404`);
 `emailLinks` — настроена ли почта (свойство сервера, не адреса).
 
 Вход заблокированного аккаунта (пароль верный) — `403 account_blocked` с
@@ -349,42 +348,21 @@ demoAccounts, emailLinks}`; `registration` всегда `false` (`POST /api/auth
 до смены пароля остальные маршруты `/api/me/*` и `/api/admin/*` отвечают
 `403 password_change_required`.
 
-Пример демо-входа:
+Пример входа:
 
 ```http
-POST /api/auth/demo
+POST /api/auth/login
 Content-Type: application/json
 
-{"account":"anna"}
+{"email":"user@example.ru","password":"…"}
 ```
 
 ```http
 HTTP/1.1 200 OK
-Set-Cookie: mk_session=<token>; Path=/api; HttpOnly; SameSite=Lax; Max-Age=43199
+Set-Cookie: mk_session=<token>; Path=/api; HttpOnly; SameSite=Lax; Max-Age=1209600
 ```
 
-```json
-{
-  "user": {
-    "email": "anna@medkarta.example",
-    "displayName": "Анна (демо)",
-    "dmsPlanId": "demo-standard",
-    "isDemo": true,
-    "createdAt": "2026-10-15T07:23:38.708Z"
-  },
-  "favorites": ["demo-doc-valeev-vadim--demo-yasen-centr", "demo-doc-zinnatullina-nailya--demo-yasen-centr"],
-  "features": {
-    "available": true,
-    "registration": false,
-    "demo": true,
-    "chatRequiresAccount": true,
-    "demoAccounts": [
-      { "key": "anna", "displayName": "Анна (демо)", "note": "Программа Demo Standard, Демо-Страхование" },
-      "…"
-    ]
-  }
-}
-```
+Тело — `{user, favorites, features}`, как у `GET /api/account`.
 
 **Ошибки кабинета:** `401 {"error":"Войдите в личный кабинет."}` — изменение
 без сессии; `403` — нарушена защита от CSRF или функция выключена; `429` —
@@ -477,7 +455,7 @@ Set-Cookie: mk_session=<token>; Path=/api; HttpOnly; SameSite=Lax; Max-Age=43199
 | `GET /api/admin/users/:id` | `users.view` | — | `{user, can, permissions}`: что текущий сотрудник может сделать с этим аккаунтом |
 | `PATCH /api/admin/users/:id` | `users.edit`; смена email — ещё и `users.password` | `{firstName, lastName, email, version}` | `{user, can, …}`; устаревшая `version` — `409 conflict`; смена email отзывает ссылки |
 | `DELETE /api/admin/users/:id` | `users.delete` | `{confirmEmail}` | `{deleted: true}` |
-| `POST /api/admin/users/:id/role` | `roles.assign` | `{role, version}` | `{user, can, …}`; ссылки пользователя отзываются |
+| `POST /api/admin/users/:id/role` | `roles.assign` | `{role, version}` | `{user, can, …}`; ссылки пользователя отзываются; `superadmin` не назначается никому — `403` |
 | `POST /api/admin/users/:id/block` | `users.block` | `{reason, until}` (`until` — ISO-дата или `null` — бессрочно) | `{user, can, …}`; все сессии завершены |
 | `POST /api/admin/users/:id/unblock` | `users.block` | `{}` | `{user, can, …}` |
 | `POST /api/admin/users/:id/archive`, `/restore` | `users.archive` | `{}` | `{user, can, …}` |
@@ -672,7 +650,7 @@ Set-Cookie: mk_session=<token>; Path=/api; HttpOnly; SameSite=Lax; Max-Age=43199
 ```json
 {
   "booking": {
-    "number": "DEMO-261012-W8U84",
+    "number": "DEMO-121026-W8U84",
     "status": "CONFIRMED",
     "createdAt": "2026-10-12T09:00:00.000Z",
     "cancelledAt": null,

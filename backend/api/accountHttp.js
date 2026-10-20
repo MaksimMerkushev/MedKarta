@@ -13,8 +13,6 @@ import { getClientIp, isFromTrustedProxy } from '../http/rateLimit.js';
 import { logger } from '../observability/safeLogger.js';
 
 export const SESSION_COOKIE = 'mk_session';
-export const DEMO_OWNER_COOKIE = 'mk_demo';
-export const DEMO_OWNER_MAX_AGE_S = 30 * 24 * 60 * 60;
 
 /** Сколько раз cookie с этим именем пришла в заголовке (подброшенная с поддомена — вторая). */
 export const cookieCount = (header, name) => String(header || '').split(';')

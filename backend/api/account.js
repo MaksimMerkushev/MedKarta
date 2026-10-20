@@ -8,7 +8,6 @@
  *   DELETE /api/account            — удалить свой аккаунт (только роль «Пользователь»)
  *   POST   /api/account/favorites  — добавить / убрать / слить избранное
  *   POST   /api/auth/login         — вход по email и паролю
- *   POST   /api/auth/demo          — вход в демо-аккаунт (если DEMO_DATA=on)
  *   POST   /api/auth/logout        — выход
  * Приглашения, активация и ссылки для смены пароля — в api/activation.js.
  *
@@ -16,24 +15,24 @@
  * Профиль, пароль и сессии — в api/me.js.
  *
  * Сессия — случайный токен в cookie HttpOnly; SameSite=Lax; Path=/api, в базе
- * хранится только его SHA-256. Cookie mk_demo с теми же флагами связывает
- * браузер с его копиями демо-аккаунтов. Ассистент доступен только после входа
+ * хранится только его SHA-256. Гостевых демо-аккаунтов нет: вход только по
+ * email и паролю. Ассистент доступен только после входа
  * (chatAccess.js), но проверяется лишь факт входа: в конвейер /api/chat не
  * уходят ни email, ни имя, ни программа ДМС, ни избранное.
  */
 
-import { AccountError, DEMO_ACCOUNTS, normalizeEmail } from '../accounts/service.js';
+import { AccountError, normalizeEmail } from '../accounts/service.js';
 import { respondJson } from '../http/request.js';
 import { createRateLimiter, getClientIp } from '../http/rateLimit.js';
 import { logger } from '../observability/safeLogger.js';
 import { metrics } from '../observability/metrics.js';
 import { forgetDemoBookings, getDefaultAccountService, peekAccountContext } from './accountContext.js';
 import {
-  clientContext, cookie, DEMO_OWNER_COOKIE, DEMO_OWNER_MAX_AGE_S, isTrustedWrite, parseCookies, pathOf, readJsonObject, requireSession,
+  clientContext, isTrustedWrite, parseCookies, pathOf, readJsonObject, requireSession,
   sendError, SESSION_COOKIE, sessionCookie, tokenOf,
 } from './accountHttp.js';
 
-export { DEMO_OWNER_COOKIE, getDefaultAccountService, parseCookies, SESSION_COOKIE, sessionCookie };
+export { getDefaultAccountService, parseCookies, SESSION_COOKIE, sessionCookie };
 
 // Слияние избранного: до 500 id по ~40 символов — с запасом.
 const MAX_BODY_BYTES = 64 * 1024;
@@ -45,7 +44,6 @@ const MAX_BODY_BYTES = 64 * 1024;
 const defaultAuthLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, maxPerIp: 20, maxPerInstance: Number.POSITIVE_INFINITY });
 const defaultApiLimit = createRateLimiter({ maxPerIp: 300, maxPerInstance: Number.POSITIVE_INFINITY });
 // Демо-вход без пароля и без scrypt: зал за одним NAT на питче не должен упираться в лимит входа.
-const defaultDemoLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, maxPerIp: 200, maxPerInstance: Number.POSITIVE_INFINITY });
 
 /** Ассистент только для вошедших; CHAT_REQUIRES_ACCOUNT=off открывает его гостям (если не задано в настройках). */
 export const chatRequiresAccount = (service = null) => {
@@ -90,7 +88,6 @@ const ROUTES = new Map([
   ['/api/account', { GET: 'me', PATCH: 'update', DELETE: 'delete' }],
   ['/api/account/favorites', { POST: 'favorites' }],
   ['/api/auth/login', { POST: 'login' }],
-  ['/api/auth/demo', { POST: 'demo' }],
   ['/api/auth/logout', { POST: 'logout' }],
 ]);
 
@@ -110,7 +107,6 @@ const defaultFeatures = (service) => {
   };
   return {
     registration: false,
-    demo: process.env.DEMO_DATA === 'on' && read('features.demoLogin', true) !== false,
     assistant: read('assistant.enabled', true) !== false,
     chatRequiresAccount: chatRequiresAccount(service),
   };
@@ -126,7 +122,6 @@ export const createAccountHandler = ({
   onAccountDeleted = forgetDemoBookings,
   authLimit = defaultAuthLimit,
   apiLimit = defaultApiLimit,
-  demoLimit = defaultDemoLimit,
   failures = defaultFailures,
   features = defaultFeatures,
   // Письма со ссылками для входа настроены — интерфейс предложит запросить ссылку самому.
@@ -143,7 +138,7 @@ export const createAccountHandler = ({
     }
 
     const clientIp = getClientIp(req);
-    const limiter = operation === 'demo' ? demoLimit : AUTH_OPERATIONS.has(operation) ? authLimit : apiLimit;
+    const limiter = AUTH_OPERATIONS.has(operation) ? authLimit : apiLimit;
     const limit = limiter(clientIp);
     if (!limit.allowed) {
       res.setHeader('Retry-After', String(limit.retryAfterSeconds));
@@ -158,10 +153,6 @@ export const createAccountHandler = ({
 
     const service = await getService();
     const flags = { available: Boolean(service), ...features(service), emailLinks: service ? await emailLinks() : false };
-    // Кнопки «Войти как …»: только имя и описание программы, без email.
-    flags.demoAccounts = flags.available && flags.demo
-      ? DEMO_ACCOUNTS.map(({ key, displayName, note }) => ({ key, displayName, note }))
-      : [];
 
     if (!service) {
       if (operation === 'me') {
@@ -213,15 +204,6 @@ export const createAccountHandler = ({
             if (error instanceof AccountError && error.code === 'bad_credentials') failures.record(emailKey);
             throw error;
           }
-          return;
-        }
-        case 'demo': {
-          if (!flags.demo) {
-            respondJson(res, 403, { error: 'Демо-аккаунты выключены на этом сервере.', code: 'demo_disabled' });
-            return;
-          }
-          const result = service.demoLogin(body.account, { owner: parseCookies(req.headers.cookie)[DEMO_OWNER_COOKIE], ...clientContext(req) });
-          startSession(result, 200, [cookie(req, DEMO_OWNER_COOKIE, result.owner, DEMO_OWNER_MAX_AGE_S)]);
           return;
         }
         case 'logout': {

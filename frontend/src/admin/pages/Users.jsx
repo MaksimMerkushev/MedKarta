@@ -132,11 +132,6 @@ export default function UsersPage() {
             <option value="blocked">Заблокированные</option>
             <option value="archived">В архиве</option>
           </select>
-          <select className={`${controlClass} max-sm:flex-1`} value={query.kind} onChange={(event) => setQuery({ kind: event.target.value })} aria-label="Тип аккаунтов">
-            <option value="real">Аккаунты</option>
-            <option value="demo">Демо-копии</option>
-            <option value="all">Все</option>
-          </select>
           <div className="flex gap-2">
             {can('users.export') && (
               <a href={exportHref} className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 text-[13.5px] font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200" download data-testid="users-export">

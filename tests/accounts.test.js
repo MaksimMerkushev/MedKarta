@@ -15,7 +15,7 @@ import { after, before, describe, it } from 'node:test';
 import { randomBytes } from 'node:crypto';
 
 import { generateTemporaryPassword, hashPassword, needsRehash, PasswordBusyError, passwordProblem, verifyPassword } from '../backend/accounts/passwords.js';
-import { ACCOUNT_LIMITS, AccountError, createAccountService, decodeItemId, DEMO_ACCOUNTS, encodeItemId } from '../backend/accounts/service.js';
+import { ACCOUNT_LIMITS, AccountError, createAccountService, decodeItemId, encodeItemId } from '../backend/accounts/service.js';
 import { createSqliteAccountStore, loadSqlite } from '../backend/accounts/sqliteStore.js';
 import { createAccountHandler, createFailureCounter, parseCookies, SESSION_COOKIE } from '../backend/api/account.js';
 import { createRateLimiter } from '../backend/http/rateLimit.js';
@@ -304,52 +304,20 @@ describe('Кабинет: программа ДМС и избранное', () =
   });
 });
 
-describe('Кабинет: демо-аккаунты', () => {
-  it('у каждого браузера своя копия: с программой ДМС и избранным, без пароля', async () => {
-    const { service, store } = makeService();
-    const anna = service.demoLogin('anna');
-    assert.equal(anna.user.dmsPlanId, 'demo-standard');
-    assert.equal(anna.user.isDemo, true);
-    assert.equal(anna.user.email, 'anna@medkarta.example');
-    assert.ok(anna.favorites.length > 0);
-    assert.match(anna.owner, /^[A-Za-z0-9_-]{43}$/);
-    assert.ok(DEMO_ACCOUNTS.every((account) => account.email.endsWith('@medkarta.example')));
-    await rejects(service.login({ email: 'anna@medkarta.example', password: '' }), 'bad_credentials');
-    await rejects(service.login({ email: 'anna@medkarta.example', password: 'любой-пароль' }), 'bad_credentials');
-    assert.throws(() => service.demoLogin('root'), (error) => error.code === 'unknown_demo');
-    assert.throws(() => service.demoLogin('__proto__'), (error) => error.code === 'unknown_demo');
-
-    // Тот же браузер возвращается в ту же копию — с её изменениями.
-    const annaUser = service.sessionUser(anna.session.token);
-    service.updateProfile(annaUser, { dmsPlanId: 'demo-basic' });
-    service.updateFavorites(annaUser, { action: 'remove', ids: anna.favorites });
-    const again = service.demoLogin('anna', { owner: anna.owner });
-    assert.equal(again.owner, anna.owner);
-    assert.equal(again.user.dmsPlanId, 'demo-basic');
-    assert.deepEqual(again.favorites, []);
-    assert.equal(service.sessionUser(again.session.token).id, annaUser.id);
-
-    // Другой браузер получает свою копию в исходном виде.
-    const other = service.demoLogin('anna');
-    assert.notEqual(other.owner, anna.owner);
-    assert.equal(other.user.dmsPlanId, 'demo-standard');
-    assert.notEqual(service.sessionUser(other.session.token).id, annaUser.id);
-
-    // Другой демо-аккаунт того же браузера — отдельный кабинет.
-    const family = service.demoLogin('family', { owner: anna.owner });
-    assert.equal(family.user.dmsPlanId, 'demo-premium');
-    assert.notEqual(service.sessionUser(family.session.token).id, annaUser.id);
-
-    assert.throws(() => service.deleteAccount(annaUser), (error) => error.code === 'demo_account');
-    assert.equal(store.countDemoCopies(), 3);
-  });
-
-  it('испорченный токен браузера заменяется новым; имя демо-аккаунта не меняется', () => {
-    const { service } = makeService();
-    const login = service.demoLogin('anna', { owner: 'x' });
-    assert.match(login.owner, /^[A-Za-z0-9_-]{43}$/);
-    const user = service.sessionUser(login.session.token);
-    assert.throws(() => service.updateProfile(user, { displayName: 'Звоните +7 900 000-00-00' }), (error) => error.code === 'demo_account');
+describe('Кабинет: гостевых демо-аккаунтов нет', () => {
+  it('прежние копии демо-аккаунтов удаляются при запуске вместе с сессиями, настоящие аккаунты на месте', async () => {
+    const store = createSqliteAccountStore({ DatabaseSync, file: ':memory:' });
+    const stamp = Date.now();
+    store.createUser({ id: 'c'.repeat(32), email: 'demo-copy@medkarta.example', firstName: 'Анна (демо)', displayName: 'Анна (демо)', demoTemplate: 'anna', demoOwner: 'x'.repeat(64), now: stamp });
+    store.createSession({ tokenHash: 'demo-session', publicId: 'p'.repeat(24), userId: 'c'.repeat(32), now: stamp, expiresAt: stamp + 60_000, maxPerUser: 10 });
+    await addUser(store, { email: 'real@user.ru' });
+    assert.equal(store.countDemoCopies(), 1);
+    const service = createAccountService({ store, isKnownPlan: (id) => PLANS.has(id) });
+    assert.equal(store.countDemoCopies(), 0);
+    assert.equal(store.getUserById('c'.repeat(32)), null);
+    assert.equal(store.getSession('demo-session'), null);
+    assert.equal(typeof service.demoLogin, 'undefined');
+    assert.equal((await service.login({ email: 'real@user.ru', password: 'пароль-пароль' })).user.email, 'real@user.ru');
   });
 
   it('обновление базы удаляет прежние общие демо-аккаунты с их сессиями, остальных не трогает', () => {
@@ -377,24 +345,12 @@ describe('Кабинет: демо-аккаунты', () => {
     store.close();
   });
 
-  it('демо-сессия — 12 часов; копия, к которой не возвращались 30 дней, удаляется', () => {
-    let clock = Date.parse('2026-10-08T10:00:00Z');
-    const { service, store } = makeService({ now: () => clock });
-    const first = service.demoLogin('family');
-    clock += 12 * 60 * 60 * 1000 + 1;
-    assert.equal(service.sessionUser(first.session.token), null);
-    assert.equal(store.countDemoCopies(), 1);
-    clock += ACCOUNT_LIMITS.DEMO_COPY_TTL_MS;
-    service.purgeExpiredSessions();
-    assert.equal(store.countDemoCopies(), 0);
-    assert.equal(service.demoLogin('family', { owner: first.owner }).user.dmsPlanId, 'demo-premium');
-  });
 });
 
 describe('Кабинет: HTTP', () => {
   let server;
   let base;
-  let flags = { registration: false, demo: true };
+  let flags = { registration: false };
   let service;
   let store;
 
@@ -430,6 +386,16 @@ describe('Кабинет: HTTP', () => {
     return { header, value: parseCookies(header.split(';')[0])[SESSION_COOKIE] };
   };
 
+  // Вход настоящего пользователя (аккаунты создаёт администратор — здесь сразу в хранилище).
+  let signedUp = 0;
+  const signIn = async ({ headers = {}, ...patch } = {}) => {
+    signedUp += 1;
+    const email = `http${signedUp}@user.ru`;
+    await addUser(store, { email, ...patch });
+    return call('/api/auth/login', { method: 'POST', body: { email, password: 'пароль-пароль' }, headers });
+  };
+  const sessionOf = async (patch) => `${SESSION_COOKIE}=${cookieFrom(await signIn(patch)).value}`;
+
   it('гость: user = null и список возможностей', async () => {
     const response = await call('/api/account');
     assert.equal(response.status, 200);
@@ -437,14 +403,12 @@ describe('Кабинет: HTTP', () => {
     assert.equal(payload.user, null);
     assert.equal(payload.features.available, true);
     assert.equal(payload.features.registration, false);
-    assert.equal(payload.features.demo, true);
-    assert.deepEqual(payload.features.demoAccounts.map((item) => item.key), DEMO_ACCOUNTS.map((item) => item.key));
-    assert.ok(payload.features.demoAccounts.every((item) => !('email' in item)), 'email демо-аккаунтов не нужен интерфейсу');
+    assert.equal('demoAccounts' in payload.features, false, 'гостевых демо-аккаунтов нет');
     assert.equal(response.headers.get('cache-control'), 'no-store');
   });
 
-  it('демо-вход ставит cookie HttpOnly; SameSite=Lax; Path=/api, и кабинет её узнаёт', async () => {
-    const response = await call('/api/auth/demo', { method: 'POST', body: { account: 'family' } });
+  it('вход ставит cookie HttpOnly; SameSite=Lax; Path=/api, и кабинет её узнаёт', async () => {
+    const response = await signIn({ firstName: 'Семья', lastName: 'Тестовая' });
     assert.equal(response.status, 200);
     const { header, value } = cookieFrom(response);
     assert.match(header, /HttpOnly/);
@@ -452,14 +416,18 @@ describe('Кабинет: HTTP', () => {
     assert.match(header, /Path=\/api/);
     assert.ok(value && value.length >= 40);
     const me = await (await call('/api/account', { cookie: `${SESSION_COOKIE}=${value}` })).json();
-    assert.equal(me.user.displayName, 'Семья Демо');
-    assert.equal(me.user.dmsPlanId, 'demo-premium');
+    assert.equal(me.user.displayName, 'Семья Тестовая');
     assert.equal(JSON.stringify(me).includes('passwordHash'), false);
   });
 
+  it('входа «как демо-аккаунт» нет: /api/auth/demo — 404, сессии не появляется', async () => {
+    const response = await call('/api/auth/demo', { method: 'POST', body: { account: 'anna' } });
+    assert.equal(response.status, 404);
+    assert.equal(cookieFrom(response).value, undefined);
+  });
+
   it('смена программы ДМС и избранное', async () => {
-    const { value } = cookieFrom(await call('/api/auth/demo', { method: 'POST', body: { account: 'basic' } }));
-    const cookie = `${SESSION_COOKIE}=${value}`;
+    const cookie = await sessionOf();
     const patched = await (await call('/api/account', { method: 'PATCH', body: { dmsPlanId: 'demo-standard' }, cookie })).json();
     assert.equal(patched.user.dmsPlanId, 'demo-standard');
     const favorites = await (await call('/api/account/favorites', { method: 'POST', body: { action: 'add', ids: ['demo-doc-x'] }, cookie })).json();
@@ -476,8 +444,7 @@ describe('Кабинет: HTTP', () => {
   });
 
   it('подделка запроса с чужого сайта не проходит', async () => {
-    const { value } = cookieFrom(await call('/api/auth/demo', { method: 'POST', body: { account: 'anna' } }));
-    const cookie = `${SESSION_COOKIE}=${value}`;
+    const cookie = await sessionOf();
     const evilOrigin = await call('/api/account/favorites', { method: 'POST', body: { action: 'add', ids: ['x'] }, cookie, headers: { origin: 'https://evil.example' } });
     assert.equal(evilOrigin.status, 403);
     const crossSite = await call('/api/account/favorites', { method: 'POST', body: { action: 'add', ids: ['x'] }, cookie, headers: { 'sec-fetch-site': 'cross-site' } });
@@ -507,35 +474,25 @@ describe('Кабинет: HTTP', () => {
   });
 
   it('выход стирает cookie и сессию', async () => {
-    const { value } = cookieFrom(await call('/api/auth/demo', { method: 'POST', body: { account: 'kids' } }));
-    const cookie = `${SESSION_COOKIE}=${value}`;
+    const cookie = await sessionOf();
     const out = await call('/api/auth/logout', { method: 'POST', body: {}, cookie });
     assert.match(out.headers.get('set-cookie'), /Max-Age=0/);
     assert.equal((await (await call('/api/account', { cookie })).json()).user, null);
   });
 
-  it('удаление аккаунта требует подтверждения; демо-аккаунт не удаляется', async () => {
+  it('удаление аккаунта требует подтверждения', async () => {
     await addUser(store, { email: 'bye@user.ru' });
     const created = await call('/api/auth/login', { method: 'POST', body: { email: 'bye@user.ru', password: 'пароль-пароль' } });
     const cookie = `${SESSION_COOKIE}=${cookieFrom(created).value}`;
     assert.equal((await call('/api/account', { method: 'DELETE', body: {}, cookie })).status, 400);
     assert.equal((await call('/api/account', { method: 'DELETE', body: { confirm: true }, cookie })).status, 200);
     assert.equal((await (await call('/api/account', { cookie })).json()).user, null);
-    const demo = `${SESSION_COOKIE}=${cookieFrom(await call('/api/auth/demo', { method: 'POST', body: { account: 'anna' } })).value}`;
-    assert.equal((await call('/api/account', { method: 'DELETE', body: { confirm: true }, cookie: demo })).status, 403);
-    flags = { registration: false, demo: true };
-  });
-
-  it('демо выключено — демо-вход закрыт', async () => {
-    flags = { registration: false, demo: false };
-    assert.equal((await call('/api/auth/demo', { method: 'POST', body: { account: 'anna' } })).status, 403);
-    flags = { registration: false, demo: true };
   });
 
   it('слияние 500 записей избранного укладывается в лимит тела', async () => {
-    const { value } = cookieFrom(await call('/api/auth/demo', { method: 'POST', body: { account: 'basic' } }));
+    const cookie = await sessionOf();
     const ids = Array.from({ length: 500 }, (_, index) => `verified-doctor-kazan-polyclinic-${String(index).padStart(5, '0')}`);
-    const response = await call('/api/account/favorites', { method: 'POST', body: { action: 'merge', ids }, cookie: `${SESSION_COOKIE}=${value}` });
+    const response = await call('/api/account/favorites', { method: 'POST', body: { action: 'merge', ids }, cookie });
     assert.equal(response.status, 200);
     assert.equal((await response.json()).favorites.length, 500);
   });
@@ -601,7 +558,7 @@ describe('Кабинет: HTTP', () => {
 
   it('cookie Secure: в продакшене всегда, по X-Forwarded-Proto — только от своего прокси', async () => {
     const saved = { NODE_ENV: process.env.NODE_ENV, TRUST_PROXY: process.env.TRUST_PROXY, TRUSTED_PROXIES: process.env.TRUSTED_PROXIES };
-    const secureFlag = async () => /;\s*Secure/.test(cookieFrom(await call('/api/auth/demo', { method: 'POST', body: { account: 'anna' }, headers: { 'x-forwarded-proto': 'https' } })).header);
+    const secureFlag = async () => /;\s*Secure/.test(cookieFrom(await signIn({ headers: { 'x-forwarded-proto': 'https' } })).header);
     try {
       delete process.env.NODE_ENV;
       process.env.TRUST_PROXY = '1';
@@ -627,7 +584,7 @@ describe('Кабинет: HTTP', () => {
     const url = `http://127.0.0.1:${off.address().port}`;
     const me = await (await fetch(`${url}/api/account`)).json();
     assert.equal(me.features.available, false);
-    const login = await fetch(`${url}/api/auth/demo`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"account":"anna"}' });
+    const login = await fetch(`${url}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"email":"a@b.ru","password":"пароль-пароль"}' });
     off.close();
     assert.equal(login.status, 503);
   });

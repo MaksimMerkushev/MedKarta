@@ -10,7 +10,9 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { after, before, describe, it } from 'node:test';
+import { randomBytes } from 'node:crypto';
 
+import { hashPassword } from '../backend/accounts/passwords.js';
 import { createAccountService } from '../backend/accounts/service.js';
 import { createSqliteAccountStore, loadSqlite } from '../backend/accounts/sqliteStore.js';
 import { createAccountHandler, parseCookies, SESSION_COOKIE } from '../backend/api/account.js';
@@ -26,10 +28,11 @@ describe('Ассистент только после входа', { skip: !Datab
   let base;
   let required = true;
   let accountsOn = true;
+  let store;
   const seen = [];
 
   before(async () => {
-    const store = createSqliteAccountStore({ DatabaseSync, file: ':memory:' });
+    store = createSqliteAccountStore({ DatabaseSync, file: ':memory:' });
     const service = createAccountService({ store, isKnownPlan: (id) => PLANS.has(id) });
     const getService = async () => (accountsOn ? service : null);
     const limiter = createRateLimiter({ windowMs: 60_000, maxPerIp: 10_000, maxPerInstance: Number.POSITIVE_INFINITY });
@@ -38,8 +41,7 @@ describe('Ассистент только после входа', { skip: !Datab
       onAccountDeleted: async () => {},
       authLimit: limiter,
       apiLimit: limiter,
-      demoLimit: limiter,
-      features: () => ({ registration: false, demo: true, chatRequiresAccount: required }),
+      features: () => ({ registration: false, chatRequiresAccount: required }),
     });
     // Заглушка вместо конвейера: видно, что дошло до ассистента.
     const fakeChat = async (req, res) => {
@@ -65,11 +67,15 @@ describe('Ассистент только после входа', { skip: !Datab
     body: JSON.stringify({ messages: [{ role: 'user', content: 'нужен лор на завтра' }], sessionId: 'session-abcdef123456' }),
   });
 
-  const demoLogin = async (account) => {
-    const response = await fetch(`${base}/api/auth/demo`, {
+  // Вход настоящего пользователя: гостевых демо-аккаунтов нет, аккаунт создаёт администратор.
+  const signIn = async (name) => {
+    if (!store.getUserByEmail(`${name}@user.ru`)) {
+      store.createUser({ id: randomBytes(16).toString('hex'), email: `${name}@user.ru`, firstName: name, lastName: 'Тест', passwordHash: await hashPassword('пароль-пароль'), now: Date.now() });
+    }
+    const response = await fetch(`${base}/api/auth/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', origin: base },
-      body: JSON.stringify({ account }),
+      body: JSON.stringify({ email: `${name}@user.ru`, password: 'пароль-пароль' }),
     });
     const sessionLine = response.headers.getSetCookie().find((line) => line.startsWith(`${SESSION_COOKIE}=`));
     return `${SESSION_COOKIE}=${parseCookies(sessionLine.split(';')[0])[SESSION_COOKIE]}`;
@@ -86,7 +92,7 @@ describe('Ассистент только после входа', { skip: !Datab
   });
 
   it('CSRF: не JSON или с чужого сайта — 403, даже с действующей сессией', async () => {
-    const cookie = await demoLogin('anna');
+    const cookie = await signIn('anna');
     const before = seen.length;
     const body = JSON.stringify({ messages: [{ role: 'user', content: 'нужен лор на завтра' }], sessionId: 'session-abcdef123456' });
     const plain = await fetch(`${base}/api/chat`, { method: 'POST', headers: { 'content-type': 'text/plain', origin: base, cookie }, body });
@@ -99,7 +105,7 @@ describe('Ассистент только после входа', { skip: !Datab
   });
 
   it('вошедший проходит; в тело запроса ассистента кабинет ничего не добавляет', async () => {
-    const cookie = await demoLogin('anna');
+    const cookie = await signIn('anna');
     const response = await ask(cookie);
     assert.equal(response.status, 200);
     const last = seen.at(-1);
@@ -108,7 +114,7 @@ describe('Ассистент только после входа', { skip: !Datab
   });
 
   it('после выхода та же cookie больше не открывает ассистента', async () => {
-    const cookie = await demoLogin('family');
+    const cookie = await signIn('family');
     assert.equal((await ask(cookie)).status, 200);
     await fetch(`${base}/api/auth/logout`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base, cookie }, body: '{}' });
     assert.equal((await ask(cookie)).status, 401);

@@ -40,7 +40,6 @@ export const SETTINGS = Object.freeze([
   { key: 'maintenance.message', group: 'Технические работы', label: 'Текст сообщения', type: 'textarea', default: 'Идут технические работы — часть функций может быть недоступна.', public: true, validate: text(280) },
   { key: 'assistant.enabled', group: 'Функции', label: 'ИИ-ассистент включён', type: 'boolean', default: true, public: true, validate: boolean, description: 'Выключение сразу закрывает /api/chat для всех.' },
   { key: 'assistant.requiresAccount', group: 'Функции', label: 'Ассистент только после входа', type: 'boolean', default: null, public: true, validate: boolean, description: 'По умолчанию — как в CHAT_REQUIRES_ACCOUNT (включено).' },
-  { key: 'features.demoLogin', group: 'Экспериментальные функции', label: 'Кнопки демо-аккаунтов', type: 'boolean', default: true, public: false, validate: boolean, description: 'Работает только при DEMO_DATA=on на сервере.' },
   { key: 'sessions.idleDays', group: 'Сессии и вход', label: 'Сессия без активности, дней', type: 'number', default: 14, validate: integer(1, 60), description: 'Каждый запрос продлевает сессию на этот срок.' },
   { key: 'sessions.maxDays', group: 'Сессии и вход', label: 'Предельный срок сессии, дней', type: 'number', default: 30, validate: integer(1, 90), description: 'После него нужен новый вход, даже при активности.' },
   { key: 'sessions.maxPerUser', group: 'Сессии и вход', label: 'Сессий на пользователя', type: 'number', default: 10, validate: integer(1, 50), description: 'Самая старая вытесняется новым входом.' },

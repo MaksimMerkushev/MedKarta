@@ -51,50 +51,11 @@ export const fail = (code, status, message, extra = null) => {
 };
 
 /*
- * Демо-аккаунты — вымышленные люди с программами ДМС из демо-набора.
- * Пароля у них нет: войти можно только кнопкой «Войти как …», и только
- * когда на сервере включён DEMO_DATA. Избранное — id демо-врачей.
- *
- * Каждый браузер получает свою копию каждого демо-аккаунта (cookie
- * mk_demo): избранное, программа ДМС и записи одного зрителя не видны
- * другому, а после выхода и повторного входа в том же браузере — на месте.
+ * Гостевых демо-аккаунтов («Войти как Анна») больше нет: вход только по email
+ * и паролю. Прежние копии демо-аккаунтов (вымышленные, без пароля) удаляются
+ * вместе с сессиями при запуске сервиса; проверки isDemoUser остаются как
+ * защита для старых баз.
  */
-export const DEMO_ACCOUNTS = Object.freeze([
-  {
-    key: 'anna',
-    email: 'anna@medkarta.example',
-    displayName: 'Анна (демо)',
-    dmsPlanId: 'demo-standard',
-    note: 'Программа Demo Standard, Демо-Страхование',
-    favorites: ['demo-doc-valeev-vadim--demo-yasen-centr', 'demo-doc-zinnatullina-nailya--demo-yasen-centr'],
-  },
-  {
-    key: 'family',
-    email: 'family@medkarta.example',
-    displayName: 'Семья Демо',
-    dmsPlanId: 'demo-premium',
-    note: 'Семейная программа Demo Premium',
-    favorites: ['demo-doc-nikitina-guzel--demo-semya-moskovsky', 'demo-doc-ovchinnikova-mariya--demo-semya-moskovsky'],
-  },
-  {
-    key: 'kids',
-    email: 'kids@medkarta.example',
-    displayName: 'Мама Тимура (демо)',
-    dmsPlanId: 'demo-standard',
-    note: 'Demo Standard: взрослые и дети',
-    favorites: ['demo-doc-frolova-yuliya--demo-detstvo-derbyshki'],
-  },
-  {
-    key: 'basic',
-    email: 'ildar@medkarta.example',
-    displayName: 'Ильдар (демо)',
-    dmsPlanId: 'demo-basic',
-    note: 'Базовая программа Demo Basic',
-    favorites: [],
-  },
-]);
-
-const DEMO_OWNER = /^[A-Za-z0-9_-]{32,64}$/;
 export const EMAIL_PATTERN = /^[^\s@<>()[\]\\,;:"]{1,64}@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}$/iu;
 const PLAN_ID = /^[a-z0-9][a-z0-9-]{1,63}$/;
 // eslint-disable-next-line no-control-regex
@@ -161,8 +122,7 @@ export const userLabel = (user) => (user ? `${`${user.firstName || ''} ${user.la
 /** То, что уходит самому пользователю: без хэша пароля и служебных полей. */
 export const publicUser = (user, { permissions = [] } = {}) => ({
   id: user.id,
-  // У копии демо-аккаунта служебный email — показываем адрес шаблона.
-  email: user.demoTemplate ? DEMO_ACCOUNTS.find((account) => account.key === user.demoTemplate)?.email || user.email : user.email,
+  email: user.email,
   displayName: user.displayName,
   firstName: user.firstName || '',
   lastName: user.lastName || '',
@@ -223,6 +183,8 @@ export const authEventView = (event) => ({
  */
 export const createAccountService = ({ store, settings = null, isKnownPlan = () => false, now = () => Date.now() }) => {
   const config = settings || createSettingsService({ store, now });
+  // Гостевые демо-аккаунты убраны: их прежние копии и сессии больше не нужны.
+  store.purgeDemoCopies(Number.MAX_SAFE_INTEGER);
   const newId = () => randomBytes(16).toString('hex');
   // Дни, уже отмеченные в user_activity: не писать в базу на каждый запрос.
   const markedDays = new Map();
@@ -364,45 +326,6 @@ export const createAccountService = ({ store, settings = null, isKnownPlan = () 
       store.addAuthEvent({ ...event, type: 'login_ok', userId: current.id, sessionId: session.publicId });
       const fresh = store.getUserById(current.id);
       return { user: publicUser(fresh, { permissions: permissionsFor(fresh) }), favorites: favoritesOf(fresh.id), session };
-    },
-
-    /**
-     * Вход в копию демо-аккаунта этого браузера. Копии нет — она создаётся
-     * из шаблона; есть — возвращается со всеми изменениями.
-     *
-     * @param {string} key ключ шаблона (DEMO_ACCOUNTS)
-     * @param {{owner?: string, client?: string, ipPrefix?: string}} [options] owner — токен браузера из cookie mk_demo
-     * @returns {{user: object, favorites: Array, session: object, owner: string}}
-     *   owner — токен браузера: новый, если прежнего не было или он испорчен
-     */
-    demoLogin(key, { owner, client = null, ipPrefix = null } = {}) {
-      const seed = DEMO_ACCOUNTS.find((account) => account.key === key);
-      if (!seed) fail('unknown_demo', 404, 'Такого демо-аккаунта нет.');
-      const ownerToken = typeof owner === 'string' && DEMO_OWNER.test(owner) ? owner : randomBytes(32).toString('base64url');
-      const ownerHash = hashToken(`demo-owner|${ownerToken}`);
-      const stamp = now();
-      let user = store.getDemoCopy(seed.key, ownerHash);
-      if (user) {
-        store.touchUser(user.id, stamp);
-      } else {
-        store.purgeDemoCopies(stamp - ACCOUNT_LIMITS.DEMO_COPY_TTL_MS);
-        const excess = store.countDemoCopies() - ACCOUNT_LIMITS.MAX_DEMO_COPIES + 1;
-        if (excess > 0) store.deleteOldestDemoCopies(excess);
-        const id = newId();
-        user = store.createUser({
-          id,
-          email: `demo-${id}@medkarta.example`,
-          firstName: seed.displayName,
-          displayName: seed.displayName,
-          dmsPlanId: seed.dmsPlanId && isKnownPlan(seed.dmsPlanId) ? seed.dmsPlanId : null,
-          demoTemplate: seed.key,
-          demoOwner: ownerHash,
-          now: stamp,
-        });
-        store.addFavorites(user.id, seed.favorites.map(encodeItemId).filter(Boolean), stamp);
-      }
-      const fresh = store.getUserById(user.id);
-      return { user: publicUser(fresh), favorites: favoritesOf(fresh.id), session: startSession(fresh, { client, ipPrefix }), owner: ownerToken };
     },
 
     /**

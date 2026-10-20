@@ -127,7 +127,7 @@ export default function Dashboard() {
             <Tile label="Активные пользователи" value={`${formatNumber(data.activity.dau)} / ${formatNumber(data.activity.wau)} / ${formatNumber(data.activity.mau)}`} sub="DAU / WAU / MAU" icon={Users} tone="violet" />
             <Tile label="Успешные входы" value={formatNumber(data.auth.logins)} sub={`за ${data.periodLabel}`} tone="blue" />
             <Tile label="Неудачные попытки" value={formatNumber(data.auth.failed)} sub={`за ${data.periodLabel} · отклонено заблокированным: ${formatNumber(data.auth.denied)}`} tone="amber" />
-            <Tile label="Активные сессии" value={formatNumber(data.sessions.active)} sub={`демо-копий: ${formatNumber(data.sessions.demo)}`} tone="blue" />
+            <Tile label="Активные сессии" value={formatNumber(data.sessions.active)} sub="вошли и не вышли" tone="blue" />
             <Tile label="Ошибки сервера 5xx" value={data.health ? formatNumber(data.health.errors.errors5xx) : '—'} sub={data.health ? `4xx: ${formatNumber(data.health.errors.errors4xx)} · с запуска ${formatRelative(data.health.errors.since)}` : 'нет данных'} tone="red" />
           </div>
 

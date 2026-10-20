@@ -1,9 +1,10 @@
 /*
  * © 2026 МедКарта Казань. Все права защищены.
  *
- * Личные кабинеты не пересекаются: у каждого браузера своя копия демо-аккаунта,
- * демо-записи привязаны к аккаунту и видны только ему. Кабинет и демо-запись
- * подняты в одном http-сервере, «браузер» — свой набор cookie.
+ * Личные кабинеты не пересекаются: демо-записи привязаны к аккаунту и видны
+ * только ему (в любом браузере, где он вошёл), гостю — нет. Кабинет и
+ * демо-запись подняты в одном http-сервере, «браузер» — свой набор cookie.
+ * Вход — только по email и паролю: гостевых демо-аккаунтов нет.
  */
 
 import assert from 'node:assert/strict';
@@ -15,7 +16,7 @@ import { randomBytes } from 'node:crypto';
 import { hashPassword } from '../backend/accounts/passwords.js';
 import { createAccountService } from '../backend/accounts/service.js';
 import { createSqliteAccountStore, loadSqlite } from '../backend/accounts/sqliteStore.js';
-import { createAccountHandler, currentAccountUser, DEMO_OWNER_COOKIE, SESSION_COOKIE } from '../backend/api/account.js';
+import { createAccountHandler, currentAccountUser } from '../backend/api/account.js';
 import { createDemoBookingHandler, createDemoBookingService } from '../backend/api/demoBooking.js';
 import { createBookingStore } from '../backend/demo/bookingStore.js';
 import { getDemoCatalog } from '../backend/demo/catalog.js';
@@ -32,7 +33,7 @@ describe('Личные кабинеты: изоляция', { skip: !DatabaseSyn
   let base;
   let accounts;
   let bookings;
-  const flags = { registration: false, demo: true };
+  const flags = { registration: false };
   let accountStore;
   let nextKey = 0;
 
@@ -51,7 +52,6 @@ describe('Личные кабинеты: изоляция', { skip: !DatabaseSyn
       onAccountDeleted: async (userId) => bookings.store.forgetAccount(userId),
       authLimit: limiter,
       apiLimit: limiter,
-      demoLimit: limiter,
       features: () => flags,
     });
     const bookingHandler = createDemoBookingHandler({
@@ -70,6 +70,16 @@ describe('Личные кабинеты: изоляция', { skip: !DatabaseSyn
     server?.close();
     bookings?.store.close();
   });
+
+  // Аккаунты создаёт администратор — здесь сразу в хранилище; один на имя.
+  const created = new Set();
+  const ensureUser = async (name) => {
+    if (created.has(name)) return;
+    created.add(name);
+    accountStore.createUser({
+      id: randomBytes(16).toString('hex'), email: `${name}@user.ru`, firstName: name, lastName: 'Тест', passwordHash: await hashPassword('пароль-пароль'), now: Date.now(),
+    });
+  };
 
   /** «Браузер»: хранит cookie между запросами, как настоящий. */
   const browser = () => {
@@ -95,7 +105,10 @@ describe('Личные кабинеты: изоляция', { skip: !DatabaseSyn
     return {
       jar,
       call,
-      demo: (account) => call('/api/auth/demo', { method: 'POST', body: { account } }),
+      signIn: async (name) => {
+        await ensureUser(name);
+        return call('/api/auth/login', { method: 'POST', body: { email: `${name}@user.ru`, password: 'пароль-пароль' } });
+      },
       logout: () => call('/api/auth/logout', { method: 'POST', body: {} }),
       mine: () => call('/api/demo/bookings/mine'),
       book: (slotId) => {
@@ -113,25 +126,17 @@ describe('Личные кабинеты: изоляция', { skip: !DatabaseSyn
     return unique;
   };
 
-  it('демо-вход ставит долгую cookie браузера HttpOnly, отдельную от сессии', async () => {
+  it('гостевого демо-входа нет: /api/auth/demo — 404, cookie не ставятся', async () => {
     const tab = browser();
-    const login = await tab.demo('anna');
-    assert.equal(login.status, 200);
-    const lines = login.headers.getSetCookie();
-    const owner = lines.find((line) => line.startsWith(`${DEMO_OWNER_COOKIE}=`));
-    assert.ok(owner, 'нет cookie браузера');
-    assert.match(owner, /HttpOnly/);
-    assert.match(owner, /SameSite=Lax/);
-    assert.match(owner, /Path=\/api/);
-    assert.match(owner, /Max-Age=2592000/);
-    assert.ok(tab.jar.get(SESSION_COOKIE));
-    assert.equal(JSON.stringify(login.body).includes(tab.jar.get(DEMO_OWNER_COOKIE)), false, 'токен браузера не попадает в тело ответа');
+    const login = await tab.call('/api/auth/demo', { method: 'POST', body: { account: 'anna' } });
+    assert.equal(login.status, 404);
+    assert.equal(tab.jar.size, 0);
   });
 
   it('записи из кабинета видит только этот кабинет; гость — 401', async () => {
     const [first, second] = freeSlots(2);
     const annaTab = browser();
-    await annaTab.demo('anna');
+    await annaTab.signIn('anna');
     const booked = await annaTab.book(first.id);
     assert.equal(booked.status, 201);
     assert.equal(booked.body.booking.owned, true);
@@ -142,9 +147,9 @@ describe('Личные кабинеты: изоляция', { skip: !DatabaseSyn
     assert.equal(mine.body.bookings[0].demo, true);
     assert.equal(mine.body.bookings[0].cancelToken, booked.body.booking.cancelToken);
 
-    // Тот же браузер, другой демо-аккаунт — пустой кабинет.
+    // Тот же браузер, другой аккаунт — пустой кабинет.
     await annaTab.logout();
-    await annaTab.demo('family');
+    await annaTab.signIn('family');
     assert.deepEqual((await annaTab.mine()).body.bookings, []);
     const familyBooked = await annaTab.book(second.id);
     assert.equal(familyBooked.body.booking.owned, true);
@@ -153,13 +158,13 @@ describe('Личные кабинеты: изоляция', { skip: !DatabaseSyn
     // Возврат в «Анну» в этом же браузере — её запись на месте, чужой нет.
     await annaTab.logout();
     assert.equal((await annaTab.mine()).status, 401);
-    await annaTab.demo('anna');
+    await annaTab.signIn('anna');
     assert.deepEqual((await annaTab.mine()).body.bookings.map((item) => item.number), [booked.body.booking.number]);
 
-    // Другой браузер под той же «Анной» — своя копия без чужих записей.
+    // Другой браузер под той же «Анной» — те же её записи (они принадлежат аккаунту), без чужих.
     const otherTab = browser();
-    await otherTab.demo('anna');
-    assert.deepEqual((await otherTab.mine()).body.bookings, []);
+    await otherTab.signIn('anna');
+    assert.deepEqual((await otherTab.mine()).body.bookings.map((item) => item.number), [booked.body.booking.number]);
 
     // Гость записывается без привязки и списка в кабинете не получает.
     const guest = browser();
@@ -174,13 +179,13 @@ describe('Личные кабинеты: изоляция', { skip: !DatabaseSyn
     const [slot] = freeSlots(1);
     const body = { slotId: slot.id, idempotencyKey: 'iso-repeat-key-0001' };
     const first = browser();
-    await first.demo('basic');
+    await first.signIn('basic');
     const booked = await first.call('/api/demo/bookings', { method: 'POST', body });
     assert.equal(booked.status, 201);
     assert.equal(booked.body.booking.owned, true);
 
     const second = browser();
-    await second.demo('basic');
+    await second.signIn('basic-other');
     const repeated = await second.call('/api/demo/bookings', { method: 'POST', body });
     assert.equal(repeated.status, 200);
     assert.equal(repeated.body.booking.owned, false);
@@ -191,7 +196,7 @@ describe('Личные кабинеты: изоляция', { skip: !DatabaseSyn
   it('отмена из кабинета видна в его списке', async () => {
     const [slot] = freeSlots(1);
     const tab = browser();
-    await tab.demo('kids');
+    await tab.signIn('kids');
     const booked = (await tab.book(slot.id)).body.booking;
     const cancelled = await tab.call('/api/demo/bookings/cancel', { method: 'POST', body: { number: booked.number, cancelToken: booked.cancelToken } });
     assert.equal(cancelled.status, 200);
@@ -219,18 +224,5 @@ describe('Личные кабинеты: изоляция', { skip: !DatabaseSyn
     const again = await tab.call('/api/auth/login', { method: 'POST', body: { email: 'iso@user.ru', password: 'пароль-пароль' } });
     assert.equal(again.status, 200);
     assert.deepEqual((await tab.mine()).body.bookings, []);
-  });
-
-  it('поддельная или чужая cookie браузера не открывает чужую копию', async () => {
-    const owner = browser();
-    await owner.demo('basic');
-    await owner.call('/api/account', { method: 'PATCH', body: { dmsPlanId: 'demo-premium' } });
-
-    const forged = browser();
-    const real = owner.jar.get(DEMO_OWNER_COOKIE);
-    forged.jar.set(DEMO_OWNER_COOKIE, `${real.slice(0, -1)}${real.endsWith('A') ? 'B' : 'A'}`);
-    const login = await forged.demo('basic');
-    assert.equal(login.body.user.dmsPlanId, 'demo-basic');
-    assert.notEqual(forged.jar.get(DEMO_OWNER_COOKIE), owner.jar.get(DEMO_OWNER_COOKIE));
   });
 });

@@ -66,7 +66,7 @@
 
 | Переменная | По умолчанию | Что делает | Где |
 |---|---|---|---|
-| `DEMO_DATA` | выключено; в `npm run dev` — `on` | демо-набор, демо-запись, демо-аккаунты | [flags.js](../backend/demo/flags.js), [vite.config.js](../vite.config.js) |
+| `DEMO_DATA` | выключено; в `npm run dev` — `on` | демо-набор и демо-запись | [flags.js](../backend/demo/flags.js), [vite.config.js](../vite.config.js) |
 | `DEMO_BOOKING` | включено вместе с `DEMO_DATA` | `off` — выключить симуляцию записи | [flags.js](../backend/demo/flags.js) |
 | `DEMO_BOOKING_DB_PATH` | `var/demo/booking.sqlite` | файл базы демо-записи | [demoBooking.js](../backend/api/demoBooking.js) |
 | `DEMO_NOW` | текущее время | «заморозить» время демо (ISO 8601); не действует при `NODE_ENV=production` | [time.js](../backend/demo/time.js) |
@@ -155,7 +155,7 @@ SMTP_URL=smtps://noreply%40medkarta.example.ru:ПАРОЛЬ_ПРИЛОЖЕНИЯ
 | `npm run dev` | Vite с обработчиками API; демо включено по умолчанию |
 | `npm run build` | сборка фронтенда в `dist/` |
 | `npm start` | `node backend/server.js`; демо-набор и демо-запись **выключены**, пока не задан `DEMO_DATA=on` |
-| `npm run start:demo` | то же с `DEMO_DATA=on`: демо-клиники, демо-аккаунты и симуляция записи — для локальной проверки и демо-стенда, не для production с настоящими пользователями |
+| `npm run start:demo` | то же с `DEMO_DATA=on`: демо-клиники и симуляция записи — для локальной проверки и демо-стенда, не для production с настоящими пользователями |
 | `npm run preview` | `vite preview` |
 | `npm test` | все тесты `node --test tests/*.test.js` |
 | `npm run test:hybrid` | то же при `PRIVACY_OUTBOUND_MODE=hybrid` |

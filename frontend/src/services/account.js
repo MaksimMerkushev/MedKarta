@@ -38,7 +38,6 @@ export const request = async (path, { method = 'GET', body } = {}) => {
 
 export const fetchAccount = () => request('/api/account');
 export const loginAccount = ({ email, password }) => request('/api/auth/login', { method: 'POST', body: { email, password } });
-export const loginDemoAccount = (account) => request('/api/auth/demo', { method: 'POST', body: { account } });
 export const logoutAccount = () => request('/api/auth/logout', { method: 'POST', body: {} });
 export const updateAccount = (patch) => request('/api/account', { method: 'PATCH', body: patch });
 export const updateAccountFavorites = (action, ids) => request('/api/account/favorites', { method: 'POST', body: { action, ids } });

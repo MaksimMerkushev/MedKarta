@@ -12,13 +12,12 @@ import {
   deleteAccount,
   fetchAccount,
   loginAccount,
-  loginDemoAccount,
   logoutAccount,
   updateAccount,
   updateAccountFavorites,
 } from '../services/account';
 
-const NO_FEATURES = Object.freeze({ available: false, registration: false, demo: false, demoAccounts: [] });
+const NO_FEATURES = Object.freeze({ available: false, registration: false });
 
 export const useAccount = ({ onSignedIn, onSignedOut, onGuest } = {}) => {
   const [state, setState] = useState({ status: 'loading', user: null, favorites: [], features: NO_FEATURES });
@@ -81,7 +80,6 @@ export const useAccount = ({ onSignedIn, onSignedOut, onGuest } = {}) => {
   const expire = useCallback(() => signedOut('expired'), [signedOut]);
 
   const login = useCallback(async (credentials) => signedIn(await loginAccount(credentials)), [signedIn]);
-  const loginDemo = useCallback(async (key) => signedIn(await loginDemoAccount(key)), [signedIn]);
 
   const logout = useCallback(async () => {
     try {
@@ -114,5 +112,5 @@ export const useAccount = ({ onSignedIn, onSignedOut, onGuest } = {}) => {
     if (user) setState((current) => (current.status === 'user' ? { ...current, user } : current));
   }, []);
 
-  return { ...state, login, loginDemo, logout, expire, applyUser, removeAccount, setPlan, syncFavorites };
+  return { ...state, login, logout, expire, applyUser, removeAccount, setPlan, syncFavorites };
 };

@@ -119,7 +119,7 @@
 | Ответ модели не прошёл валидацию или Policy Engine | один раз заменяется локальным планом | [pipeline.js](../backend/pipeline.js) |
 | Нет файла графа дорог | `/api/route` и `/api/travel-times` отвечают `503 routing_graph_unavailable`; выбор «ближайшего» в ассистенте — по прямой; строгий подбор с ограничением времени в пути — статус `unavailable` | [api/route.js](../backend/api/route.js), [executor/routing.js](../backend/executor/routing.js), [demo/search.js](../backend/demo/search.js) |
 | Node без `node:sqlite` | кабинет и демо-запись выключены, остальное работает | [api/account.js](../backend/api/account.js), [api/demoBooking.js](../backend/api/demoBooking.js) |
-| `DEMO_DATA` не задан | демо-набор, демо-запись и демо-аккаунты выключены | [demo/flags.js](../backend/demo/flags.js) |
+| `DEMO_DATA` не задан | демо-набор и демо-запись выключены | [demo/flags.js](../backend/demo/flags.js) |
 
 ## Данные
 
