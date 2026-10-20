@@ -54,7 +54,7 @@ describe('Демо-запись: хранилище', { skip: !DatabaseSync && '
   it('запись переводит слот в BOOKED и выдаёт демо-номер', () => {
     const slot = freeSlot();
     const booking = store.book({ slotId: slot.id, idempotencyKey: KEY(1) });
-    assert.match(booking.number, /^DEMO-261012-[A-Z0-9]{5}$/);
+    assert.match(booking.number, /^DEMO-121026-[A-Z0-9]{5}$/, 'дата оформления — ДДММГГ, как принято в России');
     assert.equal(booking.status, 'CONFIRMED');
     assert.equal(booking.repeated, false);
     assert.equal(booking.slot.status, 'BOOKED');

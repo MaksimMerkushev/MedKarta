@@ -93,11 +93,16 @@ const MIGRATIONS = [
 const sha256 = (value) => createHmac('sha256', 'medkarta-demo-hold').update(String(value)).digest('base64url');
 const NUMBER_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
-/** Номер записи для человека: DEMO-ГГММДД-XXXXX. */
+/**
+ * Номер записи для человека: DEMO-ДДММГГ-XXXXX — дата оформления по Москве в
+ * привычном порядке (20.10.26 → DEMO-201026-…). Номера, выданные раньше в
+ * порядке ГГММДД, остаются действительными: формат проверки тот же.
+ */
 const makeNumber = (now) => {
   const bytes = randomBytes(5);
   const suffix = [...bytes].map((byte) => NUMBER_ALPHABET[byte % NUMBER_ALPHABET.length]).join('');
-  return `DEMO-${moscowDay(now).slice(2).replace(/-/g, '')}-${suffix}`;
+  const [year, month, day] = moscowDay(now).split('-');
+  return `DEMO-${day}${month}${year.slice(2)}-${suffix}`;
 };
 
 const IDEMPOTENCY = /^[A-Za-z0-9_-]{16,80}$/;
