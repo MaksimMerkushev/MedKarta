@@ -3,11 +3,57 @@
  * Этот код является интеллектуальной собственностью автора.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Bot, X, Send, Loader2, RotateCcw } from 'lucide-react';
+import { AnimatePresence, MotionConfig, motion as Motion, useReducedMotion } from 'motion/react';
+import { Bot, X, Send, RotateCcw } from 'lucide-react';
 import { analyzeSymptoms } from './services/ai';
 import { LIMITS } from '@shared/contract.js';
 import TopPicks from './TopPicks';
 import DemoOffers from './DemoOffers';
+
+/*
+ * Движение отвечает на действия: окно вырастает из кнопки ассистента (снизу
+ * справа; на телефоне — выезжает снизу), своя реплика «вылетает» справа от
+ * поля ввода, ответ проявляется слева, пока ассистент думает — три точки.
+ * При prefers-reduced-motion — без перемещений (MotionConfig ниже).
+ */
+const WINDOW_SPRING = { type: 'spring', stiffness: 380, damping: 32, mass: 0.9 };
+const SHEET_EASE = [0.32, 0.72, 0, 1];
+const USER_BUBBLE = {
+  initial: { opacity: 0, x: 18, y: 8, scale: 0.94 },
+  animate: { opacity: 1, x: 0, y: 0, scale: 1 },
+  transition: { type: 'spring', stiffness: 520, damping: 34 },
+};
+const ASSISTANT_BUBBLE = {
+  initial: { opacity: 0, y: 10 },
+  animate: { opacity: 1, y: 0 },
+  transition: { duration: 0.28, ease: [0.22, 1, 0.36, 1] },
+};
+
+function TypingDots({ isMobile }) {
+  return (
+    <Motion.div
+      className="flex justify-start"
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, transition: { duration: 0.12 } }}
+      data-testid="ai-typing"
+    >
+      <div className="flex items-center gap-2 rounded-2xl rounded-tl-sm border border-slate-100 bg-slate-50 px-4 py-3 dark:border-slate-600 dark:bg-slate-700">
+        <span className="flex items-center gap-1" aria-hidden="true">
+          {[0, 1, 2].map((dot) => (
+            <Motion.span
+              key={dot}
+              className={`block rounded-full bg-violet-500 ${isMobile ? 'h-2 w-2' : 'h-1.5 w-1.5'}`}
+              animate={{ y: [0, -4, 0], opacity: [0.45, 1, 0.45] }}
+              transition={{ duration: 0.9, repeat: Infinity, ease: 'easeInOut', delay: dot * 0.15 }}
+            />
+          ))}
+        </span>
+        <span className="text-sm text-slate-500 dark:text-slate-400">Думаю...</span>
+      </div>
+    </Motion.div>
+  );
+}
 
 const bumpId = (ref) => {
   ref.current += 1;
@@ -46,7 +92,7 @@ export default function AIAssistant({
   onClose,
   onApplyTriage,
   isMobile,
-  avoidRoutePanel = false,
+  topInset = 24,
   picks = null,
   onFocusPick,
   onRoutePick,
@@ -66,6 +112,9 @@ export default function AIAssistant({
   const nextIdRef = useRef(1);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  // Счётчик отправок: на каждую значок «самолётика» улетает и возвращается.
+  const [sent, setSent] = useState(0);
+  const reduceMotion = useReducedMotion();
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const abortRef = useRef(null);
@@ -145,6 +194,7 @@ export default function AIAssistant({
     }
 
     if (fromInput) setInputValue('');
+    setSent((count) => count + 1);
     const nextMessages = [...messages, { id: bumpId(nextIdRef), role: 'user', content: userText }];
     setMessages(nextMessages);
     setIsLoading(true);
@@ -178,17 +228,14 @@ export default function AIAssistant({
 
   const handleSend = useCallback(() => sendText(inputValue, { fromInput: true }), [sendText, inputValue]);
 
-  if (!isOpen) {
-    return null;
-  }
-
   const charCount = inputValue.length;
   const isNearLimit = charCount > LIMITS.MAX_MESSAGE_CHARS - 100;
 
   const renderMessages = (bubbleClass) => (
     <div className="space-y-4">
+      <AnimatePresence initial={false}>
       {messages.map((msg) => (
-        <div key={msg.id}>
+        <Motion.div key={msg.id} {...(msg.role === 'user' ? USER_BUBBLE : ASSISTANT_BUBBLE)} style={{ transformOrigin: msg.role === 'user' ? 'bottom right' : 'top left' }}>
           <div className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div
               className={`max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-4 ${bubbleClass} leading-relaxed shadow-sm ${
@@ -226,27 +273,37 @@ export default function AIAssistant({
               onShowAll={() => onShowAllPicks?.(msg.id)}
             />
           )}
-        </div>
+        </Motion.div>
       ))}
-      {isLoading && (
-        <div className="flex justify-start">
-          <div className="flex items-center gap-2 rounded-2xl rounded-tl-sm border border-slate-100 bg-slate-50 px-4 py-3 dark:border-slate-600 dark:bg-slate-700">
-            <Loader2 size={isMobile ? 18 : 16} className="animate-spin text-violet-500" />
-            <span className="text-sm text-slate-500 dark:text-slate-400">Думаю...</span>
-          </div>
-        </div>
-      )}
+      {isLoading && <TypingDots key="typing" isMobile={isMobile} />}
+      </AnimatePresence>
       <div ref={messagesEndRef} />
     </div>
   );
 
-  if (isMobile) {
-    return (
-      <div
+  /* Кнопка отправки: нажатие сжимает её, «самолётик» улетает вверх-вправо и возвращается. */
+  const sendIcon = (size) => (
+    <Motion.span
+      key={sent}
+      className="flex"
+      animate={sent === 0 || reduceMotion ? { x: 0, y: 0, opacity: 1 } : { x: [0, 16, -12, 0], y: [0, -16, 12, 0], opacity: [1, 0, 0, 1] }}
+      transition={{ duration: 0.45, times: [0, 0.45, 0.46, 1], ease: 'easeOut' }}
+    >
+      <Send size={size} aria-hidden="true" />
+    </Motion.span>
+  );
+
+  const mobileWindow = () => (
+      <Motion.div
+        key="ai-mobile"
         className="ai-assistant-mobile fixed inset-0 z-[1100] flex flex-col bg-white dark:bg-slate-800"
         role="dialog"
         aria-modal="true"
         aria-label="AI-помощник МедКарты"
+        initial={{ y: '100%' }}
+        animate={{ y: 0 }}
+        exit={{ y: '100%' }}
+        transition={{ duration: 0.36, ease: SHEET_EASE }}
       >
         <div
           className="flex items-center justify-between border-b border-slate-100 bg-gradient-to-r from-violet-50 to-white px-4 py-3 dark:border-slate-700 dark:from-slate-700 dark:to-slate-800"
@@ -317,15 +374,16 @@ export default function AIAssistant({
               disabled={isLoading}
               className="w-full rounded-2xl border border-slate-200 bg-slate-50 pl-4 pr-14 py-3.5 text-[15px] text-slate-800 caret-violet-600 outline-none transition-all placeholder:text-slate-400 focus:border-violet-400 focus:ring-2 focus:ring-violet-300 dark:border-slate-600 dark:bg-slate-900 dark:text-white dark:caret-violet-300 dark:placeholder:text-slate-500"
             />
-            <button
+            <Motion.button
               type="button"
               onClick={handleSend}
               disabled={!inputValue.trim() || isLoading}
               aria-label="Отправить сообщение"
-              className="absolute right-2 top-1/2 -translate-y-1/2 flex h-10 w-10 items-center justify-center rounded-xl bg-violet-600 text-white transition-transform active:scale-95 disabled:opacity-50"
+              whileTap={{ scale: 0.88 }}
+              className="absolute right-2 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center overflow-hidden rounded-xl bg-violet-600 text-white disabled:opacity-50"
             >
-              <Send size={18} aria-hidden="true" />
-            </button>
+              {sendIcon(18)}
+            </Motion.button>
           </div>
           {isNearLimit && (
             <div className="mt-1 text-right text-[11px] text-slate-400">
@@ -333,20 +391,27 @@ export default function AIAssistant({
             </div>
           )}
         </div>
-      </div>
-    );
-  }
+      </Motion.div>
+  );
 
-  return (
-    <div
-      className={`absolute bottom-20 right-6 z-[1050] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl transition-all dark:border-slate-700 dark:bg-slate-800 ${bookings ? 'w-[380px]' : 'w-[350px]'}`}
-      // Открытая панель маршрута занимает правый верхний угол (320 px + отступы):
-      // окно встаёт левее, а не поверх точек маршрута.
-      style={avoidRoutePanel ? { right: 360 } : undefined}
+  const desktopWindow = () => (
+    <Motion.div
+      key="ai-desktop"
+      className={`absolute bottom-20 right-6 z-[1050] flex max-w-[calc(100%-48px)] flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-800 ${bookings ? 'w-[380px]' : 'w-[350px]'}`}
+      /*
+       * Правый край карты общий с маршрутом: окно не выше, чем от низа
+       * карточки маршрута (topInset) до своего нижнего отступа; переписка
+       * ужимается, шапка и поле ввода — нет.
+       */
+      style={{ maxHeight: `calc(100% - ${topInset + 80}px)`, transformOrigin: 'bottom right' }}
       role="dialog"
       aria-label="AI-помощник МедКарты"
+      initial={{ opacity: 0, y: 24, scale: 0.92 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: 18, scale: 0.95, transition: { duration: 0.16, ease: 'easeIn' } }}
+      transition={WINDOW_SPRING}
     >
-      <div className="flex items-center justify-between border-b border-slate-100 bg-gradient-to-r from-violet-50 to-white px-4 py-3 dark:border-slate-700 dark:from-slate-700 dark:to-slate-800">
+      <div className="flex shrink-0 items-center justify-between border-b border-slate-100 bg-gradient-to-r from-violet-50 to-white px-4 py-3 dark:border-slate-700 dark:from-slate-700 dark:to-slate-800">
         <div className="flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-full bg-violet-100 text-violet-600 dark:bg-violet-900 dark:text-violet-300">
             <Bot size={18} aria-hidden="true" />
@@ -383,11 +448,11 @@ export default function AIAssistant({
       </div>
 
       {/* В режиме записи под ответом — карточки со временем приёма: окно выше. */}
-      <div className={`${bookings ? 'h-[480px] max-h-[62vh]' : 'h-[400px] max-h-[55vh]'} overflow-y-auto p-4 scrollbar-thin`} aria-live="polite">
+      <div className={`${bookings ? 'h-[480px]' : 'h-[400px]'} min-h-0 shrink overflow-y-auto p-4 scrollbar-thin`} aria-live="polite">
         {renderMessages('py-2.5 text-[13px]')}
       </div>
 
-      <div className="border-t border-slate-100 p-3 dark:border-slate-700">
+      <div className="shrink-0 border-t border-slate-100 p-3 dark:border-slate-700">
         <div className="relative flex items-center gap-2">
           <label className="sr-only" htmlFor="ai-input-desktop">
             Опишите, какой специалист нужен
@@ -409,15 +474,17 @@ export default function AIAssistant({
             disabled={isLoading}
             className="w-full rounded-xl border border-slate-200 bg-slate-50 pl-4 pr-10 py-2.5 text-[13px] text-slate-800 caret-violet-600 outline-none transition-all placeholder:text-slate-400 focus:border-violet-400 focus:ring-2 focus:ring-violet-300 dark:border-slate-600 dark:bg-slate-900 dark:text-white dark:caret-violet-300 dark:placeholder:text-slate-500"
           />
-          <button
+          <Motion.button
             type="button"
             onClick={handleSend}
             disabled={!inputValue.trim() || isLoading}
             aria-label="Отправить сообщение"
-            className="absolute right-2 top-1.5 flex h-[30px] w-[30px] items-center justify-center rounded-lg bg-violet-600 text-white transition-transform hover:scale-105 disabled:opacity-50 disabled:hover:scale-100"
+            whileHover={inputValue.trim() && !isLoading ? { scale: 1.06 } : undefined}
+            whileTap={{ scale: 0.88 }}
+            className="absolute right-2 top-1.5 flex h-[30px] w-[30px] items-center justify-center overflow-hidden rounded-lg bg-violet-600 text-white disabled:opacity-50"
           >
-            <Send size={14} aria-hidden="true" />
-          </button>
+            {sendIcon(14)}
+          </Motion.button>
         </div>
         {isNearLimit && (
           <div className="mt-1 text-right text-[11px] text-slate-400">
@@ -425,6 +492,12 @@ export default function AIAssistant({
           </div>
         )}
       </div>
-    </div>
+    </Motion.div>
+  );
+
+  return (
+    <MotionConfig reducedMotion="user">
+      <AnimatePresence>{isOpen && (isMobile ? mobileWindow() : desktopWindow())}</AnimatePresence>
+    </MotionConfig>
   );
 }

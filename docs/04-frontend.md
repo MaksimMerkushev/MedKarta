@@ -53,8 +53,8 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
 
 | Модуль | Назначение |
 |---|---|
-| [App.jsx](../frontend/src/App.jsx) | главный компонент: карта, список, фильтры, маршрут, состояние в URL, геолокация, «время в пути», сортировки. Маршрут показывается строкой «время · расстояние» рядом с плашкой пользователя (`RoutePill`); точки, вид транспорта, Яндекс Карты и 2ГИС — в окне по нажатию на строку |
-| [AIAssistant.jsx](../frontend/src/AIAssistant.jsx) | окно ассистента; кнопка нового разговора (`data-testid="ai-restart"`) |
+| [App.jsx](../frontend/src/App.jsx) | главный компонент: карта, список, фильтры, маршрут, состояние в URL, геолокация, «время в пути», сортировки. Маршрут на компьютере и планшете — `RouteDock` в правом верхнем углу: строка «время · расстояние» (`RoutePill`) по нажатию раскрывается в карточку шириной 312 px (вид транспорта с переезжающей подсветкой, точки, Яндекс / 2ГИС / транспорт, «Начать маршрут»). Окно ассистента под ней ужимается до низа карточки; если вместе им не хватает высоты (окну ассистента нужно 340 px), остаётся открытое последним — маршрут сворачивается в строку или чат сворачивается с сохранением переписки. На телефоне маршрут — над нижней панелью |
+| [AIAssistant.jsx](../frontend/src/AIAssistant.jsx) | окно ассистента; кнопка нового разговора (`data-testid="ai-restart"`). Движение (Motion): окно вырастает из кнопки ассистента (на телефоне выезжает снизу), своя реплика появляется справа, ответ — слева, пока ассистент думает — три точки, «самолётик» на кнопке отправки улетает и возвращается; при `prefers-reduced-motion` — только прозрачность. Код окна подгружается, когда курсор над кнопкой |
 | [TopPicks.jsx](../frontend/src/TopPicks.jsx), [bestPicks.js](../frontend/src/bestPicks.js) | «три лучших варианта» под ответом ассистента |
 | [DemoOffers.jsx](../frontend/src/DemoOffers.jsx) | результат строгого подбора: варианты, вопросы, кнопки послаблений |
 | [BookingDialog.jsx](../frontend/src/BookingDialog.jsx) | демо-запись: выбор времени → удержание → подтверждение → номер |
@@ -64,7 +64,7 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
 | [PlaceDoctorList.jsx](../frontend/src/PlaceDoctorList.jsx), [placeList.js](../frontend/src/placeList.js) | окно маркера с сотнями врачей (поиск, группы) |
 | [SearchFilters.jsx](../frontend/src/SearchFilters.jsx) | панель фильтров |
 | [DmsPanel.jsx](../frontend/src/DmsPanel.jsx) | «Мой ДМС»: страховая и программа |
-| [AccountPanel.jsx](../frontend/src/AccountPanel.jsx), [hooks/useAccount.js](../frontend/src/hooks/useAccount.js) | личный кабинет на карте; плашка пользователя «Аватар · Имя · Профиль · Выйти» — в [App.jsx](../frontend/src/App.jsx) |
+| [AccountPanel.jsx](../frontend/src/AccountPanel.jsx), [hooks/useAccount.js](../frontend/src/hooks/useAccount.js) | личный кабинет: открывается кнопкой аккаунта в шапке левой панели; в шапке окна — «Профиль», «Админ-панель» (сотрудникам), «Выйти». Плашки пользователя в углу карты на компьютере нет, на телефоне там аватар |
 | [Root.jsx](../frontend/src/Root.jsx) | выбор приложения по пути: карта, `/profile`, `/login`, `/activate` или `/admin…` |
 | [auth/AuthFlow.jsx](../frontend/src/auth/AuthFlow.jsx) | вход в два шага (email → пароль), «Нет пароля или забыли его?», «Проверьте почту»; одна форма для `/login` и окна кабинета на карте |
 | [auth/LoginPage.jsx](../frontend/src/auth/LoginPage.jsx), [auth/ActivationPage.jsx](../frontend/src/auth/ActivationPage.jsx) | `/login?next=…` и `/activate#token=…` (токен убирается из адреса сразу) |

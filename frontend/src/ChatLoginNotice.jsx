@@ -9,7 +9,7 @@
 import { useEffect, useRef } from 'react';
 import { Bot, LogIn, X } from 'lucide-react';
 
-export default function ChatLoginNotice({ canSignIn, hasDemo, onSignIn, onClose, isMobile }) {
+export default function ChatLoginNotice({ canSignIn, onSignIn, onClose, isMobile }) {
   const primaryRef = useRef(null);
   const closeRef = useRef(onClose);
 
@@ -62,7 +62,7 @@ export default function ChatLoginNotice({ canSignIn, hasDemo, onSignIn, onClose,
         </h2>
         <p id="chat-login-text" className="mt-2 text-[13.5px] leading-5 text-slate-600 dark:text-slate-300">
           {canSignIn
-            ? `Войдите в личный кабинет, чтобы поговорить с ассистентом. Так переписка принадлежит только вам и не остаётся открытой на общем устройстве.${hasDemo ? ' Для знакомства подойдёт демо-аккаунт — без регистрации.' : ''}`
+            ? 'Войдите в личный кабинет, чтобы поговорить с ассистентом. Так переписка принадлежит только вам и не остаётся открытой на общем устройстве.'
             : 'Личный кабинет сейчас недоступен, поэтому ассистент тоже. Поиск врачей, карта и маршруты работают без входа.'}
         </p>
         <div className={`mt-4 flex gap-2 ${isMobile ? 'flex-col' : 'flex-row-reverse'}`}>

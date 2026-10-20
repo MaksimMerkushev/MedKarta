@@ -1,21 +1,20 @@
 /*
  * © 2026 МедКарта Казань. Все права защищены.
  *
- * Личный кабинет: вход, демо-аккаунты, программа ДМС, избранные врачи.
+ * Личный кабинет: вход по email и паролю, программа ДМС, избранные врачи.
  */
 import { useEffect, useRef, useState } from 'react';
+import { MotionConfig, motion as Motion } from 'motion/react';
 import {
   CalendarClock,
   CircleCheck,
   Heart,
   Info,
   Loader2,
-  LogIn,
   LogOut,
   MapPin,
   ShieldCheck,
   ShieldOff,
-  Sparkles,
   Trash2,
   X,
   LayoutDashboard,
@@ -44,19 +43,6 @@ const initialsOf = (name) =>
     .map((part) => part[0].toUpperCase())
     .join('') || '·';
 
-const AVATAR_GRADIENTS = [
-  'from-sky-500 to-indigo-500',
-  'from-violet-500 to-fuchsia-500',
-  'from-emerald-500 to-teal-500',
-  'from-amber-500 to-orange-500',
-];
-
-const Avatar = ({ name, index = 0, size = 'h-11 w-11 text-[15px]' }) => (
-  <span className={`flex shrink-0 items-center justify-center rounded-full bg-gradient-to-br font-bold text-white shadow-sm ${AVATAR_GRADIENTS[index % AVATAR_GRADIENTS.length]} ${size}`} aria-hidden="true">
-    {initialsOf(name)}
-  </span>
-);
-
 const Section = ({ icon, title, aside, children }) => {
   const Icon = icon;
   return (
@@ -76,23 +62,6 @@ const Section = ({ icon, title, aside, children }) => {
 /* ---------- Гость ---------- */
 
 const GuestView = ({ account, support, onBusy }) => {
-  const [error, setError] = useState('');
-  const [pending, setPending] = useState(null);
-
-  const run = async (key, action) => {
-    setError('');
-    setPending(key);
-    onBusy?.(true);
-    try {
-      await action();
-    } catch (failure) {
-      setError(failure?.message || 'Не получилось. Попробуйте ещё раз.');
-    } finally {
-      setPending(null);
-      onBusy?.(false);
-    }
-  };
-
   const { features } = account;
 
   if (!features.available) {
@@ -124,38 +93,6 @@ const GuestView = ({ account, support, onBusy }) => {
         />
       </section>
 
-      {features.demo && features.demoAccounts?.length > 0 && (
-        <Section icon={Sparkles} title="Демо-аккаунты">
-          <p className="mb-3 text-[12.5px] leading-5 text-slate-500 dark:text-slate-400">
-            Вымышленные пользователи с программами ДМС — чтобы посмотреть кабинет без аккаунта.
-          </p>
-          <ul className="grid gap-2">
-            {features.demoAccounts.map((demo, index) => (
-              <li key={demo.key}>
-                <button
-                  type="button"
-                  disabled={Boolean(pending)}
-                  onClick={() => run(demo.key, () => account.loginDemo(demo.key))}
-                  className="group flex w-full items-center gap-3 rounded-xl border border-slate-200 p-2.5 text-left transition hover:border-blue-300 hover:bg-blue-50/60 disabled:opacity-60 dark:border-slate-700 dark:hover:bg-slate-700/60"
-                  data-testid={`demo-login-${demo.key}`}
-                >
-                  <Avatar name={demo.displayName} index={index} size="h-9 w-9 text-[13px]" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[14px] font-semibold text-slate-800 dark:text-white">{demo.displayName}</span>
-                    <span className="block truncate text-[12px] text-slate-500 dark:text-slate-400">{demo.note}</span>
-                  </span>
-                  {pending === demo.key ? (
-                    <Loader2 size={16} className="animate-spin text-blue-600" aria-hidden="true" />
-                  ) : (
-                    <LogIn size={16} className="text-slate-300 transition group-hover:text-blue-600" aria-hidden="true" />
-                  )}
-                </button>
-              </li>
-            ))}
-          </ul>
-          {error && <p className="mt-2 rounded-xl bg-red-50 px-3 py-2 text-[12.5px] text-red-700 dark:bg-red-900/30 dark:text-red-200" role="alert">{error}</p>}
-        </Section>
-      )}
     </div>
   );
 };
@@ -178,7 +115,7 @@ const PlanCard = ({ plan, provider, today }) => {
         </span>
       </div>
       {plan.validTo && <div className="mt-2 text-[12px] text-slate-500 dark:text-slate-400">до {formatDate(plan.validTo)}</div>}
-      {provider?.pultPhone && <div className="mt-1 text-[12px] text-slate-500 dark:text-slate-400">Пульт: {provider.pultPhone}</div>}
+      {provider?.pultPhone && <div className="mt-1 text-[12px] text-slate-500 dark:text-slate-400">Телефон: {provider.pultPhone}</div>}
     </div>
   );
 };
@@ -306,52 +243,28 @@ const UserView = ({ account, insurance, today, planId, onSelectPlan, favorites, 
       {error && <p className="rounded-xl bg-red-50 px-3 py-2 text-[12.5px] text-red-700 dark:bg-red-900/30 dark:text-red-200" role="alert">{error}</p>}
 
       <div className="rounded-2xl bg-slate-50 p-4 text-[12px] leading-5 text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
-        <p className="mb-3 flex gap-2">
+        <p className={`flex gap-2 ${user.role === 'user' ? 'mb-3' : ''}`}>
           <Info size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
           <span>В аккаунте хранятся email, имя, роль, программа ДМС, избранное и история входов. Запросы к ассистенту и ваше местоположение не сохраняются.</span>
         </p>
-        <div className="flex flex-wrap gap-2">
-          <Link
-            to="/profile"
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
-            data-testid="account-profile-link"
-          >
-            <UserRound size={15} aria-hidden="true" />
-            Профиль
-          </Link>
-          {user.permissions?.includes('admin.access') && (
-            <Link
-              to="/admin"
-              className="inline-flex items-center gap-1.5 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-[13px] font-semibold text-violet-700 hover:bg-violet-100 dark:border-violet-800 dark:bg-violet-950/40 dark:text-violet-200"
-              data-testid="account-admin-link"
-            >
-              <LayoutDashboard size={15} aria-hidden="true" />
-              Админ-панель
-            </Link>
-          )}
-          <button
-            type="button"
-            onClick={() => run('logout', () => account.logout())}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
-          >
-            {pending === 'logout' ? <Loader2 size={15} className="animate-spin" aria-hidden="true" /> : <LogOut size={15} aria-hidden="true" />}
-            Выйти
-          </button>
-          {!user.isDemo && user.role === 'user' && (confirmDelete ? (
-            <button
-              type="button"
-              onClick={() => run('delete', () => account.removeAccount())}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-red-600 px-3 py-2 text-[13px] font-semibold text-white hover:bg-red-700"
-            >
-              <Trash2 size={15} aria-hidden="true" />
-              Точно удалить навсегда
-            </button>
-          ) : (
-            <button type="button" onClick={() => setConfirmDelete(true)} className="rounded-xl px-3 py-2 text-[13px] font-semibold text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30">
-              Удалить аккаунт
-            </button>
-          ))}
-        </div>
+        {user.role === 'user' && (
+          <div className="flex flex-wrap gap-2">
+            {confirmDelete ? (
+              <button
+                type="button"
+                onClick={() => run('delete', () => account.removeAccount())}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-red-600 px-3 py-2 text-[13px] font-semibold text-white hover:bg-red-700"
+              >
+                <Trash2 size={15} aria-hidden="true" />
+                Точно удалить навсегда
+              </button>
+            ) : (
+              <button type="button" onClick={() => setConfirmDelete(true)} className="rounded-xl px-3 py-2 text-[13px] font-semibold text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30">
+                Удалить аккаунт
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -371,18 +284,28 @@ export default function AccountPanel({ account, insurance, today, planId, onSele
 
   const { user, status } = account;
 
+  // Кабинет открывается из кнопки в левой панели: фон проявляется, окно поднимается (на телефоне — выезжает снизу).
   return (
-    <div
+    <MotionConfig reducedMotion="user">
+    <Motion.div
       className={`fixed inset-0 z-[1200] flex bg-slate-900/40 backdrop-blur-[2px] ${isMobile ? 'items-end' : 'items-center justify-center p-4'}`}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !busy) onClose();
       }}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0, transition: { duration: 0.18 } }}
+      transition={{ duration: 0.2 }}
     >
-      <div
+      <Motion.div
         role="dialog"
         aria-modal="true"
         aria-label="Личный кабинет"
         className={`flex w-full flex-col overflow-hidden bg-slate-50 shadow-2xl dark:bg-slate-900 ${isMobile ? 'max-h-[92vh] rounded-t-3xl' : 'max-h-[88vh] max-w-[440px] rounded-3xl'}`}
+        initial={isMobile ? { y: '100%' } : { opacity: 0, y: 16, scale: 0.96 }}
+        animate={isMobile ? { y: 0 } : { opacity: 1, y: 0, scale: 1 }}
+        exit={isMobile ? { y: '100%', transition: { duration: 0.22, ease: 'easeIn' } } : { opacity: 0, y: 10, scale: 0.97, transition: { duration: 0.15, ease: 'easeIn' } }}
+        transition={isMobile ? { duration: 0.34, ease: [0.32, 0.72, 0, 1] } : { type: 'spring', stiffness: 420, damping: 34 }}
       >
         <header className="relative shrink-0 bg-gradient-to-br from-blue-600 via-indigo-600 to-violet-600 px-5 pb-5 pt-4 text-white">
           <button
@@ -405,11 +328,7 @@ export default function AccountPanel({ account, insurance, today, planId, onSele
               <div className="min-w-0">
                 <h2 className="truncate text-[19px] font-extrabold leading-tight">{user.displayName}</h2>
                 <div className="truncate text-[12.5px] text-white/75">{user.email}</div>
-                {user.isDemo ? (
-                  <span className="mt-1 inline-block rounded-full bg-white/20 px-2 py-0.5 text-[10.5px] font-bold uppercase tracking-wide">Демо-аккаунт</span>
-                ) : (
-                  <span className="mt-1 inline-block rounded-full bg-white/20 px-2 py-0.5 text-[10.5px] font-bold uppercase tracking-wide">{user.roleLabel}</span>
-                )}
+                <span className="mt-1 inline-block rounded-full bg-white/20 px-2 py-0.5 text-[10.5px] font-bold uppercase tracking-wide">{user.roleLabel}</span>
               </div>
             </div>
           ) : (
@@ -417,6 +336,38 @@ export default function AccountPanel({ account, insurance, today, planId, onSele
               <h2 className="text-[21px] font-extrabold leading-tight">Личный кабинет</h2>
               <p className="mt-1 text-[13px] leading-5 text-white/80">{intro || 'Программа ДМС и избранные врачи — с вами на любом устройстве.'}</p>
             </div>
+          )}
+          {user && (
+            /* Всё, что раньше было в правом верхнем углу карты: профиль, админ-панель, выход. */
+            <nav className="mt-4 flex flex-wrap gap-2" aria-label="Аккаунт">
+              <Link to="/profile" className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-white/15 px-3 text-[13px] font-semibold text-white ring-1 ring-inset ring-white/25 transition hover:bg-white/25" data-testid="account-profile-link">
+                <UserRound size={15} aria-hidden="true" />
+                Профиль
+              </Link>
+              {user.permissions?.includes('admin.access') && (
+                <Link to="/admin" className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-white px-3 text-[13px] font-semibold text-violet-700 shadow-sm transition hover:bg-violet-50" data-testid="account-admin-link">
+                  <LayoutDashboard size={15} aria-hidden="true" />
+                  Админ-панель
+                </Link>
+              )}
+              <button
+                type="button"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    await account.logout();
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+                className="inline-flex h-9 items-center gap-1.5 rounded-xl px-3 text-[13px] font-semibold text-white/90 transition hover:bg-white/15 hover:text-white disabled:opacity-60"
+                data-testid="account-logout"
+              >
+                {busy ? <Loader2 size={15} className="animate-spin" aria-hidden="true" /> : <LogOut size={15} aria-hidden="true" />}
+                Выйти
+              </button>
+            </nav>
           )}
         </header>
 
@@ -439,7 +390,8 @@ export default function AccountPanel({ account, insurance, today, planId, onSele
             <GuestView account={account} support={support} onBusy={setBusy} />
           )}
         </div>
-      </div>
-    </div>
+      </Motion.div>
+    </Motion.div>
+    </MotionConfig>
   );
 }

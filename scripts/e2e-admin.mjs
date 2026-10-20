@@ -154,19 +154,23 @@ try {
   const tab = (page, label) => page.click(`[role=tab]:has-text("${label}")`);
 
   console.log('Сценарии:');
+  // На компьютере аккаунт — в левой панели (кнопка в шапке), правый верхний угол карты свободен.
+  const accountDialog = '[role=dialog][aria-label="Личный кабинет"]';
   await step('1–3. Открыть МедКарту, войти администратором, увидеть имя и роль', async () => {
     await admin.goto(BASE, { waitUntil: 'domcontentloaded' });
-    await admin.click('[data-testid=sign-in-button]');
+    await admin.click('[data-testid=account-button]');
     await signIn(admin, ROOT_EMAIL, ROOT_PASSWORD);
-    await admin.waitForSelector('[data-testid=user-chip-name]');
-    await admin.keyboard.press('Escape');
-    expect((await admin.textContent('[data-testid=user-chip-name]')).includes('Максим'), 'нет имени в шапке');
-    expect((await admin.textContent('[data-testid=user-chip]')).includes('Суперадминистратор'), 'нет роли в шапке');
+    await admin.waitForSelector('[data-testid=account-admin-link]');
+    const header = await admin.textContent(`${accountDialog} header`);
+    expect(header.includes('Максим'), 'нет имени в кабинете');
+    expect(header.includes('Суперадминистратор'), 'нет роли в кабинете');
+    expect(!(await admin.$('[data-testid=user-chip]')), 'на компьютере в углу карты осталась плашка аккаунта');
+    expect((await admin.getAttribute('[data-testid=account-button]', 'aria-label')).includes('Максим'), 'кнопка аккаунта не знает, кто вошёл');
     await shot(admin, '01-map-signed-in');
   });
 
   await step('4–5. Открыть /admin и увидеть дашборд из базы', async () => {
-    await admin.click('[data-testid=user-chip-admin]');
+    await admin.click('[data-testid=account-admin-link]');
     await admin.waitForSelector('[data-testid=tile-total]');
     const total = await admin.textContent('[data-testid=tile-total]');
     expect(/4/.test(total), `всего пользователей: ${total}`);
@@ -304,9 +308,10 @@ try {
   await step('16–17. Активировать аккаунт обычного пользователя и изменить профиль', async () => {
     await activate(olga, olgaLink, 'Ольга-пароль-2026');
     await olga.waitForURL((url) => url.pathname === '/');
-    await olga.waitForSelector('[data-testid=user-chip-name] >> text=Ольга Петрова');
-    expect(!(await olga.$('[data-testid=user-chip-admin]')), 'обычному пользователю видна админ-панель');
-    await olga.click('[data-testid=user-chip-profile]');
+    await olga.click('[data-testid=account-button]');
+    await olga.waitForSelector(`${accountDialog} header >> text=Ольга Петрова`);
+    expect(!(await olga.$('[data-testid=account-admin-link]')), 'обычному пользователю видна админ-панель');
+    await olga.click('[data-testid=account-profile-link]');
     await olga.waitForSelector('[data-testid=profile-name]');
     await olga.fill('[data-testid=profile-last-name]', 'Петрова-Смирнова');
     await olga.click('[data-testid=profile-save]');
@@ -341,7 +346,7 @@ try {
     expect(status === 404, `регистрация ответила ${status}`);
     const guest = await browser.newPage();
     await guest.goto(BASE, { waitUntil: 'domcontentloaded' });
-    await guest.click('[data-testid=sign-in-button]');
+    await guest.click('[data-testid=account-button]');
     await guest.waitForSelector('[data-testid=login-form]');
     expect(!(await guest.$('text=Создать аккаунт')), 'в интерфейсе есть регистрация');
     await guest.close();

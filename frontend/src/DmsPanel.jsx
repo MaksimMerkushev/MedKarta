@@ -97,7 +97,7 @@ export default function DmsPanel({ insurance, planId, today, onSave, onClose, on
               onClick={() => onCallPult?.()}
               className="inline-flex items-center gap-1.5 font-semibold text-emerald-700 underline-offset-2 hover:underline dark:text-emerald-300"
             >
-              <Phone size={13} aria-hidden="true" /> Пульт {provider.name}: {provider.pultPhone}
+              <Phone size={13} aria-hidden="true" /> Телефон {provider.name}: {provider.pultPhone}
             </a>
           )}
           {draftPlan.sourceDoc && <p className="text-slate-400 dark:text-slate-500">Источник: {draftPlan.sourceDoc}</p>}

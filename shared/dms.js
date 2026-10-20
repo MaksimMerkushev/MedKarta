@@ -17,7 +17,7 @@ export const ACCESS_MODES = Object.freeze(['direct', 'via_pult', 'referral_requi
 
 export const ACCESS_LABELS = Object.freeze({
   direct: 'прямое обращение с полисом',
-  via_pult: 'запись через пульт страховой',
+  via_pult: 'запись через страховую по телефону',
   referral_required: 'по направлению терапевта или педиатра',
   approval_required: 'нужно согласование со страховой',
   excluded: 'не входит в программу',
