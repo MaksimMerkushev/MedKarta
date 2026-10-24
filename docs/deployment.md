@@ -273,9 +273,11 @@ sudo ufw enable                 # порт 3001 снаружи закрыт: Nod
 - Раз в сутки копируйте на другую машину: `.env`, `data/doctors.full.js`,
   `data/graph/`, `data/collected/`, `var/analytics/` и базу кабинета.
   Без копии `.env` и полной базы восстановление после потери VPS займёт дни.
-- База личного кабинета — `var/accounts/medkarta.sqlite`. Копия без остановки
-  сервиса: `sqlite3 var/accounts/medkarta.sqlite ".backup '/backup/accounts-$(date +%F).sqlite'"`.
+- База аккаунтов — `var/accounts/medkarta.sqlite`. Копия без остановки
+  сервиса: `sudo -u medkarta npm run accounts -- backup --out /backup/accounts-$(date +%F).sqlite`.
   Каталог `var/` уже открыт на запись в unit-файле (`ReadWritePaths`).
+  Первый выпуск с админ-панелью (миграция схемы 3, главный администратор) —
+  по порядку из [15-deployment.md](15-deployment.md#выпуск-с-аккаунтами-и-админ-панелью).
 
 ### 6. Обновление
 

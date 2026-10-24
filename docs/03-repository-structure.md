@@ -31,24 +31,26 @@
 
 | Каталог | Файлов | Строк | Назначение |
 |---|---:|---:|---|
-| [api/](../backend/api/chat.js) | 7 | 1 357 | HTTP-обработчики: `chat`, `route`, `travelTimes`, `events`, `config`, `account`, `demoBooking` |
-| [http/](../backend/http/request.js) | 3 | 526 | чтение тела и Origin, лимиты частоты и бюджеты CPU, заголовки безопасности |
+| [api/](../backend/api/chat.js) | 14 | 2 408 | HTTP-обработчики: `chat` (+ `chatAccess`), `route`, `travelTimes`, `events`, `config`, `account`, `activation` (приглашения, «нет пароля»), `me`, `admin`, `demoBooking`; общее для аккаунтов — `accountContext`, `accountHttp`, `systemInfo` |
+| [http/](../backend/http/request.js) | 4 | 514 | чтение тела и Origin, лимиты частоты и бюджеты CPU, заголовки безопасности, таблица маршрутов с параметрами |
 | [privacy/](../backend/privacy/gateway.js) | 15 | 7 358 | Privacy Gateway: нормализация, детекторы, морфология, entity linking, классификатор жалоб, закрытый словарь, условия записи |
 | [planner/](../backend/planner/client.js) | 6 | 1 669 | схема плана, системный промпт, клиент модели, прокси-транспорт, валидатор, локальный планировщик |
 | [executor/](../backend/executor/actions.js) | 5 | 1 129 | Policy Engine, исполнение плана, доступ к справочнику, выбор по времени в пути, шаблоны ответа |
 | [routing/](../backend/routing/engine.js) | 6 | 2 028 | формат графа, загрузка и привязка, A* и «один ко многим», разбор OSM, покрытие |
 | [demo/](../backend/demo/search.js) | 8 | 2 407 | генератор демо-набора, строгий подбор, хранилище записи, мост из чата, флаги, время |
-| [accounts/](../backend/accounts/service.js) | 3 | 614 | кабинет: пароли, сервис, хранилище SQLite |
+| [accounts/](../backend/accounts/service.js) | 11 | 3 631 | аккаунты: пароли, роли и разрешения, сервис входа и профиля, сервис админ-панели, приглашения и ссылки для входа, доставка ссылок, настройки, аватары, первый администратор, хранилище SQLite |
+| [mail/](../backend/mail/smtp.js) | 1 | 295 | SMTP-клиент без зависимостей: TLS/STARTTLS, AUTH, письмо UTF-8 |
 | [analytics/](../backend/analytics/eventStore.js) | 2 | 420 | журнал событий, отчёт по поискам |
-| [observability/](../backend/observability/safeLogger.js) | 2 | 230 | журнал по белому списку, метрики |
+| [observability/](../backend/observability/safeLogger.js) | 3 | 305 | журнал по белому списку, метрики, счётчики запросов для админ-панели |
 | [storage/](../backend/storage/tokenVault.js) | 1 | 266 | Token Vault |
 | [pipeline.js](../backend/pipeline.js), [server.js](../backend/server.js) | 2 | | сборка конвейера ассистента; HTTP-сервер |
 
 ## frontend/ — интерфейс
 
-35 файлов в `src/`, около 9,2 тыс. строк; из них
-[App.jsx](../frontend/src/App.jsx) — 4 630 строк (главный компонент: карта,
-список, фильтры, маршрут, состояние в URL). Подробно —
+61 файл в `src/`, около 14,6 тыс. строк; из них
+[App.jsx](../frontend/src/App.jsx) — 4 734 строки (главный компонент: карта,
+список, фильтры, маршрут, состояние в URL). Профиль — `profile/`,
+админ-панель — `admin/`, вход и приглашения — `auth/`, общие компоненты — `ui/`. Подробно —
 [04-frontend.md](04-frontend.md).
 
 ## shared/ — общий код
@@ -64,6 +66,7 @@
 | [privateCatalog.js](../shared/privateCatalog.js) | проверка и разворачивание справочника частных клиник |
 | [analytics.js](../shared/analytics.js) | закрытый словарь событий аналитики |
 | [translit.js](../shared/translit.js) | транслитерация |
+| [passwordPolicy.js](../shared/passwordPolicy.js) | правила пароля — для сервера и подсказок в интерфейсе |
 
 ## data/ — данные
 
@@ -83,7 +86,7 @@
 
 ## tests/, tools/, scripts/
 
-- [tests/](../tests/helpers.js) — 32 файла `*.test.js`, фикстуры
+- [tests/](../tests/helpers.js) — 36 файлов `*.test.js`, фикстуры
   (`fixtures/catalog.js`, `fixtures/roadGraph.js`, `legacy-demo/`, `sites/`).
   Подробно — [16-testing.md](16-testing.md).
 - [tools/data/](../tools/data/collector.js) — сборщик: загрузка с потолками,
@@ -91,7 +94,9 @@
 - [tools/privacy-eval/](../tools/privacy-eval/evaluate.js) — генератор
   размеченного набора и подсчёт утечек.
 - [scripts/](../scripts/build-road-graph.mjs) — точки входа `npm run …`
-  (таблица — [14-configuration.md](14-configuration.md)).
+  (таблица — [14-configuration.md](14-configuration.md)), в том числе
+  [accounts.mjs](../scripts/accounts.mjs) — управление аккаунтами с сервера и
+  [e2e-admin.mjs](../scripts/e2e-admin.mjs) — сквозная проверка в браузере.
 
 ## Файлы вне git
 

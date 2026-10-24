@@ -2,7 +2,8 @@
  * © 2026 МедКарта Казань. Все права защищены.
  * Этот код является интеллектуальной собственностью автора.
  */
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { AnimatePresence, MotionConfig, motion as Motion, useReducedMotion } from 'motion/react';
 import { AttributionControl, MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import MarkerClusterGroup from 'react-leaflet-cluster';
 import L from 'leaflet';
@@ -49,6 +50,10 @@ import {
   ShieldPlus,
   FlaskConical,
   CircleUserRound,
+  LayoutDashboard,
+  LogIn,
+  LogOut,
+  Wrench,
 } from 'lucide-react';
 import { doctorsData } from '@data/doctors.legacy.js';
 import { verifiedDoctors } from '@data/doctors';
@@ -67,7 +72,11 @@ import { fetchServerConfig, loadDemoData, readDemoPreference, setDemoPreference 
 import MyBookingsPanel from './MyBookingsPanel';
 import PlaceDetailsModal from './PlaceDetailsModal';
 import DemoDoctorSchedule from './DemoDoctorSchedule';
-import { readMyBookings, toStoredBooking, writeMyBookings } from './services/demoBooking';
+import { fetchAccountBookings, isUpcomingBooking, readMyBookings, toStoredBooking, writeMyBookings } from './services/demoBooking';
+import { resetAssistantSession } from './services/ai';
+import { ForcedPasswordChange } from './ui/auth';
+import { Avatar } from './ui/kit';
+import { Link } from './ui/router';
 import { coverageBadge, coverageFor, findPlan, findProvider } from '@shared/dms.js';
 import { track } from './services/analytics';
 import { buildExternalRouteUrl, EXTERNAL_MODE_BY_TRAVEL_MODE } from './externalMaps';
@@ -83,8 +92,14 @@ import { isBoolean, isPlanIdOrNull, isStringIdArray, useLocalStorageState } from
 import { useAccount } from './hooks/useAccount';
 
 // Помощник грузится отдельным чанком: большинство сессий открывают ради карты, а не чата.
-const AIAssistant = lazy(() => import('./AIAssistant'));
+const loadAssistant = () => import('./AIAssistant');
+const AIAssistant = lazy(loadAssistant);
+// Повторный вызов import() возвращает тот же модуль — загрузка одна.
+const preloadAssistant = () => {
+  loadAssistant().catch(() => {});
+};
 const AccountPanel = lazy(() => import('./AccountPanel'));
+const ChatLoginNotice = lazy(() => import('./ChatLoginNotice'));
 const BookingDialog = lazy(() => import('./BookingDialog'));
 
 delete L.Icon.Default.prototype._getIconUrl;
@@ -154,9 +169,9 @@ const sortRu = (left, right) => String(left).localeCompare(String(right), 'ru');
 const uniqueSorted = (values) => [...new Set(values.filter(Boolean))].sort(sortRu);
 
 const TRAVEL_MODE_OPTIONS = [
-  { id: 'driving', icon: Car, label: 'На автомобиле' },
-  { id: 'foot', icon: Footprints, label: 'Пешком' },
-  { id: 'bike', icon: Bike, label: 'На велосипеде' },
+  { id: 'driving', icon: Car, label: 'На автомобиле', short: 'Авто' },
+  { id: 'foot', icon: Footprints, label: 'Пешком', short: 'Пешком' },
+  { id: 'bike', icon: Bike, label: 'На велосипеде', short: 'Вело' },
 ];
 
 const blueArrowIcon = createBeautifulArrow('#3b82f6');
@@ -913,7 +928,7 @@ const EMPTY_LIST = Object.freeze([]);
  * booking — симуляция записи включена на сервере; publicClinics — показывать
  * государственные учреждения (в демо по умолчанию скрыты, данные не удаляются).
  */
-const EMPTY_DEMO = Object.freeze({ enabled: false, items: EMPTY_LIST, insurance: null, booking: false, publicClinics: true });
+const EMPTY_DEMO = Object.freeze({ enabled: false, items: EMPTY_LIST, insurance: null, booking: false, publicClinics: true, demoOnly: false });
 const PUBLIC_OWNERSHIP = 'Государственная';
 
 /** Варианты фильтра «не дольше N минут в пути». */
@@ -1034,7 +1049,7 @@ const formatDistance = (meters) => {
     return `${Math.round(meters)} м`;
   }
 
-  return `${(meters / 1000).toFixed(1)} км`;
+  return `${(meters / 1000).toLocaleString('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} км`;
 };
 
 const formatTime = (seconds) => {
@@ -1047,6 +1062,150 @@ const formatTime = (seconds) => {
   const mins = minutes % 60;
   return `${hours} ч ${mins} мин`;
 };
+
+const stopsWord = (count) => (count % 10 === 1 && count % 100 !== 11 ? 'точка' : count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14) ? 'точки' : 'точек');
+
+/**
+ * Маршрут одной строкой: время и расстояние, развернуть подробности, сбросить.
+ * Подробное окно (точки, вид транспорта, Яндекс Карты и 2ГИС) — по нажатию.
+ */
+function RoutePill({ count, routeData, expanded, onToggle, onClear, className = '', bare = false }) {
+  const status = !routeData ? 'loading' : routeData.error ? 'error' : 'ready';
+  return (
+    <div className={`flex items-center p-1 ${bare ? '' : 'rounded-2xl border border-slate-200 bg-white/95 shadow-lg backdrop-blur dark:border-slate-700 dark:bg-slate-800/95'} ${className}`} data-testid="route-pill">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        title={expanded ? 'Свернуть маршрут' : 'Подробнее о маршруте'}
+        className="flex min-w-0 flex-1 items-center gap-2 rounded-xl py-0.5 pl-1 pr-1.5 text-left hover:bg-slate-100 dark:hover:bg-slate-700"
+        data-testid="route-pill-toggle"
+      >
+        <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full bg-blue-600 text-white">
+          <Navigation size={14} aria-hidden="true" />
+        </span>
+        <span className="min-w-0 leading-tight">
+          <span className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+            Маршрут{count > 1 ? ` · ${count} ${stopsWord(count)}` : ''}
+          </span>
+          {status === 'ready' && (
+            <span className="block whitespace-nowrap text-[13px] font-bold text-slate-800 dark:text-white">
+              {formatTime(routeData.time)} <span className="font-medium text-slate-500 dark:text-slate-400">· {formatDistance(routeData.distance)}</span>
+            </span>
+          )}
+          {status === 'error' && <span className="block whitespace-nowrap text-[13px] font-semibold text-red-600 dark:text-red-400">Не построен — подробнее</span>}
+          {status === 'loading' && (
+            <span className="flex items-center gap-1 whitespace-nowrap text-[13px] font-medium text-slate-500 dark:text-slate-400">
+              <Loader2 size={12} className="animate-spin" aria-hidden="true" /> Строю…
+            </span>
+          )}
+        </span>
+        {expanded ? <ChevronUp size={15} className="shrink-0 text-slate-400" aria-hidden="true" /> : <ChevronDown size={15} className="shrink-0 text-slate-400" aria-hidden="true" />}
+      </button>
+      <button
+        type="button"
+        onClick={onClear}
+        aria-label="Сбросить маршрут"
+        title="Сбросить маршрут"
+        className="ml-0.5 shrink-0 rounded-xl p-2 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/30"
+        data-testid="route-pill-clear"
+      >
+        <X size={15} aria-hidden="true" />
+      </button>
+    </div>
+  );
+}
+
+/*
+ * Маршрут на компьютере и планшете: строка «время · расстояние» в правом
+ * верхнем углу раскрывается в компактную карточку под ней — вид транспорта,
+ * точки, ссылки в Яндекс Карты и 2ГИС, «Начать маршрут». Карточка растёт из
+ * строки (ширина и высота анимируются), а не появляется отдельным окном.
+ */
+const ROUTE_DOCK_WIDTH = 312;
+// Окно ассистента не ниже этого (шапка, переписка и поле ввода), отступ между окнами и снизу (над кнопками карты).
+const AI_MIN_HEIGHT = 340;
+const FLOAT_GAP = 12;
+const AI_BOTTOM_OFFSET = 80;
+const DOCK_SPRING = { type: 'spring', stiffness: 420, damping: 38, mass: 0.9 };
+
+function RouteDock({ dockRef, count, routeData, expanded, onToggle, onClear, travelMode, onTravelMode, routeTargets, onRetry, children }) {
+  const reduce = useReducedMotion();
+  const transition = reduce ? { duration: 0 } : DOCK_SPRING;
+  const ready = routeData && !routeData.error;
+  return (
+    <Motion.div
+      ref={dockRef}
+      initial={{ opacity: 0, y: -10, scale: 0.96 }}
+      animate={{ opacity: 1, y: 0, scale: 1, width: expanded ? ROUTE_DOCK_WIDTH : 'auto' }}
+      exit={{ opacity: 0, y: -10, scale: 0.96, transition: { duration: 0.15 } }}
+      transition={transition}
+      style={{ transformOrigin: 'top right' }}
+      className="absolute right-6 top-6 z-[1001] max-w-[calc(100%-48px)] overflow-hidden rounded-2xl border border-slate-200 bg-white/95 shadow-lg backdrop-blur dark:border-slate-700 dark:bg-slate-800/95"
+      data-testid="route-dock"
+    >
+      <RoutePill bare count={count} routeData={routeData} expanded={expanded} onToggle={onToggle} onClear={onClear} />
+      <AnimatePresence initial={false}>
+        {expanded && (
+          <Motion.div
+            key="route-panel"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={reduce ? { duration: 0 } : { height: DOCK_SPRING, opacity: { duration: 0.18 } }}
+            className="overflow-hidden"
+            data-testid="route-panel"
+          >
+            <div className="space-y-2.5 border-t border-slate-100 px-3 pb-3 pt-2.5 dark:border-slate-700" style={{ width: ROUTE_DOCK_WIDTH - 2 }}>
+              {/* Вид транспорта: выбранный подсвечивается «пилюлей», которая переезжает к нажатому. */}
+              <div className="grid grid-cols-3 gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-900/60" role="group" aria-label="Как добираться">
+                {TRAVEL_MODE_OPTIONS.map((mode) => {
+                  const active = travelMode === mode.id;
+                  return (
+                    <button
+                      key={mode.id}
+                      type="button"
+                      aria-label={mode.label}
+                      aria-pressed={active}
+                      title={mode.label}
+                      onClick={() => onTravelMode(mode.id)}
+                      className={`relative flex h-8 items-center justify-center gap-1.5 rounded-lg text-[12px] font-semibold transition-colors ${active ? 'text-blue-700 dark:text-blue-300' : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100'}`}
+                    >
+                      {active && (
+                        <Motion.span
+                          layoutId="route-mode-indicator"
+                          transition={reduce ? { duration: 0 } : { type: 'spring', stiffness: 520, damping: 40 }}
+                          className="absolute inset-0 rounded-lg bg-white shadow-sm dark:bg-slate-700"
+                          aria-hidden="true"
+                        />
+                      )}
+                      <mode.icon size={15} className="relative" aria-hidden="true" />
+                      <span className="relative">{mode.short}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {routeData?.error ? (
+                <div className="rounded-xl bg-red-50/70 px-3 py-2 text-center dark:bg-red-950/30">
+                  <RouteErrorNotice routeData={routeData} routeTargets={routeTargets} fallback="Маршрут для этого транспорта не найден" onRetry={onRetry} />
+                </div>
+              ) : (
+                <p className="flex items-center gap-1.5 px-1 text-[12px] text-slate-500 dark:text-slate-400" aria-live="polite">
+                  {ready ? (
+                    <>{formatDistance(routeData.distance)} · без учёта пробок</>
+                  ) : (
+                    <><Loader2 size={12} className="animate-spin" aria-hidden="true" />Строю маршрут…</>
+                  )}
+                </p>
+              )}
+              {children}
+            </div>
+          </Motion.div>
+        )}
+      </AnimatePresence>
+    </Motion.div>
+  );
+}
 
 export default function App() {
   const [userLocation, setUserLocation] = useState(defaultLocation);
@@ -1119,6 +1278,8 @@ export default function App() {
   const favoritesRef = useRef(favorites);
   const dmsPlanIdRef = useRef(dmsPlanId);
   const accountRef = useRef(null);
+  // Сброс данных, которые не должны переходить к другому владельцу (задаётся ниже).
+  const accountSwitchRef = useRef(null);
   useEffect(() => {
     favoritesRef.current = favorites;
   }, [favorites]);
@@ -1127,6 +1288,7 @@ export default function App() {
   }, [dmsPlanId]);
 
   const handleSignedIn = useCallback((payload, origin) => {
+    if (origin === 'login') accountSwitchRef.current?.();
     const remote = Array.isArray(payload.favorites) ? payload.favorites : [];
     const remotePlan = payload.user?.dmsPlanId || null;
     const local = favoritesRef.current;
@@ -1181,6 +1343,7 @@ export default function App() {
 
   const handleSignedOut = useCallback((reason) => {
     // На общем устройстве после выхода не должно оставаться чужих данных.
+    accountSwitchRef.current?.();
     const restored = releaseAccountData();
     if (reason === 'expired') {
       showToast('Сессия кабинета закончилась — войдите снова. Избранное и ДМС сохранены в аккаунте.', 'warning');
@@ -1210,14 +1373,90 @@ export default function App() {
   const [isDarkMode, setIsDarkMode] = useLocalStorageState(DARK_MODE_STORAGE_KEY, PREFERS_DARK, isBoolean);
 
   const [isAIAssistantOpen, setIsAIAssistantOpen] = useState(false);
+  // Какое плавающее окно справа открыли последним — ассистент или маршрут: оно и остаётся, если вдвоём им тесно.
+  const lastFloatingRef = useRef(null);
   // После первого открытия ассистент остаётся смонтированным и прячется, а не
   // уничтожается: иначе каждое закрытие стирает переписку.
   const [isAIAssistantMounted, setIsAIAssistantMounted] = useState(false);
+  /*
+   * Ассистент — только для вошедших в кабинет (сервер проверяет то же,
+   * backend/api/chatAccess.js). Гость вместо чата видит предупреждение с
+   * кнопкой входа; после входа из него чат открывается сам.
+   */
+  const [isChatNoticeOpen, setIsChatNoticeOpen] = useState(false);
+  // Выключен в настройках админ-панели (значение приходит из /api/config ниже).
+  const assistantDisabledRef = useRef(false);
+  const [chatAfterSignIn, setChatAfterSignIn] = useState(false);
+  const canUseAssistant = account.status === 'user' || account.features.chatRequiresAccount === false;
   const toggleAIAssistant = useCallback(() => {
+    if (isAIAssistantOpen) {
+      setIsAIAssistantOpen(false);
+      return;
+    }
+    if (assistantDisabledRef.current) {
+      showToast('Ассистент временно отключён администратором. Поиск и карта работают.', 'warning');
+      return;
+    }
+    if (!canUseAssistant) {
+      setIsChatNoticeOpen(true);
+      return;
+    }
+    lastFloatingRef.current = 'ai';
     setIsAIAssistantMounted(true);
-    setIsAIAssistantOpen((current) => !current);
+    setIsAIAssistantOpen(true);
+  }, [isAIAssistantOpen, canUseAssistant, showToast]);
+  const signInForAssistant = useCallback(() => {
+    setIsChatNoticeOpen(false);
+    setChatAfterSignIn(true);
+    setIsAccountOpen(true);
   }, []);
-  const [isRoutePanelCollapsed, setIsRoutePanelCollapsed] = useState(false);
+  const closeAccountPanel = useCallback(() => {
+    setIsAccountOpen(false);
+    setChatAfterSignIn(false);
+  }, []);
+  useEffect(() => {
+    if (account.status !== 'user' || !chatAfterSignIn) return;
+    setChatAfterSignIn(false);
+    setIsAccountOpen(false);
+    setIsAIAssistantMounted(true);
+    setIsAIAssistantOpen(true);
+  }, [account.status, chatAfterSignIn]);
+  // Ассистент ответил «нет входа»: сессия истекла или стёрта — выходим из кабинета и здесь.
+  const handleAssistantLoginRequired = useCallback(() => {
+    if (accountRef.current?.status === 'user') accountRef.current.expire?.();
+    setIsAIAssistantOpen(false);
+    setIsChatNoticeOpen(true);
+  }, []);
+  // Маршрут — компактной строкой; подробное окно открывается по нажатию.
+  const [isRoutePanelCollapsed, setIsRoutePanelCollapsed] = useState(true);
+  const toggleRoutePanel = useCallback(() => {
+    if (isRoutePanelCollapsed) lastFloatingRef.current = 'route';
+    setIsRoutePanelCollapsed((collapsed) => !collapsed);
+  }, [isRoutePanelCollapsed]);
+  /*
+   * Маршрут (сверху) и ассистент (снизу) делят правый край карты: окно
+   * ассистента ужимается до низа карточки маршрута. Если места меньше
+   * AI_MIN_HEIGHT, остаётся то окно, которое открыли последним: второе
+   * сворачивается (маршрут — в строку, переписка ассистента сохраняется).
+   */
+  const mainRef = useRef(null);
+  const routeDockRef = useRef(null);
+  const [floatingLayout, setFloatingLayout] = useState({ mainHeight: 0, dockBottom: 0 });
+  useEffect(() => {
+    const main = mainRef.current;
+    if (!main || typeof ResizeObserver === 'undefined') return undefined;
+    const measure = () => {
+      const dock = routeDockRef.current;
+      const mainBox = main.getBoundingClientRect();
+      const dockBottom = dock ? Math.round(dock.getBoundingClientRect().bottom - mainBox.top) : 0;
+      setFloatingLayout((current) => (current.mainHeight === Math.round(mainBox.height) && current.dockBottom === dockBottom ? current : { mainHeight: Math.round(mainBox.height), dockBottom }));
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(main);
+    if (routeDockRef.current) observer.observe(routeDockRef.current);
+    measure();
+    return () => observer.disconnect();
+  }, [routeTargets.length, isRoutePanelCollapsed]);
   /*
    * «Топ-3» под ответами ассистента: id реплики → подборка. Подборка — снимок
    * на момент ответа: если потом поменять фильтры, старый ответ не меняется.
@@ -1232,13 +1471,56 @@ export default function App() {
   const [bookingTarget, setBookingTarget] = useState(null);
   // Окно подробностей карточки: в списке — кратко, всё остальное — здесь.
   const [detailsId, setDetailsId] = useState(null);
-  const [myBookings, setMyBookings] = useState(() => readMyBookings());
+  // Записи кабинета хранит сервер, записи гостя — этот браузер (см. эффекты ниже).
+  const [myBookings, setMyBookings] = useState(EMPTY_LIST);
   const [bookingsRefresh, setBookingsRefresh] = useState(0);
   const [isMyBookingsOpen, setIsMyBookingsOpen] = useState(false);
+  // Значок считает только предстоящие подтверждённые: прошедшие и пропавшие после сброса демо — нет.
+  const upcomingBookings = myBookings.filter((item) => isUpcomingBooking(item)).length;
+  // Ключ окна ассистента: после входа или выхода переписка начинается заново.
+  const [assistantEpoch, setAssistantEpoch] = useState(0);
   const pendingPicksRef = useRef(null);
   const [picksTick, setPicksTick] = useState(0);
   const [buildRouteTrigger, setBuildRouteTrigger] = useState(false);
   const [targetStopsTrigger, setTargetStopsTrigger] = useState(null);
+
+  /*
+   * Вход и выход меняют владельца данных: переписка с ассистентом, подборки
+   * под ней, открытое окно записи и номер диалога для сервера не переходят
+   * к другому аккаунту или к гостю.
+   */
+  useEffect(() => {
+    accountSwitchRef.current = () => {
+      setIsAIAssistantOpen(false);
+      setIsChatNoticeOpen(false);
+      setAssistantPicks({});
+      setAssistantBookings({});
+      setAssistantEpoch((value) => value + 1);
+      setBookingTarget(null);
+      pendingPicksRef.current = null;
+      resetAssistantSession();
+    };
+  }, []);
+
+  // Чьи записи показывать: «user:<email>», «guest» или «loading» (пока неизвестно — никаких).
+  const bookingsOwner = account.status === 'user' ? `user:${account.user?.email || ''}` : account.status;
+  useEffect(() => {
+    if (bookingsOwner === 'guest') setMyBookings(readMyBookings());
+    else setMyBookings(EMPTY_LIST);
+  }, [bookingsOwner]);
+  useEffect(() => {
+    if (!bookingsOwner.startsWith('user:') || !demoState.booking) return undefined;
+    const controller = new AbortController();
+    fetchAccountBookings({ signal: controller.signal })
+      .then((payload) => {
+        if (controller.signal.aborted) return;
+        setMyBookings((payload?.bookings || []).map(toStoredBooking).filter(Boolean));
+      })
+      .catch(() => {
+        // Нет связи или сессия кончилась: список кабинета просто не обновился.
+      });
+    return () => controller.abort();
+  }, [bookingsOwner, bookingsRefresh, demoState.booking]);
 
   // Справочники в ref: handleApplyTriage не должен пересоздаваться на каждый
   // пересчёт списков, иначе AIAssistant перерисовывается впустую.
@@ -1433,6 +1715,17 @@ export default function App() {
   }, [setIsDarkMode]);
 
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768);
+  useLayoutEffect(() => {
+    if (isMobile || !isAIAssistantOpen || isRoutePanelCollapsed || routeTargets.length === 0) return;
+    const { mainHeight, dockBottom } = floatingLayout;
+    if (!mainHeight || !dockBottom || mainHeight - dockBottom - FLOAT_GAP - AI_BOTTOM_OFFSET >= AI_MIN_HEIGHT) return;
+    if (lastFloatingRef.current === 'route') {
+      setIsAIAssistantOpen(false);
+      showToast('Чат свёрнут, чтобы показать маршрут. Переписка сохранена — откройте ассистента снова.', 'info');
+    } else {
+      setIsRoutePanelCollapsed(true);
+    }
+  }, [isMobile, isAIAssistantOpen, isRoutePanelCollapsed, routeTargets.length, floatingLayout, showToast]);
   const [isTablet, setIsTablet] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 768 && window.innerWidth <= 1024);
 
   const sidebarRef = useRef(null);
@@ -1447,7 +1740,9 @@ export default function App() {
     // Реальная частная клиника из демо-набора заменяет свою карточку из OSM, а не дублирует её.
     const replacedByDemo = new Set(demoState.items.map((item) => item.osmId).filter(Boolean));
     const osmFacilities = replacedByDemo.size > 0 ? kazanFacilities.filter((item) => !replacedByDemo.has(item.id)) : kazanFacilities;
-    const all = [...verifiedDoctors, ...doctorsData, ...osmFacilities.map(withOsmSchedule), ...clinicsFacilities, ...COLLECTED_FACILITIES, ...demoState.items];
+    // «Только демо» (DEMO_ONLY на сервере): на карте только вымышленные клиники и врачи.
+    const all = demoState.demoOnly ? [...demoState.items]
+      : [...verifiedDoctors, ...doctorsData, ...osmFacilities.map(withOsmSchedule), ...clinicsFacilities, ...COLLECTED_FACILITIES, ...demoState.items];
     // Демо-режим: государственные учреждения скрыты из выдачи (флаг сервера PUBLIC_CLINICS).
     const base = demoState.enabled && !demoState.publicClinics ? all.filter((item) => item.ownership !== PUBLIC_OWNERSHIP) : all;
     const clinicAddressMap = new Map();
@@ -1503,7 +1798,7 @@ export default function App() {
         const hasCoords = typeof item.lat === 'number' && typeof item.lng === 'number';
         return Boolean(address) && !/уточняется/i.test(address) && hasCoords;
       });
-  }, [clinicsFacilities, demoState.items, demoState.enabled, demoState.publicClinics]);
+  }, [clinicsFacilities, demoState.items, demoState.enabled, demoState.publicClinics, demoState.demoOnly]);
 
   const activeOrigin = isManualOrigin && customOrigin ? customOrigin : userLocation;
   // Поле ввода обновляется мгновенно, тяжёлая фильтрация — с задержкой.
@@ -1757,17 +2052,27 @@ export default function App() {
 
   // --- Демо-режим и ДМС ---------------------------------------------------
 
+  // Публичные настройки из админ-панели (название, сообщение о работах, ассистент).
+  const [siteSettings, setSiteSettings] = useState(null);
+  const [maintenanceDismissed, setMaintenanceDismissed] = useState(false);
+  useEffect(() => {
+    assistantDisabledRef.current = siteSettings?.assistant === false;
+    if (siteSettings?.appName && siteSettings.appName !== 'МедКарта') document.title = `${siteSettings.appName} — врачи и клиники Казани`;
+  }, [siteSettings]);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const preference = readDemoPreference();
       const config = await fetchServerConfig();
-      const enabled = preference ?? config.demo;
+      if (!cancelled) setSiteSettings(config.settings);
+      // «Только демо» на сервере: выбор «без демо» из браузера не действует.
+      const enabled = config.demoOnly || (preference ?? config.demo);
       if (!enabled || cancelled) return;
       try {
-        const data = await loadDemoData();
+        const data = await loadDemoData({ fictionalOnly: config.demoOnly });
         // Запись и скрытие госучреждений — только если демо включено и на сервере.
-        if (!cancelled) setDemoState({ enabled: true, ...data, booking: config.demo && config.booking, publicClinics: !config.demo || config.publicClinics });
+        if (!cancelled) setDemoState({ enabled: true, ...data, booking: config.demo && config.booking, publicClinics: !config.demo || config.publicClinics, demoOnly: config.demoOnly });
       } catch {
         // Демо-набор необязателен: без него работает обычный справочник.
       }
@@ -2649,9 +2954,10 @@ export default function App() {
    */
   const bookingOrigin = isManualOrigin && customOrigin ? customOrigin : isLocationReady && !locationError ? userLocation : null;
 
+  // В браузере хранятся только записи гостя; список кабинета обновляется с сервера.
   const updateMyBookings = useCallback((next) => {
     setMyBookings(next);
-    writeMyBookings(next);
+    if (accountRef.current?.status !== 'user') writeMyBookings(next);
   }, []);
 
   const openBooking = useCallback((option, slot, patient = null) => {
@@ -2687,14 +2993,21 @@ export default function App() {
 
   const handleBooked = useCallback((booking) => {
     const stored = toStoredBooking(booking);
-    if (stored) updateMyBookings([stored, ...myBookings.filter((item) => item.number !== stored.number)]);
+    if (stored) {
+      // Запись без владельца (гость или сессия успела кончиться) — номер и код отмены остаются в браузере.
+      if (!booking.owned) writeMyBookings([stored, ...readMyBookings().filter((item) => item.number !== stored.number)]);
+      setMyBookings((current) => [stored, ...current.filter((item) => item.number !== stored.number)]);
+    }
     setBookingsRefresh((value) => value + 1);
-  }, [myBookings, updateMyBookings]);
+  }, []);
 
   const handleBookingCancelled = useCallback((booking) => {
-    updateMyBookings(myBookings.map((item) => (item.number === booking.number ? { ...item, status: 'CANCELLED' } : item)));
+    const markCancelled = (items) => items.map((item) => (item.number === booking.number ? { ...item, status: 'CANCELLED' } : item));
+    setMyBookings(markCancelled);
+    const local = readMyBookings();
+    if (local.some((item) => item.number === booking.number)) writeMyBookings(markCancelled(local));
     setBookingsRefresh((value) => value + 1);
-  }, [myBookings, updateMyBookings]);
+  }, []);
 
   /** Маршрут к клинике записи — тем же движком, что и обычный маршрут. */
   const routeToBooking = useCallback((booking) => {
@@ -2708,6 +3021,19 @@ export default function App() {
     handleRouteClick(doc);
     setIsRouteStarted(false);
     if (isMobile) setIsAIAssistantOpen(false);
+  }, [handleRouteClick, isMobile, showToast]);
+
+  // Маршрут к варианту подбора: по кнопке «Маршрут» или сам, если маршрут просили в чате.
+  const routeToOption = useCallback((option, { auto = false } = {}) => {
+    const itemId = option?.doctor?.id && option?.clinic?.branchId ? `${option.doctor.id}--${option.clinic.branchId}` : null;
+    const doc = itemId ? enrichedDoctorsRef.current.find((item) => item.id === itemId) : null;
+    if (!doc) {
+      if (!auto) showToast('Клиника этого варианта не найдена на карте.', 'warning');
+      return;
+    }
+    handleRouteClick(doc);
+    // Сам проложенный маршрут не закрывает чат: человек ещё выбирает время.
+    if (isMobile && !auto) setIsAIAssistantOpen(false);
   }, [handleRouteClick, isMobile, showToast]);
 
   const requestBookingOrigin = useCallback(() => {
@@ -2776,18 +3102,19 @@ export default function App() {
    * всегда — та же, от которой построен наш маршрут (геолокация или красный
    * маркер): иначе навигатор спрашивает «Откуда?» и маршрут расходится с нашим.
    */
-  const renderExternalRouteLinks = (targets, { doc = null, label = 'Как добраться:', className = '' } = {}) => {
+  const renderExternalRouteLinks = (targets, { doc = null, label = 'Как добраться:', className = '', compact = false } = {}) => {
     if (!targets || targets.length === 0) return null;
     const origin = activeOrigin;
     const mode = EXTERNAL_MODE_BY_TRAVEL_MODE[travelMode] || 'auto';
     const links = [
-      { provider: 'yandex', mode, text: 'Яндекс Карты' },
-      { provider: '2gis', mode, text: '2ГИС' },
+      { provider: 'yandex', mode, text: compact ? 'Яндекс' : 'Яндекс Карты', title: 'Открыть маршрут в Яндекс Картах' },
+      { provider: '2gis', mode, text: '2ГИС', title: 'Открыть маршрут в 2ГИС' },
       // Общественного транспорта в нашем движке нет — для него ведём в Яндекс.
-      { provider: 'yandex', mode: 'transit', text: 'На транспорте', icon: Bus },
+      { provider: 'yandex', mode: 'transit', text: compact ? 'Транспорт' : 'На транспорте', icon: Bus, title: 'Маршрут на общественном транспорте в Яндекс Картах' },
     ];
+    // Компактно (карточка маршрута): три равные кнопки в одну строку.
     return (
-      <div className={`flex flex-wrap items-center gap-1.5 text-xs ${className}`}>
+      <div className={compact ? `grid grid-cols-3 gap-1.5 text-[12px] ${className}` : `flex flex-wrap items-center gap-1.5 text-xs ${className}`}>
         {label && <span className="mr-0.5 text-slate-500 dark:text-slate-400">{label}</span>}
         {links.map((link) => {
           const href = buildExternalRouteUrl(link.provider, origin, targets, link.mode);
@@ -2798,12 +3125,13 @@ export default function App() {
               href={href}
               target="_blank"
               rel="noopener noreferrer"
+              title={link.title}
               onClick={() => trackExternalMap(link.provider, link.mode, targets, doc)}
-              className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 font-semibold text-slate-600 transition-colors hover:border-blue-300 hover:text-blue-700 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:text-blue-300"
+              className={`inline-flex items-center gap-1 border border-slate-200 bg-white font-semibold text-slate-600 transition-colors hover:border-blue-300 hover:text-blue-700 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:text-blue-300 ${compact ? 'h-8 justify-center rounded-lg px-1.5' : 'rounded-full px-2.5 py-1'}`}
             >
-              {link.icon && <link.icon size={12} aria-hidden="true" />}
-              {link.text}
-              <ExternalLink size={10} className="opacity-50" aria-hidden="true" />
+              {link.icon && !compact && <link.icon size={12} aria-hidden="true" />}
+              <span className="whitespace-nowrap">{link.text}</span>
+              <ExternalLink size={10} className="shrink-0 opacity-50" aria-hidden="true" />
             </a>
           );
         })}
@@ -2818,7 +3146,7 @@ export default function App() {
   const clearRoute = useCallback(() => {
     setRouteTargets([]);
     setRouteData(null);
-    setIsRoutePanelCollapsed(false);
+    setIsRoutePanelCollapsed(true);
     setIsRouteStarted(false);
   }, []);
 
@@ -3536,7 +3864,7 @@ export default function App() {
                 onClick={() => trackContact(doc, 'pult')}
                 className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-emerald-700"
               >
-                <Phone size={13} aria-hidden="true" /> Позвонить на пульт {dmsProvider.name}
+                <Phone size={13} aria-hidden="true" /> Позвонить в {dmsProvider.name}
               </a>
             )}
           </div>
@@ -3744,7 +4072,7 @@ export default function App() {
                 <div className="flex min-w-0 items-center gap-2">
                   <MapPin size={24} className="sidebar-title-pin shrink-0 text-blue-600 dark:text-blue-400" aria-hidden="true" />
                   <div className="min-w-0">
-                    <h1 className="sidebar-title truncate text-[23px] font-extrabold leading-none tracking-tight text-blue-600 dark:text-blue-400">МедКарта</h1>
+                    <h1 className="sidebar-title truncate text-[23px] font-extrabold leading-none tracking-tight text-blue-600 dark:text-blue-400">{siteSettings?.appName || 'МедКарта'}</h1>
                     <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Казань</p>
                   </div>
                 </div>
@@ -3785,14 +4113,14 @@ export default function App() {
                       type="button"
                       className="sidebar-icon-button relative"
                       onClick={() => setIsMyBookingsOpen((current) => !current)}
-                      aria-label={`Мои демо-записи: ${myBookings.filter((item) => item.status === 'CONFIRMED').length}`}
+                      aria-label={`Мои демо-записи: ${upcomingBookings}`}
                       aria-expanded={isMyBookingsOpen}
                       title="Мои демо-записи"
                       data-testid="my-bookings-button"
                     >
                       <CalendarCheck size={19} aria-hidden="true" />
-                      {myBookings.some((item) => item.status === 'CONFIRMED') && (
-                        <span className="absolute -right-0.5 -top-0.5 rounded-full bg-violet-600 px-1 text-[10px] leading-4 text-white">{myBookings.filter((item) => item.status === 'CONFIRMED').length}</span>
+                      {upcomingBookings > 0 && (
+                        <span className="absolute -right-0.5 -top-0.5 rounded-full bg-violet-600 px-1 text-[10px] leading-4 text-white">{upcomingBookings}</span>
                       )}
                     </button>
                   )}
@@ -3877,17 +4205,25 @@ export default function App() {
               {demoState.enabled && (
                 <div className="mb-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-100" role="note">
                   <FlaskConical size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
-                  <p>
-                    <b>Демо-режим.</b> Врачи, расписание, цены и ДМС с пометкой «Демо» вымышлены; клиники — вымышленные и реальные частные (данные OSM).
-                    {demoState.booking && ' Запись демонстрационная — в клиники ничего не уходит.'}
-                    {!demoState.publicClinics && ' Госклиники временно скрыты.'}{' '}
-                    <button type="button" onClick={disableDemo} className="font-semibold underline underline-offset-2">Выключить</button>
-                  </p>
+                  {demoState.demoOnly ? (
+                    <p data-testid="demo-only-note">
+                      <b>Демо-версия.</b> Все клиники, врачи, адреса, расписание, цены и программы ДМС вымышлены.
+                      {demoState.booking && ' Запись демонстрационная — никуда не отправляется.'}
+                    </p>
+                  ) : (
+                    <p>
+                      <b>Демо-режим.</b> Врачи, расписание, цены и ДМС с пометкой «Демо» вымышлены; клиники — вымышленные и реальные частные (данные OSM).
+                      {demoState.booking && ' Запись демонстрационная — в клиники ничего не уходит.'}
+                      {!demoState.publicClinics && ' Госклиники временно скрыты.'}{' '}
+                      <button type="button" onClick={disableDemo} className="font-semibold underline underline-offset-2">Выключить</button>
+                    </p>
+                  )}
                 </div>
               )}
               {demoState.booking && isMyBookingsOpen && (
                 <MyBookingsPanel
                   bookings={myBookings}
+                  inAccount={account.status === 'user'}
                   onChange={(next, info) => {
                     updateMyBookings(next);
                     if (info?.cancelled) setBookingsRefresh((value) => value + 1);
@@ -4076,33 +4412,16 @@ export default function App() {
       {/* Mobile bottom bar: route panel stacked above nav buttons */}
       {isMobile && !isMobileFiltersOpen && (
         <div className="fixed bottom-0 left-0 right-0 z-[999] flex flex-col">
-          {/* Collapsed route pill */}
+          {/* Маршрут одной строкой */}
           {routeTargets.length > 0 && isRoutePanelCollapsed && (
-            <div
-              className="mx-3 mb-2 cursor-pointer"
-              role="button"
-              tabIndex={0}
-              aria-label="Развернуть маршрут"
-              onClick={() => setIsRoutePanelCollapsed(false)}
-              onKeyDown={activateOnKey(() => setIsRoutePanelCollapsed(false))}
-            >
-              <div className="flex items-center gap-3 rounded-2xl bg-gradient-to-r from-blue-600 to-blue-500 px-4 py-3 shadow-[0_4px_20px_rgba(59,130,246,0.35)] transition-transform active:scale-[0.98] dark:from-blue-700 dark:to-blue-600">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/20">
-                  <Navigation size={18} className="text-white" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-[11px] font-bold uppercase tracking-wider text-blue-100">Smart-маршрут · {routeTargets.length} {routeTargets.length === 1 ? 'точка' : routeTargets.length < 5 ? 'точки' : 'точек'}</div>
-                  {routeData && !routeData.error ? (
-                    <div className="mt-0.5 text-[15px] font-extrabold text-white">{formatTime(routeData.time)} <span className="font-medium text-blue-200">· {formatDistance(routeData.distance)}</span></div>
-                  ) : routeData?.error ? (
-                    <div className="mt-0.5 truncate text-sm font-semibold text-red-100">Маршрут не построен — нажмите, чтобы узнать почему</div>
-                  ) : (
-                    <div className="mt-0.5 text-sm font-medium text-blue-200">Построение маршрута...</div>
-                  )}
-                </div>
-                <ChevronUp size={20} className="shrink-0 text-white/70" />
-              </div>
-            </div>
+            <RoutePill
+              className="mx-3 mb-2"
+              count={routeTargets.length}
+              routeData={routeData}
+              expanded={false}
+              onToggle={() => setIsRoutePanelCollapsed(false)}
+              onClear={clearRoute}
+            />
           )}
 
           {/* Expanded route panel */}
@@ -4111,7 +4430,7 @@ export default function App() {
               <div className="sticky top-0 z-10 border-b border-slate-100 bg-gradient-to-r from-blue-50 to-white px-4 py-3 dark:border-slate-700 dark:from-slate-700 dark:to-slate-800">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <div className="text-[11px] font-bold uppercase tracking-[0.22em] text-blue-600 dark:text-blue-400">Smart-Маршрут</div>
+                    <div className="text-[11px] font-bold uppercase tracking-[0.22em] text-blue-600 dark:text-blue-400">Маршрут</div>
                     <div className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-blue-100 px-1.5 text-[10px] font-bold text-blue-700 dark:bg-blue-900 dark:text-blue-300">{routeTargets.length}</div>
                   </div>
                   <button type="button" onClick={() => setIsRoutePanelCollapsed(true)} aria-label="Свернуть маршрут" className="rounded-lg p-1.5 text-slate-400 transition-colors active:bg-slate-200 dark:active:bg-slate-700">
@@ -4224,172 +4543,118 @@ export default function App() {
         </div>
       )}
 
-      <main className="relative flex-1 bg-slate-100 dark:bg-slate-900">
-        {!isMobile && routeTargets.length > 0 && isRoutePanelCollapsed && (
-          <div
-            className={`route-panel-slide-in absolute z-[1000] cursor-pointer ${isMobile ? 'left-3 right-3' : 'right-6 top-6'}`}
-            style={isMobile ? { bottom: 'calc(80px + env(safe-area-inset-bottom, 0px))' } : undefined}
-            role="button"
-            tabIndex={0}
-            aria-label="Развернуть маршрут"
-            onClick={() => setIsRoutePanelCollapsed(false)}
-            onKeyDown={activateOnKey(() => setIsRoutePanelCollapsed(false))}
-          >
-            <div className="flex items-center gap-3 rounded-2xl bg-gradient-to-r from-blue-600 to-blue-500 px-4 py-3 shadow-[0_4px_20px_rgba(59,130,246,0.35)] transition-transform active:scale-[0.98] dark:from-blue-700 dark:to-blue-600">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/20">
-                <Navigation size={18} className="text-white" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-[11px] font-bold uppercase tracking-wider text-blue-100">Smart-маршрут · {routeTargets.length} {routeTargets.length === 1 ? 'точка' : routeTargets.length < 5 ? 'точки' : 'точек'}</div>
-                {routeData && !routeData.error ? (
-                  <div className="mt-0.5 text-[15px] font-extrabold text-white">{formatTime(routeData.time)} <span className="font-medium text-blue-200">· {formatDistance(routeData.distance)}</span></div>
-                ) : routeData?.error ? (
-                  <div className="mt-0.5 truncate text-sm font-semibold text-red-100">Маршрут не построен — нажмите, чтобы узнать почему</div>
-                ) : (
-                  <div className="mt-0.5 text-sm font-medium text-blue-200">Построение маршрута...</div>
-                )}
-              </div>
-              <ChevronUp size={20} className="shrink-0 text-white/70" />
-            </div>
+      <main ref={mainRef} className="relative flex-1 bg-slate-100 dark:bg-slate-900">
+        {/*
+          Телефон: кто вошёл — аватар в правом верхнем углу (панель поиска там
+          скрыта). На компьютере и планшете вход, профиль, админ-панель и выход —
+          в левой панели (кнопка аккаунта в шапке), а угол занят только маршрутом.
+        */}
+        {isMobile && (
+          <div className="absolute right-3 z-[1001] flex items-center gap-2" style={{ top: 'calc(env(safe-area-inset-top, 0px) + 30px)' }}>
+            {account.status === 'user' && account.user ? (
+              <button type="button" onClick={() => setIsAccountOpen(true)} className="block rounded-full shadow-lg ring-2 ring-white dark:ring-slate-800" aria-label={`Личный кабинет: ${account.user.displayName}`} data-testid="user-chip">
+                <Avatar name={account.user.displayName} src={account.user.avatarUrl} seed={account.user.id} size={38} />
+              </button>
+            ) : account.status === 'guest' && account.features.available ? (
+              <button type="button" onClick={() => setIsAccountOpen(true)} className="inline-flex h-10 items-center gap-1.5 rounded-2xl border border-slate-200 bg-white/95 px-3.5 text-[13px] font-semibold text-slate-700 shadow-lg backdrop-blur hover:bg-white dark:border-slate-700 dark:bg-slate-800/95 dark:text-slate-200" data-testid="sign-in-button">
+                <LogIn size={16} aria-hidden="true" />Войти
+              </button>
+            ) : null}
           </div>
         )}
 
-        {!isMobile && routeTargets.length > 0 && !isRoutePanelCollapsed && (
-          <div
-            className={`route-panel-slide-in absolute z-[1000] flex flex-col overflow-hidden border border-slate-100 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-800 ${isMobile ? 'left-2 right-2 rounded-2xl' : 'right-6 top-6 w-80 rounded-3xl'}`}
-            /*
-             * Высота ограничена, чтобы с пятью точками «Начать маршрут» и
-             * «Очистить» не уходили за нижний край; снизу — место под кнопки
-             * ИИ и геолокации.
-             */
-            style={isMobile ? { bottom: 'calc(80px + env(safe-area-inset-bottom, 0px))', maxHeight: '55vh' } : { maxHeight: 'calc(100% - 184px)' }}
-          >
-            <div className={`border-b border-slate-100 bg-gradient-to-r from-blue-50 to-white dark:border-slate-700 dark:from-slate-700 dark:to-slate-800 ${isMobile ? 'px-4 py-3' : 'px-5 py-4'}`}>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="text-[11px] font-bold uppercase tracking-[0.22em] text-blue-600 dark:text-blue-400">Smart-Маршрут</div>
-                  <div className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-blue-100 px-1.5 text-[10px] font-bold text-blue-700 dark:bg-blue-900 dark:text-blue-300">{routeTargets.length}</div>
-                </div>
-                <button type="button" onClick={() => setIsRoutePanelCollapsed(true)} aria-label="Свернуть маршрут" className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 active:bg-slate-200 dark:hover:bg-slate-700">
-                  <ChevronDown size={16} />
-                </button>
-              </div>
-            </div>
-
-            {/* Route targets list */}
-            <div className={`${isMobile ? 'px-3 py-2 max-h-[30vh] overflow-y-auto' : 'min-h-0 flex-1 overflow-y-auto px-5 py-3'}`}>
-              <div className="flex flex-col gap-2">
+        {siteSettings?.maintenance && !maintenanceDismissed && (
+          <div role="status" className={`absolute left-1/2 z-[1002] flex w-[min(92%,560px)] -translate-x-1/2 items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50/95 px-4 py-2.5 text-[13px] leading-5 text-amber-900 shadow-lg backdrop-blur dark:border-amber-800 dark:bg-amber-950/90 dark:text-amber-100 ${isMobile ? 'top-[84px]' : 'top-[76px]'}`} data-testid="maintenance-banner">
+            <Wrench size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+            <span className="min-w-0 flex-1 whitespace-pre-line">{siteSettings.maintenance}</span>
+            <button type="button" onClick={() => setMaintenanceDismissed(true)} className="-mr-1 shrink-0 rounded-lg p-1 hover:bg-amber-100 dark:hover:bg-amber-900" aria-label="Скрыть сообщение">
+              <X size={15} aria-hidden="true" />
+            </button>
+          </div>
+        )}
+        <MotionConfig reducedMotion="user">
+          <AnimatePresence>
+          {!isMobile && routeTargets.length > 0 && (
+            <RouteDock
+              key="route-dock"
+              dockRef={routeDockRef}
+              count={routeTargets.length}
+              routeData={routeData}
+              expanded={!isRoutePanelCollapsed}
+              onToggle={toggleRoutePanel}
+              onClear={clearRoute}
+              travelMode={travelMode}
+              onTravelMode={(mode) => {
+                if (mode === travelMode) return;
+                setTravelMode(mode);
+                setRouteData(null);
+              }}
+              routeTargets={routeTargets}
+              onRetry={() => setRouteData(null)}
+            >
+              <ol className="max-h-[188px] space-y-1 overflow-y-auto pr-0.5" aria-label="Точки маршрута">
                 {routeTargets.map((target, idx) => (
-                  <div
+                  <li
                     key={target.id}
-                    {...(!isMobile ? {
-                      draggable: true,
-                      onDragStart: (e) => handleDragStart(e, idx),
-                      onDragOver: (e) => handleDragOver(e, idx),
-                      onDrop: (e) => handleDrop(e, idx),
-                      onDragEnd: handleDragEnd,
-                      onDragLeave: () => setDragOverIndex(null),
-                    } : {})}
-                    className={`flex items-center justify-between gap-2 rounded-xl p-2.5 shadow-sm border transition-all duration-200 ${
-                      !isMobile && dragOverIndex === idx && draggedTargetIndex !== idx
-                        ? 'border-blue-400 bg-blue-50/80 scale-[1.03] dark:bg-blue-900/30 dark:border-blue-500'
-                        : !isMobile && draggedTargetIndex === idx
-                          ? 'border-violet-400 bg-violet-50/60 opacity-50 scale-95 dark:bg-violet-900/30 dark:border-violet-500'
-                          : 'border-white/50 bg-white/60 dark:bg-slate-800/60 dark:border-slate-700/50'
+                    draggable={routeTargets.length > 1}
+                    onDragStart={(e) => handleDragStart(e, idx)}
+                    onDragOver={(e) => handleDragOver(e, idx)}
+                    onDrop={(e) => handleDrop(e, idx)}
+                    onDragEnd={handleDragEnd}
+                    onDragLeave={() => setDragOverIndex(null)}
+                    className={`group flex items-center gap-2 rounded-xl border px-2 py-1.5 transition-colors ${
+                      dragOverIndex === idx && draggedTargetIndex !== idx
+                        ? 'border-blue-300 bg-blue-50 dark:border-blue-600 dark:bg-blue-950/40'
+                        : draggedTargetIndex === idx
+                          ? 'border-violet-300 bg-violet-50/60 opacity-60 dark:border-violet-700 dark:bg-violet-950/30'
+                          : 'border-transparent hover:bg-slate-50 dark:hover:bg-slate-700/50'
                     }`}
                   >
-                    {routeTargets.length > 1 && (
-                      <div className="flex flex-col gap-0.5">
-                        <button type="button" onClick={() => moveRouteTarget(idx, idx - 1)} disabled={idx === 0} aria-label="Переместить точку выше"  className="rounded p-0.5 text-slate-400 disabled:opacity-20 active:bg-slate-100 dark:active:bg-slate-700">
-                          <ChevronUp size={14} />
-                        </button>
-                        <button type="button" onClick={() => moveRouteTarget(idx, idx + 1)} disabled={idx === routeTargets.length - 1} aria-label="Переместить точку ниже"  className="rounded p-0.5 text-slate-400 disabled:opacity-20 active:bg-slate-100 dark:active:bg-slate-700">
-                          <ChevronDown size={14} />
-                        </button>
-                      </div>
-                    )}
-                    {!isMobile && (
-                      <div className="mt-0.5 cursor-grab text-slate-400 active:cursor-grabbing">
-                        <GripVertical size={16} />
-                      </div>
-                    )}
-                    <div className="cursor-pointer flex-1 min-w-0" role="button" tabIndex={0} aria-label={`Показать на карте: ${target.clinic || target.name}`} onClick={() => setFlyToTarget([target.lat, target.lng])} onKeyDown={activateOnKey(() => setFlyToTarget([target.lat, target.lng]))}>
-                      <div className="text-[13px] font-bold leading-tight text-slate-800 dark:text-white">{idx + 1}. {target.clinic || target.name}</div>
-                      <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400 truncate">{target.address}</div>
-                    </div>
-                    <button type="button" aria-label="Убрать точку из маршрута" onClick={() => removeFromRoute(target.id)} className="shrink-0 rounded-lg p-1 text-slate-400 transition-colors hover:text-red-500 active:bg-red-50 dark:active:bg-red-900/30">
-                      <XCircle size={16} />
+                    {routeTargets.length > 1 && <GripVertical size={14} className="shrink-0 cursor-grab text-slate-300 active:cursor-grabbing dark:text-slate-500" aria-hidden="true" />}
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-blue-600 text-[11px] font-bold text-white" aria-hidden="true">{idx + 1}</span>
+                    <button type="button" className="min-w-0 flex-1 text-left" aria-label={`Показать на карте: ${target.clinic || target.name}`} onClick={() => setFlyToTarget([target.lat, target.lng])}>
+                      <span className="block truncate text-[12.5px] font-bold leading-tight text-slate-800 dark:text-white">{target.clinic || target.name}</span>
+                      <span className="block truncate text-[11px] leading-tight text-slate-500 dark:text-slate-400">{target.address}</span>
                     </button>
-                  </div>
+                    {routeTargets.length > 1 && (
+                      <span className="flex shrink-0 flex-col opacity-60 transition-opacity group-hover:opacity-100">
+                        <button type="button" onClick={() => moveRouteTarget(idx, idx - 1)} disabled={idx === 0} aria-label="Переместить точку выше" className="rounded p-0.5 text-slate-400 hover:text-slate-700 disabled:opacity-20 dark:hover:text-slate-200">
+                          <ChevronUp size={12} aria-hidden="true" />
+                        </button>
+                        <button type="button" onClick={() => moveRouteTarget(idx, idx + 1)} disabled={idx === routeTargets.length - 1} aria-label="Переместить точку ниже" className="rounded p-0.5 text-slate-400 hover:text-slate-700 disabled:opacity-20 dark:hover:text-slate-200">
+                          <ChevronDown size={12} aria-hidden="true" />
+                        </button>
+                      </span>
+                    )}
+                    <button type="button" aria-label="Убрать точку из маршрута" title="Убрать точку" onClick={() => removeFromRoute(target.id)} className="shrink-0 rounded-lg p-1 text-slate-300 transition-colors hover:bg-red-50 hover:text-red-500 dark:text-slate-500 dark:hover:bg-red-950/40">
+                      <X size={14} aria-hidden="true" />
+                    </button>
+                  </li>
                 ))}
-              </div>
-            </div>
+              </ol>
 
-            {isManualOrigin && (
-              <div className="flex flex-col items-center border-b border-amber-100 bg-amber-50 px-4 py-2 text-center text-[13px] text-amber-700 dark:border-amber-800 dark:bg-amber-900 dark:text-amber-300">
-                <span>Маршрут от выбранной точки</span>
-                <button type="button" onClick={resetToGPS} className="mt-1 font-bold underline hover:text-amber-900">
-                  Вернуться к моей геопозиции
-                </button>
-              </div>
-            )}
-
-            <div className="flex gap-2 border-b border-slate-100 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-700">
-              {TRAVEL_MODE_OPTIONS.map((mode) => (
-                <button
-                  key={mode.id}
-                  type="button"
-                  aria-label={mode.label}
-                  aria-pressed={travelMode === mode.id}
-                  title={mode.label}
-                  onClick={() => {
-                    setTravelMode(mode.id);
-                    setRouteData(null);
-                  }}
-                  className={`flex flex-1 items-center justify-center rounded-xl py-2 transition-all ${travelMode === mode.id ? 'bg-white text-blue-600 shadow-sm dark:bg-slate-800 dark:text-blue-400' : 'text-slate-400 hover:bg-slate-100 dark:text-slate-500 dark:hover:bg-slate-600'}`}
-                >
-                  <mode.icon size={20} aria-hidden="true" />
-                </button>
-              ))}
-            </div>
-
-            <div className={`${isMobile ? 'p-4' : 'p-6'} text-center`}>
-              {routeData ? (
-                routeData.error ? (
-                  <RouteErrorNotice routeData={routeData} routeTargets={routeTargets} fallback="Маршрут для этого транспорта не найден" onRetry={() => setRouteData(null)} />
-                ) : (
-                  <>
-                    <div className={`${isMobile ? 'text-3xl' : 'text-4xl'} font-extrabold tracking-tight text-slate-800 dark:text-white`}>{formatTime(routeData.time)}</div>
-                    <div className="mt-1 font-medium text-slate-500 dark:text-slate-400">{formatDistance(routeData.distance)} · без учёта пробок</div>
-                  </>
-                )
-              ) : (
-                <div className="flex flex-col items-center justify-center py-2 opacity-60">
-                  <Loader2 className="mb-2 animate-spin text-slate-400 dark:text-slate-500" size={24} />
-                  <span className="text-sm dark:text-slate-400">Строим маршрут...</span>
-                </div>
+              {isManualOrigin && (
+                <p className="flex items-center justify-between gap-2 rounded-xl bg-amber-50 px-3 py-1.5 text-[12px] text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                  <span>От выбранной точки</span>
+                  <button type="button" onClick={resetToGPS} className="font-semibold underline underline-offset-2">К моей геопозиции</button>
+                </p>
               )}
-            </div>
 
-            {renderExternalRouteLinks(routeTargets, { label: 'Открыть в:', className: 'justify-center border-t border-slate-100 px-4 py-3 dark:border-slate-700' })}
+              {renderExternalRouteLinks(routeTargets, { label: null, compact: true })}
 
-            <div className="flex flex-col gap-2 border-t border-slate-100 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-700/50">
               {!routeStarted ? (
-                <button type="button" onClick={() => setIsRouteStarted(true)} disabled={!routeData || routeData.error} className="w-full rounded-xl bg-blue-600 py-3 font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-600 dark:hover:bg-blue-500">
-                  Начать маршрут
+                <button type="button" onClick={() => setIsRouteStarted(true)} disabled={!routeData || routeData.error} className="flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-blue-600 text-[14px] font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50" data-testid="route-start">
+                  <Navigation size={16} aria-hidden="true" />Начать маршрут
                 </button>
               ) : (
-                <button type="button" onClick={() => setIsRouteStarted(false)} className="w-full rounded-xl bg-slate-200 py-3 font-semibold text-slate-700 transition-colors hover:bg-slate-300 dark:bg-slate-600 dark:text-white dark:hover:bg-slate-500">
+                <button type="button" onClick={() => setIsRouteStarted(false)} className="h-10 w-full rounded-xl bg-slate-100 text-[14px] font-semibold text-slate-700 transition-colors hover:bg-slate-200 dark:bg-slate-700 dark:text-white dark:hover:bg-slate-600">
                   Редактировать маршрут
                 </button>
               )}
-
-              <button type="button" onClick={clearRoute} className="w-full rounded-xl border border-slate-200 bg-white py-3 font-semibold text-red-500 transition-colors hover:bg-red-50 dark:border-slate-600 dark:bg-slate-800 dark:hover:bg-red-900/30">
-                Очистить весь маршрут
-              </button>
-            </div>
-          </div>
-        )}
+            </RouteDock>
+          )}
+          </AnimatePresence>
+        </MotionConfig>
 
         <MapContainer center={activeOrigin} zoom={13} className="h-full w-full" zoomControl attributionControl={false}>
           {/*
@@ -4397,7 +4662,7 @@ export default function App() {
             использования тайлов; стоит там, где её не закрывают панели и меню.
           */}
           <AttributionControl position={isMobile ? 'topright' : 'bottomleft'} prefix={false} />
-          <PopupPanGuard rightPadding={!isMobile && routeTargets.length > 0 && !isRoutePanelCollapsed ? 360 : 24} />
+          <PopupPanGuard rightPadding={!isMobile && routeTargets.length > 0 && !isRoutePanelCollapsed ? ROUTE_DOCK_WIDTH + 48 : 24} />
           <TileLayer
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -4462,6 +4727,9 @@ export default function App() {
             <button
               type="button"
               onClick={toggleAIAssistant}
+              // Код окна ассистента грузится отдельно: начинаем, как только курсор над кнопкой.
+              onPointerEnter={preloadAssistant}
+              onFocus={preloadAssistant}
               aria-label="Открыть AI-ассистента"
               aria-expanded={isAIAssistantOpen}
               className="absolute bottom-[88px] right-6 z-[1000] rounded-full bg-violet-600 p-3 text-white shadow-[0_4px_20px_rgba(124,58,237,0.4)] transition-all hover:scale-105 hover:bg-violet-700"
@@ -4472,8 +4740,9 @@ export default function App() {
           </>
         )}
 
+        <AnimatePresence>
         {isAccountOpen && (
-          <Suspense fallback={null}>
+          <Suspense key="account-panel" fallback={null}>
             <AccountPanel
               account={account}
               insurance={insurance}
@@ -4483,15 +4752,19 @@ export default function App() {
               favorites={favoriteDetails}
               onFocusFavorite={focusFavorite}
               onRemoveFavorite={toggleFavorite}
-              onClose={() => setIsAccountOpen(false)}
+              onClose={closeAccountPanel}
               isMobile={isMobile}
+              intro={chatAfterSignIn ? 'Войдите, чтобы поговорить с ассистентом: переписка будет только вашей.' : null}
+              support={{ email: siteSettings?.supportEmail || null, phone: siteSettings?.supportPhone || null }}
             />
           </Suspense>
         )}
+        </AnimatePresence>
 
         {isAIAssistantMounted && (
           <Suspense fallback={null}>
             <AIAssistant
+              key={assistantEpoch}
               isOpen={isAIAssistantOpen}
               onClose={() => setIsAIAssistantOpen(false)}
               onApplyTriage={handleApplyTriage}
@@ -4504,10 +4777,23 @@ export default function App() {
               bookingPlanId={dmsPlan?.id || null}
               bookingsRefresh={bookingsRefresh}
               onBookOption={openBooking}
+              onRouteOption={routeToOption}
               onSelectPlan={choosePlanFromChat}
               onRequestOrigin={requestBookingOrigin}
+              onLoginRequired={handleAssistantLoginRequired}
               isMobile={isMobile}
-              avoidRoutePanel={!isMobile && routeTargets.length > 0 && !isRoutePanelCollapsed}
+              topInset={!isMobile && routeTargets.length > 0 && floatingLayout.dockBottom ? floatingLayout.dockBottom + FLOAT_GAP : 24}
+            />
+          </Suspense>
+        )}
+
+        {isChatNoticeOpen && (
+          <Suspense fallback={null}>
+            <ChatLoginNotice
+              canSignIn={account.features.available}
+              onSignIn={signInForAssistant}
+              onClose={() => setIsChatNoticeOpen(false)}
+              isMobile={isMobile}
             />
           </Suspense>
         )}
@@ -4539,6 +4825,16 @@ export default function App() {
       )}
 
       <Toast toast={toast} onDismiss={dismissToast} />
+      {account.status === 'user' && account.user?.mustChangePassword && (
+        <ForcedPasswordChange
+          user={account.user}
+          onDone={(user) => {
+            account.applyUser(user);
+            showToast('Пароль изменён. Добро пожаловать!', 'success');
+          }}
+          onLogout={account.logout}
+        />
+      )}
     </div>
   );
 }

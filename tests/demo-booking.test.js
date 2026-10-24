@@ -54,7 +54,7 @@ describe('Демо-запись: хранилище', { skip: !DatabaseSync && '
   it('запись переводит слот в BOOKED и выдаёт демо-номер', () => {
     const slot = freeSlot();
     const booking = store.book({ slotId: slot.id, idempotencyKey: KEY(1) });
-    assert.match(booking.number, /^DEMO-261012-[A-Z0-9]{5}$/);
+    assert.match(booking.number, /^DEMO-121026-[A-Z0-9]{5}$/, 'дата оформления — ДДММГГ, как принято в России');
     assert.equal(booking.status, 'CONFIRMED');
     assert.equal(booking.repeated, false);
     assert.equal(booking.slot.status, 'BOOKED');
@@ -249,7 +249,7 @@ describe('Демо-запись: HTTP /api/demo/*', { skip: !DatabaseSync && 'н
     const index = await getDemoCatalog();
     const store = createBookingStore({ DatabaseSync, file: ':memory:', index, now: () => NOW });
     service = createDemoBookingService({ index, store, getEngine: async () => null, now: () => NOW });
-    const handler = createDemoBookingHandler({ getService: async () => service, searchLimit: unlimited, readLimit: unlimited, writeLimit: unlimited });
+    const handler = createDemoBookingHandler({ getService: async () => service, getAccountUser: async () => null, searchLimit: unlimited, readLimit: unlimited, writeLimit: unlimited });
     server = http.createServer((req, res) => handler(req, res));
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     port = server.address().port;

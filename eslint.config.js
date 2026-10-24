@@ -26,12 +26,19 @@ export default defineConfig([
     },
     rules: {
       'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]', argsIgnorePattern: '^_' }],
-      // Секреты не должны попасть в бандл: правило ловит обращения к свойствам
-      // *API_KEY, *SECRET_KEY, *ACCESS_TOKEN, *PASSWORD (import.meta.env.VITE_..._API_KEY).
+      // Секреты не должны попасть в бандл: правило ловит любые переменные
+      // окружения *API_KEY, *SECRET_KEY, *ACCESS_TOKEN, *PASSWORD
+      // (import.meta.env.VITE_..._API_KEY, process.env.…) и такие же константы
+      // в ВЕРХНЕМ_РЕГИСТРЕ. Поля API в camelCase (user.mustChangePassword) —
+      // не конфигурация и не ловятся.
       'no-restricted-syntax': [
         'error',
         {
-          selector: 'MemberExpression[property.name=/API_KEY|SECRET_KEY|ACCESS_TOKEN|PASSWORD/i]',
+          selector: 'MemberExpression[object.property.name="env"][property.name=/API_KEY|SECRET_KEY|ACCESS_TOKEN|PASSWORD/i]',
+          message: 'Секреты не должны попадать в клиентский бандл — обращайтесь через серверную функцию api/chat.js.',
+        },
+        {
+          selector: 'MemberExpression[property.name=/^[A-Z0-9_]*(API_KEY|SECRET_KEY|ACCESS_TOKEN|PASSWORD)[A-Z0-9_]*$/]',
           message: 'Секреты не должны попадать в клиентский бандл — обращайтесь через серверную функцию api/chat.js.',
         },
       ],

@@ -16,7 +16,12 @@ import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 
 import accountHandler, { ACCOUNT_PATHS } from './api/account.js';
+import { getAccountContext } from './api/accountContext.js';
+import activationHandler, { ACTIVATION_PATHS } from './api/activation.js';
+import adminHandler, { ADMIN_PREFIX } from './api/admin.js';
+import meHandler, { ME_PREFIX } from './api/me.js';
 import chatHandler from './api/chat.js';
+import { withChatAccess } from './api/chatAccess.js';
 import configHandler from './api/config.js';
 import demoBookingHandler, { DEMO_BOOKING_PATHS } from './api/demoBooking.js';
 import eventsHandler from './api/events.js';
@@ -26,6 +31,7 @@ import { applySecurityHeaders } from './http/securityHeaders.js';
 import { rateLimitKey, validateTrustProxy } from './http/rateLimit.js';
 import { getDefaultRoutingEngine } from './routing/engine.js';
 import { logger } from './observability/safeLogger.js';
+import { requestStats } from './observability/requestStats.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const DIST = path.join(ROOT, 'dist');
@@ -188,13 +194,16 @@ const sendFile = async (req, res, filePath, stats, status = 200) => {
  * «/api/route» запрос на «/api/routeXYZ» тоже уходил бы в обработчик.
  */
 const API_HANDLERS = new Map([
-  ['/api/chat', chatHandler],
+  // Ассистент — только после входа в личный кабинет (api/chatAccess.js).
+  ['/api/chat', withChatAccess(chatHandler)],
   ['/api/route', routeHandler],
   ['/api/travel-times', travelTimesHandler],
   ['/api/events', eventsHandler],
   ['/api/config', configHandler],
   // Личный кабинет: вход, программа ДМС, избранное (backend/api/account.js).
   ...ACCOUNT_PATHS.map((apiPath) => [apiPath, accountHandler]),
+  // Приглашения, активация аккаунта и ссылки для смены пароля (backend/api/activation.js).
+  ...ACTIVATION_PATHS.map((apiPath) => [apiPath, activationHandler]),
   // Демо-запись (только DEMO_DATA=on): подбор, слоты, запись, отмена.
   ...DEMO_BOOKING_PATHS.map((apiPath) => [apiPath, demoBookingHandler]),
 ]);
@@ -205,10 +214,29 @@ const apiPathOf = (url) => {
   return end === -1 ? raw : raw.slice(0, end);
 };
 
+/*
+ * Профиль и админ-панель — по префиксу: у них пути с параметрами
+ * (/api/admin/users/:id). Префикс сравнивается с границей сегмента:
+ * «/api/meX» сюда не попадает.
+ */
+const PREFIX_HANDLERS = [
+  [ADMIN_PREFIX, adminHandler],
+  [ME_PREFIX, meHandler],
+];
+const handlerFor = (pathname) => API_HANDLERS.get(pathname)
+  || PREFIX_HANDLERS.find(([prefix]) => pathname === prefix || pathname.startsWith(`${prefix}/`))?.[1]
+  || null;
+
 const handleRequest = async (req, res) => {
   applySecurityHeaders(res, { api: req.url?.startsWith('/api/') });
 
-  const apiHandler = API_HANDLERS.get(apiPathOf(req.url)) || null;
+  // Счётчики для мониторинга: группа маршрута, код и время ответа — без адресов и параметров.
+  const started = process.hrtime.bigint();
+  res.once('finish', () => {
+    requestStats.record(apiPathOf(req.url), res.statusCode, Number(process.hrtime.bigint() - started) / 1e6);
+  });
+
+  const apiHandler = handlerFor(apiPathOf(req.url));
 
   if (apiHandler) {
     try {
@@ -341,10 +369,13 @@ server.listen(PORT, HOST, async () => {
    * переменной окружения.
    */
   const engine = await getDefaultRoutingEngine();
+  // Кабинет открывается сразу: миграции базы и первый суперадминистратор — при запуске, а не при первом входе.
+  const accounts = await getAccountContext();
   logger.event('server.started', {
     status: SERVE_STATIC ? 'api+static' : 'api-only',
     routing_provider: engine ? 'local' : 'none',
     vault_backend: process.env.TOKEN_VAULT_BACKEND || 'memory',
+    action: accounts ? 'accounts_ready' : 'accounts_off',
   });
 });
 

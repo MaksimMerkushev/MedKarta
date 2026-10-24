@@ -5,7 +5,8 @@
  *
  * Симуляция записи: наружу ничего не уходит — ни в МИС, ни в клиники, ни в
  * страховые, ни в уведомления. Персональных данных пациента здесь нет:
- * запись — это номер, слот и секрет для отмены.
+ * запись — это номер, слот и секрет для отмены. Запись из личного кабинета
+ * помечена случайным id аккаунта — без email и имени.
  *
  * Статусы слота:
  *   FREE    — свободен;
@@ -47,7 +48,7 @@ export class BookingError extends Error {
   }
 }
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const MIGRATIONS = [
   `
   CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -83,21 +84,32 @@ const MIGRATIONS = [
   );
   CREATE UNIQUE INDEX bookings_one_active_per_slot ON bookings(slot_id) WHERE status = 'CONFIRMED';
   `,
+  `
+  ALTER TABLE bookings ADD COLUMN account_id TEXT;
+  CREATE INDEX bookings_account ON bookings(account_id, created_at) WHERE account_id IS NOT NULL;
+  `,
 ];
 
 const sha256 = (value) => createHmac('sha256', 'medkarta-demo-hold').update(String(value)).digest('base64url');
 const NUMBER_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
-/** Номер записи для человека: DEMO-ГГММДД-XXXXX. */
+/**
+ * Номер записи для человека: DEMO-ДДММГГ-XXXXX — дата оформления по Москве в
+ * привычном порядке (20.10.26 → DEMO-201026-…). Номера, выданные раньше в
+ * порядке ГГММДД, остаются действительными: формат проверки тот же.
+ */
 const makeNumber = (now) => {
   const bytes = randomBytes(5);
   const suffix = [...bytes].map((byte) => NUMBER_ALPHABET[byte % NUMBER_ALPHABET.length]).join('');
-  return `DEMO-${moscowDay(now).slice(2).replace(/-/g, '')}-${suffix}`;
+  const [year, month, day] = moscowDay(now).split('-');
+  return `DEMO-${day}${month}${year.slice(2)}-${suffix}`;
 };
 
 const IDEMPOTENCY = /^[A-Za-z0-9_-]{16,80}$/;
 const SLOT_ID = /^[a-z0-9-]{1,120}$/;
 const NUMBER = /^DEMO-\d{6}-[A-Z0-9]{5}$/;
+const ACCOUNT_ID = /^[a-f0-9]{32}$/;
+const MAX_ACCOUNT_BOOKINGS = 50;
 
 /**
  * @param {object} options
@@ -158,8 +170,10 @@ export const createBookingStore = ({ DatabaseSync, file, index, now = () => Date
     bookingByKey: db.prepare('SELECT * FROM bookings WHERE idempotency_key = ?'),
     bookingByNumber: db.prepare('SELECT * FROM bookings WHERE number = ?'),
     numberTaken: db.prepare('SELECT 1 AS found FROM bookings WHERE number = ?'),
-    insertBooking: db.prepare(`INSERT INTO bookings (id, number, slot_id, status, idempotency_key, plan_id, created_at)
-      VALUES (?, ?, ?, 'CONFIRMED', ?, ?, ?)`),
+    insertBooking: db.prepare(`INSERT INTO bookings (id, number, slot_id, status, idempotency_key, plan_id, created_at, account_id)
+      VALUES (?, ?, ?, 'CONFIRMED', ?, ?, ?, ?)`),
+    bookingsOfAccount: db.prepare('SELECT * FROM bookings WHERE account_id = ? ORDER BY created_at DESC LIMIT ?'),
+    forgetAccount: db.prepare('UPDATE bookings SET account_id = NULL WHERE account_id = ?'),
     cancelBooking: db.prepare("UPDATE bookings SET status = 'CANCELLED', cancelled_at = ? WHERE id = ? AND status = 'CONFIRMED'"),
     activeBookingForSlot: db.prepare("SELECT 1 AS found FROM bookings WHERE slot_id = ? AND status = 'CONFIRMED'"),
     purgeOldSlots: db.prepare('DELETE FROM slots WHERE day < ? AND id NOT IN (SELECT slot_id FROM bookings)'),
@@ -354,16 +368,19 @@ export const createBookingStore = ({ DatabaseSync, file, index, now = () => Date
    * Запись на слот. Атомарно: проверка, перевод в BOOKED и создание записи —
    * одна транзакция BEGIN IMMEDIATE.
    */
-  const book = ({ slotId, holdToken = null, idempotencyKey, planId = null, at = now() }) => {
+  const book = ({ slotId, holdToken = null, idempotencyKey, planId = null, accountId = null, at = now() }) => {
     if (typeof slotId !== 'string' || !SLOT_ID.test(slotId)) throw new BookingError('bad_request', 'Неверный слот.');
     if (typeof idempotencyKey !== 'string' || !IDEMPOTENCY.test(idempotencyKey)) {
       throw new BookingError('bad_request', 'Нужен ключ запроса (idempotencyKey).');
     }
+    const owner = typeof accountId === 'string' && ACCOUNT_ID.test(accountId) ? accountId : null;
     return immediate(() => {
       const existing = statements.bookingByKey.get(idempotencyKey);
       if (existing) {
         if (existing.slot_id !== slotId) throw new BookingError('idempotency_conflict', 'Этот ключ запроса уже использован для другой записи.');
-        return { ...bookingView(existing, at), cancelToken: cancelTokenFor(existing.id), repeated: true };
+        // owned — запись в списке этого кабинета; повтор не перепривязывает её к другому аккаунту.
+        const owned = owner !== null && existing.account_id === owner;
+        return { ...bookingView(existing, at), cancelToken: cancelTokenFor(existing.id), repeated: true, owned };
       }
 
       const row = statements.slotById.get(slotId);
@@ -379,8 +396,8 @@ export const createBookingStore = ({ DatabaseSync, file, index, now = () => Date
       let number = makeNumber(at);
       while (statements.numberTaken.get(number)) number = makeNumber(at);
       const id = randomUUID();
-      statements.insertBooking.run(id, number, slotId, idempotencyKey, planId, at);
-      return { ...bookingView(statements.bookingByNumber.get(number), at), cancelToken: cancelTokenFor(id), repeated: false };
+      statements.insertBooking.run(id, number, slotId, idempotencyKey, planId, at, owner);
+      return { ...bookingView(statements.bookingByNumber.get(number), at), cancelToken: cancelTokenFor(id), repeated: false, owned: owner !== null };
     });
   };
 
@@ -407,6 +424,17 @@ export const createBookingStore = ({ DatabaseSync, file, index, now = () => Date
     return { found: true, ...bookingView(booking, at) };
   });
 
+  /** Записи личного кабинета, новые сверху, с токенами отмены: владелец уже подтверждён сессией. */
+  const listForAccount = ({ accountId, at = now() }) => {
+    if (typeof accountId !== 'string' || !ACCOUNT_ID.test(accountId)) return [];
+    return statements.bookingsOfAccount.all(accountId, MAX_ACCOUNT_BOOKINGS)
+      .map((booking) => ({ ...bookingView(booking, at), cancelToken: cancelTokenFor(booking.id), owned: true }));
+  };
+
+  /** Удалённый аккаунт: его записи остаются занятыми слотами, но больше ни к кому не привязаны. */
+  const forgetAccount = (accountId) =>
+    (typeof accountId === 'string' && ACCOUNT_ID.test(accountId) ? statements.forgetAccount.run(accountId).changes : 0);
+
   const stats = () => Object.fromEntries(statements.countByStatus.all().map((row) => [row.status, row.count]));
 
   return Object.freeze({
@@ -421,6 +449,8 @@ export const createBookingStore = ({ DatabaseSync, file, index, now = () => Date
     book,
     cancel,
     lookup,
+    listForAccount,
+    forgetAccount,
     stats,
     close: () => db.close(),
   });

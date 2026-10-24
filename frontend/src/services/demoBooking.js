@@ -2,7 +2,7 @@
  * © 2026 МедКарта Казань. Все права защищены.
  *
  * Демо-запись. Логика — на сервере (/api/demo/*); здесь запросы и номера
- * своих записей в этом браузере. Симуляция: ничего не уходит в клиники,
+ * записей гостя в этом браузере (записи кабинета хранит сервер). Симуляция: ничего не уходит в клиники,
  * страховые и МИС; персональных данных пациента в записи нет — только слот
  * и программа ДМС.
  */
@@ -102,6 +102,9 @@ export const createBooking = ({ slotId, holdToken, idempotencyKey, planId }) =>
 export const cancelBooking = ({ number, cancelToken }) =>
   request('/api/demo/bookings/cancel', { method: 'POST', body: { number, cancelToken } });
 
+/** Записи вошедшего пользователя (сессия — в cookie). */
+export const fetchAccountBookings = ({ signal } = {}) => request('/api/demo/bookings/mine', { signal });
+
 export const lookupBookings = (items) =>
   request('/api/demo/bookings/lookup', {
     method: 'POST',
@@ -129,7 +132,8 @@ const sanitizeStored = (item) => {
   return {
     number: item.number,
     cancelToken: item.cancelToken.slice(0, 100),
-    status: item.status === 'CANCELLED' ? 'CANCELLED' : 'CONFIRMED',
+    // NOT_FOUND — сервер такой записи не знает (демо-данные сброшены).
+    status: item.status === 'CANCELLED' || item.status === 'NOT_FOUND' ? item.status : 'CONFIRMED',
     doctorName: text(item.doctorName),
     specialty: text(item.specialty, 60),
     clinicName: text(item.clinicName),
@@ -141,6 +145,16 @@ const sanitizeStored = (item) => {
     lng: Number.isFinite(item.lng) ? item.lng : null,
     itemId: text(item.itemId, 160),
   };
+};
+
+/**
+ * Подтверждённая и ещё не прошедшая запись — её и считает значок «Мои
+ * демо-записи». Время записи — московское (Казань).
+ */
+export const isUpcomingBooking = (item, now = Date.now()) => {
+  if (item?.status !== 'CONFIRMED') return false;
+  const endsAt = item.day && item.end ? Date.parse(`${item.day}T${item.end}:00+03:00`) : NaN;
+  return !Number.isFinite(endsAt) || endsAt >= now;
 };
 
 export const readMyBookings = () => {

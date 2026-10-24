@@ -10,12 +10,16 @@ const DATA = fileURLToPath(new URL('./data', import.meta.url))
 const NODE_MODULES = fileURLToPath(new URL('./node_modules', import.meta.url))
 
 const CHAT_HANDLER_URL = new URL('./backend/api/chat.js', import.meta.url)
+const CHAT_ACCESS_URL = new URL('./backend/api/chatAccess.js', import.meta.url)
 const ROUTE_HANDLER_URL = new URL('./backend/api/route.js', import.meta.url)
 const TRAVEL_TIMES_HANDLER_URL = new URL('./backend/api/travelTimes.js', import.meta.url)
 const EVENTS_HANDLER_URL = new URL('./backend/api/events.js', import.meta.url)
 const CONFIG_HANDLER_URL = new URL('./backend/api/config.js', import.meta.url)
 const ACCOUNT_HANDLER_URL = new URL('./backend/api/account.js', import.meta.url)
 const DEMO_BOOKING_HANDLER_URL = new URL('./backend/api/demoBooking.js', import.meta.url)
+const ME_HANDLER_URL = new URL('./backend/api/me.js', import.meta.url)
+const ADMIN_HANDLER_URL = new URL('./backend/api/admin.js', import.meta.url)
+const ACTIVATION_HANDLER_URL = new URL('./backend/api/activation.js', import.meta.url)
 const FULL_DB_PATH = fileURLToPath(new URL('./data/doctors.full.js', import.meta.url))
 const PUBLIC_DB_PATH = fileURLToPath(new URL('./data/doctors.js', import.meta.url))
 const HAS_FULL_DB = fs.existsSync(FULL_DB_PATH)
@@ -35,7 +39,7 @@ const devApiPlugin = (env) => ({
   name: 'medkarta-dev-api',
   apply: 'serve',
   configureServer(server) {
-    for (const key of ['OPENROUTER_API_KEY', 'AI_API_KEY', 'AI_UPSTREAM_URL', 'AI_MODEL', 'AI_PROXY_URL', 'AI_REASONING_EFFORT', 'ALLOWED_ORIGINS', 'PRIVACY_TOKEN_SECRET', 'ANALYTICS', 'ANALYTICS_DIR', 'DEMO_DATA', 'ACCOUNTS', 'ACCOUNTS_DB_PATH', 'ACCOUNTS_REGISTRATION', 'COOKIE_SECURE', 'DEMO_BOOKING', 'DEMO_BOOKING_DB_PATH', 'DEMO_NOW', 'PUBLIC_CLINICS']) {
+    for (const key of ['OPENROUTER_API_KEY', 'AI_API_KEY', 'AI_UPSTREAM_URL', 'AI_MODEL', 'AI_PROXY_URL', 'AI_REASONING_EFFORT', 'ALLOWED_ORIGINS', 'PRIVACY_TOKEN_SECRET', 'ANALYTICS', 'ANALYTICS_DIR', 'DEMO_DATA', 'ACCOUNTS', 'ACCOUNTS_DB_PATH', 'COOKIE_SECURE', 'CHAT_REQUIRES_ACCOUNT', 'ADMIN_BOOTSTRAP_EMAIL', 'ADMIN_BOOTSTRAP_PASSWORD', 'APP_ENV', 'APP_URL', 'MAIL_FROM', 'SMTP_URL', 'SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASSWORD', 'SMTP_SECURE', 'DEMO_BOOKING', 'DEMO_BOOKING_DB_PATH', 'DEMO_NOW', 'PUBLIC_CLINICS']) {
       if (env[key] && !process.env[key]) {
         process.env[key] = env[key]
       }
@@ -56,16 +60,22 @@ const devApiPlugin = (env) => ({
     /*
      * Кабинет и демо-запись держат открытую базу SQLite (stateful): их модули
      * грузятся один раз, без сброса кеша, иначе каждый запрос открывал бы новое
-     * соединение с базой.
+     * соединение с базой. Проверка входа перед чатом (gateUrl) — тоже: она
+     * читает ту же базу кабинета.
      */
-    for (const [mount, handlerUrl, label, stateful = false] of [
-      ['/api/chat', CHAT_HANDLER_URL, 'чата'],
+    for (const [mount, handlerUrl, label, stateful = false, gateUrl = null] of [
+      ['/api/chat', CHAT_HANDLER_URL, 'чата', false, CHAT_ACCESS_URL],
       ['/api/route', ROUTE_HANDLER_URL, 'маршрута'],
       ['/api/travel-times', TRAVEL_TIMES_HANDLER_URL, 'времени в пути'],
       ['/api/events', EVENTS_HANDLER_URL, 'аналитики'],
       ['/api/config', CONFIG_HANDLER_URL, 'конфигурации'],
       ['/api/account', ACCOUNT_HANDLER_URL, 'кабинета', true],
+      // Приглашения и ссылки для входа — раньше общего /api/auth (connect сопоставляет по префиксу).
+      ['/api/auth/activation', ACTIVATION_HANDLER_URL, 'активации', true],
+      ['/api/auth/access-link', ACTIVATION_HANDLER_URL, 'ссылок для входа', true],
       ['/api/auth', ACCOUNT_HANDLER_URL, 'входа', true],
+      ['/api/me', ME_HANDLER_URL, 'профиля', true],
+      ['/api/admin', ADMIN_HANDLER_URL, 'админ-панели', true],
       ['/api/demo', DEMO_BOOKING_HANDLER_URL, 'демо-записи', true],
     ]) {
       try {
@@ -86,6 +96,10 @@ const devApiPlugin = (env) => ({
           return
         }
         try {
+          if (gateUrl) {
+            const { chatAccessGate } = await import(gateUrl.href)
+            if (!(await chatAccessGate(req, res))) return
+          }
           const { default: handler } = await import(stateful ? handlerUrl.href : `${handlerUrl.href}?t=${Date.now()}`)
           await handler(req, res)
         } catch (error) {

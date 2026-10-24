@@ -11,6 +11,7 @@
     "dev": "vite",
     "build": "vite build",
     "start": "node backend/server.js",
+    "start:demo": "DEMO_DATA=on node backend/server.js",
     "build:graph": "node scripts/build-road-graph.mjs",
     "report:searches": "node scripts/search-report.mjs",
     "data:collect": "node scripts/data-collect.mjs",
@@ -22,6 +23,8 @@
     "test": "node --test tests/*.test.js",
     "test:hybrid": "PRIVACY_OUTBOUND_MODE=hybrid node --test tests/*.test.js",
     "test:security": "node --test tests/*.test.js && PRIVACY_OUTBOUND_MODE=hybrid node --test tests/*.test.js",
+    "test:e2e": "node scripts/e2e-admin.mjs && node scripts/e2e-auth.mjs",
+    "test:e2e:auth": "node scripts/e2e-auth.mjs",
     "eval:privacy": "node scripts/privacy-eval.mjs",
     "ai:check": "node scripts/ai-check.mjs",
     "ai:bench": "node scripts/ai-bench.mjs",
@@ -31,13 +34,15 @@
     "preview": "vite preview",
     "audit:security": "npm audit --omit=dev",
     "prices:doctors": "node scripts/generate-doctor-service-prices.mjs",
-    "ownership:facilities": "node scripts/reclassify-facility-ownership.mjs"
+    "ownership:facilities": "node scripts/reclassify-facility-ownership.mjs",
+    "accounts": "node scripts/accounts.mjs"
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.2.1",
     "leaflet": "^1.9.4",
     "leaflet.markercluster": "^1.5.3",
     "lucide-react": "^0.577.0",
+    "motion": "^12.43.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-leaflet": "^5.0.0",

@@ -21,7 +21,12 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
 | `server.fs.allow` / `deny` | только `frontend/`, `shared/`, `data/`, `node_modules/`; запрет `.env*`, ключей, `.git`, `var/`, `data/collected`, `data/review` | dev-сервер не отдаёт секреты |
 
 Ленивые чанки: `AIAssistant`, `AccountPanel`, `BookingDialog` подключаются
-через `React.lazy` в [App.jsx](../frontend/src/App.jsx). Демо-набор
+через `React.lazy` в [App.jsx](../frontend/src/App.jsx); админ-панель
+(`/admin…`, каждый раздел — свой чанк), профиль (`/profile`), вход (`/login`)
+и приглашение (`/activate`) — в [Root.jsx](../frontend/src/Root.jsx), карта
+их код не загружает. Анимации экранов входа — **Motion for React**
+(пакет `motion`, импорт `motion/react`); в чанк карты он попадает только с
+окном кабинета. Демо-набор
 загружается отдельным чанком из [demoMode.js](../frontend/src/demoMode.js).
 
 > Важно: если `data/doctors.full.js` существует, он попадает в бандл и
@@ -36,7 +41,8 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
 `devApiPlugin`):
 
 - пути: `/api/chat`, `/api/route`, `/api/travel-times`, `/api/events`,
-  `/api/config`, `/api/account`, `/api/auth`, `/api/demo`;
+  `/api/config`, `/api/account`, `/api/auth`, `/api/me`, `/api/admin`,
+  `/api/demo`;
 - переменные из `.env` переносятся в `process.env` только для сервера
   (список ключей задан в плагине);
 - **демо-режим включён по умолчанию**, если `DEMO_DATA` не задан;
@@ -47,8 +53,8 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
 
 | Модуль | Назначение |
 |---|---|
-| [App.jsx](../frontend/src/App.jsx) | главный компонент: карта, список, фильтры, маршрут, состояние в URL, геолокация, «время в пути», сортировки |
-| [AIAssistant.jsx](../frontend/src/AIAssistant.jsx) | окно ассистента; кнопка нового разговора (`data-testid="ai-restart"`) |
+| [App.jsx](../frontend/src/App.jsx) | главный компонент: карта, список, фильтры, маршрут, состояние в URL, геолокация, «время в пути», сортировки. Маршрут на компьютере и планшете — `RouteDock` в правом верхнем углу: строка «время · расстояние» (`RoutePill`) по нажатию раскрывается в карточку шириной 312 px (вид транспорта с переезжающей подсветкой, точки, Яндекс / 2ГИС / транспорт, «Начать маршрут»). Окно ассистента под ней ужимается до низа карточки; если вместе им не хватает высоты (окну ассистента нужно 340 px), остаётся открытое последним — маршрут сворачивается в строку или чат сворачивается с сохранением переписки. На телефоне маршрут — над нижней панелью |
+| [AIAssistant.jsx](../frontend/src/AIAssistant.jsx) | окно ассистента; кнопка нового разговора (`data-testid="ai-restart"`). Движение (Motion): окно вырастает из кнопки ассистента (на телефоне выезжает снизу), своя реплика появляется справа, ответ — слева, пока ассистент думает — три точки, «самолётик» на кнопке отправки улетает и возвращается; при `prefers-reduced-motion` — только прозрачность. Код окна подгружается, когда курсор над кнопкой |
 | [TopPicks.jsx](../frontend/src/TopPicks.jsx), [bestPicks.js](../frontend/src/bestPicks.js) | «три лучших варианта» под ответом ассистента |
 | [DemoOffers.jsx](../frontend/src/DemoOffers.jsx) | результат строгого подбора: варианты, вопросы, кнопки послаблений |
 | [BookingDialog.jsx](../frontend/src/BookingDialog.jsx) | демо-запись: выбор времени → удержание → подтверждение → номер |
@@ -58,7 +64,21 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
 | [PlaceDoctorList.jsx](../frontend/src/PlaceDoctorList.jsx), [placeList.js](../frontend/src/placeList.js) | окно маркера с сотнями врачей (поиск, группы) |
 | [SearchFilters.jsx](../frontend/src/SearchFilters.jsx) | панель фильтров |
 | [DmsPanel.jsx](../frontend/src/DmsPanel.jsx) | «Мой ДМС»: страховая и программа |
-| [AccountPanel.jsx](../frontend/src/AccountPanel.jsx), [hooks/useAccount.js](../frontend/src/hooks/useAccount.js) | личный кабинет |
+| [AccountPanel.jsx](../frontend/src/AccountPanel.jsx), [hooks/useAccount.js](../frontend/src/hooks/useAccount.js) | личный кабинет: открывается кнопкой аккаунта в шапке левой панели; в шапке окна — «Профиль», «Админ-панель» (сотрудникам), «Выйти». Плашки пользователя в углу карты на компьютере нет, на телефоне там аватар |
+| [Root.jsx](../frontend/src/Root.jsx) | выбор приложения по пути: карта, `/profile`, `/login`, `/activate` или `/admin…` |
+| [auth/AuthFlow.jsx](../frontend/src/auth/AuthFlow.jsx) | вход в два шага (email → пароль), «Нет пароля или забыли его?», «Проверьте почту»; одна форма для `/login` и окна кабинета на карте |
+| [auth/LoginPage.jsx](../frontend/src/auth/LoginPage.jsx), [auth/ActivationPage.jsx](../frontend/src/auth/ActivationPage.jsx) | `/login?next=…` и `/activate#token=…` (токен убирается из адреса сразу) |
+| [auth/AuthLayout.jsx](../frontend/src/auth/AuthLayout.jsx), [auth/CityIllustration.jsx](../frontend/src/auth/CityIllustration.jsx) | каркас экранов входа; от 1024 px — иллюстрация: кварталы, зоны 5/10/15 минут, маршрут прорисовывается один раз |
+| [auth/parts.jsx](../frontend/src/auth/parts.jsx), [auth/AutoHeight.jsx](../frontend/src/auth/AutoHeight.jsx), [auth/motion.js](../frontend/src/auth/motion.js) | поля, кнопки, ошибка, требования к паролю, знак успеха; плавная высота; параметры движения |
+| [auth/environment.js](../frontend/src/auth/environment.js) | куда вести после входа (`safeNext` — только пути внутри приложения), сессия и контакты поддержки |
+| [profile/ProfilePage.jsx](../frontend/src/profile/ProfilePage.jsx) | профиль: фото, имя, пароль, свои сессии, история входов |
+| [admin/AdminApp.jsx](../frontend/src/admin/AdminApp.jsx), [admin/pages/](../frontend/src/admin/pages/) | админ-панель: оболочка с меню по разрешениям (без сессии — на `/login?next=…`), уведомления об активации, разделы |
+| [admin/charts.jsx](../frontend/src/admin/charts.jsx) | графики дашборда на SVG: подсказка, клавиатура, таблица вместо графика |
+| [admin/api.js](../frontend/src/admin/api.js), [admin/model.js](../frontend/src/admin/model.js), [admin/common.jsx](../frontend/src/admin/common.jsx) | запросы к `/api/admin`, права и подписи журнала, общие окна (создание с приглашением, итог выдачи ссылки) |
+| [ui/kit.jsx](../frontend/src/ui/kit.jsx), [ui/format.js](../frontend/src/ui/format.js), [ui/hooks.js](../frontend/src/ui/hooks.js) | общие компоненты профиля и панели, даты по Москве, уведомления, тема, загрузка данных |
+| [ui/auth.jsx](../frontend/src/ui/auth.jsx) | смена пароля в профиле и обязательная смена (старые временные пароли, «Потребовать смену») |
+| [ui/navigation.js](../frontend/src/ui/navigation.js), [ui/router.jsx](../frontend/src/ui/router.jsx) | переходы без перезагрузки (`history.pushState`) и ссылка `Link` |
+| [ChatLoginNotice.jsx](../frontend/src/ChatLoginNotice.jsx) | предупреждение гостю вместо чата: ассистент только после входа |
 | [FeedbackWidgets.jsx](../frontend/src/FeedbackWidgets.jsx) | «Нашли, куда обратиться?», «Данные неверны» |
 | [ErrorBoundary.jsx](../frontend/src/ErrorBoundary.jsx) | понятный экран вместо белого при исключении |
 | [Toast.jsx](../frontend/src/Toast.jsx) | неблокирующие уведомления вместо `window.alert` |
@@ -98,9 +118,9 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
 | `med-navigator-dark-mode` | localStorage | тема | [App.jsx](../frontend/src/App.jsx), [theme-init.js](../frontend/public/theme-init.js) |
 | `medkarta.dms.plan` | localStorage | **только id** программы ДМС | [App.jsx](../frontend/src/App.jsx) |
 | `medkarta.demo` | localStorage | ручной выбор демо-режима | [demoMode.js](../frontend/src/demoMode.js) |
-| `medkarta.demo-bookings` | localStorage | номера и токены отмены своих демо-записей | [services/demoBooking.js](../frontend/src/services/demoBooking.js) |
+| `medkarta.demo-bookings` | localStorage | номера и токены отмены демо-записей гостя (записи кабинета хранит сервер) | [services/demoBooking.js](../frontend/src/services/demoBooking.js) |
 | `medkarta.account-owned`, `medkarta.guest-stash` | localStorage | разделение избранного гостя и аккаунта | [App.jsx](../frontend/src/App.jsx) |
-| `medkarta.ai.session` | sessionStorage | случайный id диалога ассистента | [services/ai.js](../frontend/src/services/ai.js) |
+| `medkarta.ai.session` | sessionStorage | случайный id диалога ассистента; сбрасывается при входе и выходе | [services/ai.js](../frontend/src/services/ai.js) |
 | `medkarta.analytics.sid` | sessionStorage | случайный id сессии аналитики | [services/analytics.js](../frontend/src/services/analytics.js) |
 
 Всё прочитанное из `localStorage` проходит валидаторы
@@ -115,7 +135,8 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
 | [services/travelTimes.js](../frontend/src/services/travelTimes.js) | `POST /api/travel-times` | 12 с |
 | [App.jsx](../frontend/src/App.jsx) | `POST /api/route` | — |
 | [services/demoBooking.js](../frontend/src/services/demoBooking.js) | `/api/demo/*` | 15 с |
-| [services/account.js](../frontend/src/services/account.js) | `/api/account`, `/api/auth/*` | — |
+| [services/account.js](../frontend/src/services/account.js) | `/api/account`, `/api/auth/*`, `/api/me/*` | — |
+| [admin/api.js](../frontend/src/admin/api.js) | `/api/admin/*`; ответ `401` возвращает панель к форме входа | — |
 | [services/analytics.js](../frontend/src/services/analytics.js) | `POST /api/events` | — |
 | [demoMode.js](../frontend/src/demoMode.js) | `GET /api/config` | — |
 
@@ -201,11 +222,44 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
   (`sendBeacon` на `pagehide` и `visibilitychange`);
 - при Do Not Track или Global Privacy Control события не отправляются вовсе.
 
+## Экраны входа и приглашения
+
+- **Шаги.** `/login`: email → пароль (первый шаг на сервер не ходит — по нему
+  нельзя узнать, есть ли аккаунт); «Нет пароля или забыли его?» → ссылка на
+  почту или, без почты, объяснение, что ссылку присылает администратор.
+  `/activate`: «Принять приглашение» → пароль с требованиями → «Аккаунт
+  активирован» → переход (сотрудник — в `/admin`, остальные — на карту).
+- **Движение** (Motion for React): смена шага — 220 мс, сдвиг на 16 px по
+  направлению; высота формы — пружина без скачков; ошибки появляются плавно,
+  без тряски; знак успеха прорисовывается один раз; кнопки — лёгкий подъём
+  при наведении и нажатие. `MotionConfig reducedMotion="user"` и
+  `useReducedMotion`: при `prefers-reduced-motion` — без сдвигов и анимации
+  высоты, только прозрачность.
+- **Доступность.** Фокус — в главное поле шага (или на заголовок, если поля
+  нет); смена шага озвучивается (`aria-live`); ошибки — `role="alert"` и
+  `aria-describedby`; требования к паролю — список с текстом «выполнено /
+  пока нет», итог — вежливо, без спама на каждый символ; кнопка «Показать
+  пароль» — `aria-pressed`. Кнопки 48 px, текст полей 16 px (iOS не
+  увеличивает страницу).
+- **Менеджеры паролей.** Обычные `input` с `autocomplete="username"`,
+  `current-password` и `new-password`; на шаге пароля — скрытое поле с email.
+  Пароли и токены в `localStorage` и `sessionStorage` не пишутся.
+- **Темы** — светлая и тёмная (общий переключатель); сдержанная палитра:
+  синий действия, красная метка МедКарты, без градиентов и стекла.
+- **Проверка** — [scripts/e2e-auth.mjs](../scripts/e2e-auth.mjs): 375, 768
+  и 1440 px, тёмная тема, только клавиатура, reduced motion, две вкладки.
+
 ## Безопасность клиента
 
 - Секретов в клиентском коде нет: правило ESLint `no-restricted-syntax`
-  запрещает обращения к `*API_KEY*`, `*SECRET_KEY*`, `*ACCESS_TOKEN*`,
-  `*PASSWORD*` в `frontend/src/` ([eslint.config.js](../eslint.config.js)).
+  запрещает в `frontend/src/` обращения к переменным окружения
+  (`import.meta.env.*`, `process.env.*`) и константам в верхнем регистре с
+  `API_KEY`, `SECRET_KEY`, `ACCESS_TOKEN`, `PASSWORD` в имени
+  ([eslint.config.js](../eslint.config.js)). Поля ответов API в camelCase
+  (`mustChangePassword`) правило не трогает.
+- Права в интерфейсе только прячут кнопки и разделы; каждое действие
+  проверяет сервер. Временный пароль показывается один раз и не сохраняется
+  ни в состоянии после закрытия окна, ни в хранилище браузера.
 - CSP разрешает только `script-src 'self'`, поэтому скрипт выбора темы до
   первой отрисовки вынесен в отдельный файл
   [theme-init.js](../frontend/public/theme-init.js).

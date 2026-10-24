@@ -18,6 +18,7 @@ import { describeRequest, describeTimeWindow, LOCALITIES, normalizeSearchRequest
 import { SPECIALTY_CANON } from '../../shared/specialties.js';
 import { addDays, moscowDay, moscowParts } from './time.js';
 import { SLOT_WINDOW_DAYS } from './generator.js';
+import { dayCaptionOf } from './search.js';
 
 const BOOKING_ACTIONS = new Set(['FIND_DOCTOR', 'GET_AVAILABLE_SLOTS']);
 // «ЛОР в клинике Ясень»: модель может ответить поиском клиники, а запись — к врачу в ней.
@@ -53,6 +54,11 @@ const hasBookingCue = (booking) =>
     || booking.excludeDoctorIds?.length || booking.excludeBranchIds?.length || booking.excludeWeekdays?.length || booking.districts?.length
     || booking.excludeDistricts?.length || booking.planId || booking.withinHours || booking.wheelchair || booking.parking || booking.preferDms || booking.preferTime || booking.preferWindow
     || booking.afterHours || booking.preferExperience || booking.fallbacks?.length || booking.bookingIntent);
+
+/** Есть ли в запросе день или часы приёма: тогда «маршрут к врачу» — это сначала поиск свободного времени. */
+const hasTimeCue = (booking) =>
+  Boolean(booking.date || booking.timeFrom || booking.timeTo || booking.evening || booking.weekend || booking.workdays
+    || booking.withinHours || booking.afterHours || booking.timeWindows?.length || booking.preferTime || booking.preferWindow);
 
 const resolveDate = (date, today) => {
   // Своё окно у дня в перечислении («в четверг после 15:30») переносится как есть.
@@ -178,7 +184,14 @@ export const buildBookingRequest = ({ booking, execution, now, index = null }) =
     && !booking.routeIntent && !booking.sequence;
   // «К Ефимовой или Валееву»: планировщик видит двух врачей и строит маршрут, а это выбор одного.
   const doctorChoiceRoute = action === 'BUILD_ROUTE' && Boolean(booking.doctorChoice) && booking.doctorIds.length > 1 && !booking.routeIntent && !booking.sequence;
-  const routeAsBooking = fromPlace || clinicChoice || specialtyChoiceRoute || exclusionRoute || intentRoute || unaskedRoute || doctorChoiceRoute;
+  /*
+   * «Построй маршрут до ближайшего терапевта на завтра после 18:00»: день и
+   * часы — условия приёма, а не маршрута. Планировщик выбрал бы врача без
+   * оглядки на расписание (того, кто завтра не принимает), поэтому сначала
+   * подбор свободного времени, а маршрут — к найденному варианту.
+   */
+  const timedRoute = singleDoctorRoute && hasTimeCue(booking);
+  const routeAsBooking = fromPlace || clinicChoice || specialtyChoiceRoute || exclusionRoute || intentRoute || unaskedRoute || doctorChoiceRoute || timedRoute;
   if (!BOOKING_ACTIONS.has(action) && !clarifying && !procedure && !atClinic && !routeAsBooking) return null;
 
   // Несколько профилей через «и» — маршрут по нескольким врачам; через «или» — выбор для одной записи.
@@ -195,7 +208,16 @@ export const buildBookingRequest = ({ booking, execution, now, index = null }) =
   const askSpecialty = Array.isArray(booking.specialtyQuestion) && booking.specialtyQuestion.length === 2;
   if (askSpecialty) booking = { ...booking, specialties: [] };
 
-  const specialty = choice ? null : booking.specialties[0] || null;
+  let specialty = choice ? null : booking.specialties[0] || null;
+  /*
+   * «Хочу к Зариповой» → «а можно к другому врачу?»: профиль словами не
+   * назывался, он — у исключённого врача. Без этого ассистент переспрашивал
+   * «какой специалист нужен?», хотя речь шла о том же ЛОРе.
+   */
+  if (!specialty && !choice && index && booking.doctorIds.length === 0 && booking.excludeDoctorIds?.length > 0) {
+    const keys = new Set(booking.excludeDoctorIds.map((id) => index.doctors.get(id)?.specialtyKey).filter(Boolean));
+    if (keys.size === 1) specialty = [...keys][0];
+  }
   /*
    * Врачи — только из разбора текста (все однофамильцы подходящей формы,
    * «но не Ефимов» — исключение), а не из выбора модели: модель могла
@@ -306,6 +328,8 @@ export const buildBookingRequest = ({ booking, execution, now, index = null }) =
     originConfirmed: Boolean(booking.originConfirmed),
     preferCheap: Boolean(booking.preferCheap),
     city: booking.city,
+    // «Покажи три варианта»: больше MAX_RESULTS не показываем — normalizeSearchRequest ограничит.
+    ...(booking.resultLimit ? { limit: booking.resultLimit } : {}),
   });
   return {
     request: normalized,
@@ -314,19 +338,36 @@ export const buildBookingRequest = ({ booking, execution, now, index = null }) =
     planName: index?.plans.get(normalized.dms.planId)?.name || null,
     // Маршрут «ЛОР → дом» или «Ситидок → Разумед», который составил планировщик, — не то, о чём просили.
     dropRoute: routeAsBooking,
+    // Маршрут просили явно: интерфейс проложит его к первому подходящему варианту подбора.
+    routeToOption: Boolean(timedRoute || (routeAsBooking && booking.routeIntent && singleDoctorRoute)),
     // Исключённую клинику или врача фильтр карты выразить не может — фильтр по ним снимается.
     dropPlaceFilter: normalized.excludeBranchIds.length > 0 || normalized.excludeDoctorIds.length > 0,
   };
 };
 
 /** Условия запроса словами — для чата; названные демо-врачи идут первыми. */
-export const summarizeBooking = ({ request, doctorLabels = [], branchLabels = [], excludedDoctorLabels = [], excludedBranchLabels = [], planName = null }) =>
-  describeRequest(request, { specialtyLabel: (key) => SPECIALTY_CANON[key] || key, doctorLabels, branchLabels, excludedDoctorLabels, excludedBranchLabels, planName });
+export const summarizeBooking = ({ request, today = null, doctorLabels = [], branchLabels = [], excludedDoctorLabels = [], excludedBranchLabels = [], planName = null }) =>
+  describeRequest(request, {
+    specialtyLabel: (key) => SPECIALTY_CANON[key] || key, doctorLabels, branchLabels, excludedDoctorLabels, excludedBranchLabels, planName,
+    // «Завтра» — какой это день по московскому времени: «завтра (вторник, 20 октября)».
+    dayCaption: dayCaptionOf(request, today),
+  });
 
 /** Текст ассистента для режима записи: что понято и что будет проверено. */
-export const bookingReplyText = ({ request, booking, today = null, ...labels }) => {
+const COUNT_PHRASES = { 1: 'одного варианта', 2: 'двух вариантов', 3: 'трёх вариантов', 4: 'четырёх вариантов', 5: 'пяти вариантов' };
+/**
+ * «Покажи три варианта»: сколько покажем и в каком порядке (его задаёт
+ * sortCandidates). Подбор ещё не выполнен — подходящих может оказаться меньше,
+ * поэтому «не больше».
+ */
+const resultLimitText = (asked, shown) => [
+  asked > shown ? `Больше ${shown} вариантов за раз не показываю.` : null,
+  `Покажу не больше ${COUNT_PHRASES[shown] || `${shown} вариантов`}: выше — те, кто лучше подходит под пожелания, затем по ближайшему времени, дороге и цене.`,
+].filter(Boolean).join(' ');
+
+export const bookingReplyText = ({ request, booking, today = null, routeToOption = false, ...labels }) => {
   const parts = [];
-  const summary = summarizeBooking({ request, ...labels });
+  const summary = summarizeBooking({ request, today, ...labels });
   // «Не знаю» на «к кому записаться?» — терапевт, которого ассистент предложил сам.
   if (booking?.specialtyDefaulted && request.specialty === 'therapist') {
     parts.push('Тогда начнём с терапевта: он посмотрит всё вместе и при необходимости направит к узкому специалисту.');
@@ -352,6 +393,13 @@ export const bookingReplyText = ({ request, booking, today = null, ...labels }) 
   } else {
     parts.push(`Ищу свободное время: ${summary.join(', ').replace(/\.$/u, '')}.`);
     parts.push('Показываю только варианты, которые подходят под все условия, — подбор ниже. Условия без вашего согласия не ослабляю.');
+    if (routeToOption) {
+      parts.push('Маршрут проложу к первому подходящему варианту; к другому — кнопкой «Маршрут» в его карточке.');
+    }
+    if (booking?.resultLimitAsked) parts.push(resultLimitText(booking.resultLimit, request.limit));
+    if (booking?.doctorOtherAsk) {
+      parts.push('К какому врачу не записывать? Назовите его — например, «не к Зариповой», — или выберите другого врача в подборе ниже: в нём все, кто подходит под условия.');
+    }
     // Программа ДМС не названа: подбор спросит её (если она не выбрана в интерфейсе), ответить можно и словами.
     if (request.dms.required && !request.dms.planId) {
       parts.push('Если программа ДМС ещё не выбрана, напишите её название — Basic, Standard или Premium — или выберите ниже: без программы нельзя утверждать, что приём покрывается страховкой.');

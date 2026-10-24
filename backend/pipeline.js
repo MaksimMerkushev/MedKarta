@@ -256,7 +256,7 @@ export const createPipeline = ({
         const index = await (booking.getIndex || getDemoCatalog)().catch(() => null);
         const built = buildBookingRequest({ booking: gate.context.booking, execution, now: booking.now(), index });
         if (built) {
-          action.booking = { request: built.request, summary: summarizeBooking(built) };
+          action.booking = { request: built.request, summary: summarizeBooking(built), route: built.routeToOption };
           // Карта не должна противоречить подбору: ни лишнего маршрута, ни фильтра по исключённой клинике.
           if (built.dropRoute) {
             action.buildRoute = false;

@@ -50,13 +50,31 @@ export const indexDemoCatalog = (catalog) => {
   });
 };
 
+/**
+ * «Только демо» (DEMO_ONLY=on): без реальных клиник из OSM, где врачи и
+ * расписание вымышлены, — остаются только вымышленные клиники и их врачи.
+ * Врач, принимающий хоть в одном реальном филиале, тоже убирается.
+ */
+export const fictionalOnly = (catalog) => {
+  const clinics = catalog.clinics.filter((clinic) => !clinic.real);
+  const branchIds = new Set(clinics.flatMap((clinic) => clinic.branches.map((branch) => branch.id)));
+  return {
+    ...catalog,
+    clinics,
+    doctors: catalog.doctors.filter((doctor) => doctor.branchIds.every((id) => branchIds.has(id))),
+    prices: catalog.prices.filter((price) => branchIds.has(price.branchId)),
+    insurance: { ...catalog.insurance, coverage: catalog.insurance.coverage.filter((item) => branchIds.has(item.branchId)) },
+  };
+};
+
 let cached = null;
 
 /** Демо-набор из data/demo/generated.js (один раз на процесс). */
 export const getDemoCatalog = async () => {
   if (!cached) {
     const { demoCatalog } = await import('../../data/demo/generated.js');
-    cached = indexDemoCatalog(demoCatalog);
+    const { demoOnlyEnabled } = await import('./flags.js');
+    cached = indexDemoCatalog(demoOnlyEnabled() ? fictionalOnly(demoCatalog) : demoCatalog);
   }
   return cached;
 };

@@ -1,14 +1,15 @@
 /*
  * © 2026 МедКарта Казань. Все права защищены.
  *
- * «Мои демо-записи»: номера записей хранятся только в этом браузере,
- * актуальный статус каждый раз спрашивается у сервера.
+ * «Мои демо-записи»: у гостя номера записей хранятся в этом браузере, у
+ * вошедшего пользователя — в кабинете на сервере. Актуальный статус каждый
+ * раз спрашивается у сервера.
  */
 import { useEffect, useState } from 'react';
 import { CalendarCheck, Loader2, Navigation, X } from 'lucide-react';
 import { cancelBooking, formatFullDate, lookupBookings } from './services/demoBooking';
 
-export default function MyBookingsPanel({ bookings, onChange, onRoute, onClose }) {
+export default function MyBookingsPanel({ bookings, inAccount = false, onChange, onRoute, onClose }) {
   const [statuses, setStatuses] = useState({});
   const [busyNumber, setBusyNumber] = useState(null);
   const [error, setError] = useState(null);
@@ -22,7 +23,11 @@ export default function MyBookingsPanel({ bookings, onChange, onRoute, onClose }
     lookupBookings(bookings)
       .then((payload) => {
         if (controller.cancelled) return;
-        setStatuses(Object.fromEntries(payload.bookings.map((item, index) => [bookings[index].number, item.found ? item.status : 'NOT_FOUND'])));
+        const fresh = Object.fromEntries(payload.bookings.map((item, index) => [bookings[index].number, item.found ? item.status : 'NOT_FOUND']));
+        setStatuses(fresh);
+        // Сохраняем то, что знает сервер (отмена в другой вкладке, сброс демо), — иначе значок считает устаревшее.
+        const stale = bookings.some((item) => item.status === 'CONFIRMED' && fresh[item.number] && fresh[item.number] !== 'CONFIRMED');
+        if (stale) onChange(bookings.map((item) => (item.status === 'CONFIRMED' && fresh[item.number] ? { ...item, status: fresh[item.number] } : item)));
       })
       .catch(() => {
         if (!controller.cancelled) setError('Не удалось проверить статусы — показаны сохранённые.');
@@ -86,7 +91,7 @@ export default function MyBookingsPanel({ bookings, onChange, onRoute, onClose }
                     {busyNumber === item.number && <Loader2 size={12} className="animate-spin" aria-hidden="true" />} Отменить
                   </button>
                 )}
-                {status !== 'CONFIRMED' && (
+                {status !== 'CONFIRMED' && !inAccount && (
                   <button type="button" onClick={() => onChange(bookings.filter((entry) => entry.number !== item.number))} className="rounded-lg border border-slate-200 px-2 py-0.5 font-semibold text-slate-500 dark:border-slate-600 dark:text-slate-300">
                     Убрать из списка
                   </button>
@@ -96,7 +101,11 @@ export default function MyBookingsPanel({ bookings, onChange, onRoute, onClose }
           );
         })}
       </ul>
-      <p className="mt-2 text-[11px] leading-4 text-slate-400">Записи демонстрационные: хранятся номер и код отмены только в этом браузере, в клиники ничего не отправляется.</p>
+      <p className="mt-2 text-[11px] leading-4 text-slate-400">
+        {inAccount
+          ? 'Записи демонстрационные: хранятся в вашем личном кабинете, в клиники ничего не отправляется.'
+          : 'Записи демонстрационные: хранятся номер и код отмены только в этом браузере, в клиники ничего не отправляется.'}
+      </p>
     </section>
   );
 }

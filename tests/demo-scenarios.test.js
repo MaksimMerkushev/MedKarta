@@ -620,6 +620,31 @@ describe('Демо-сценарии: тонкости языка — не нао
     assert.deepEqual(action.targetStops, []);
   });
 
+  it('«Построй маршрут до ближайшего терапевта на завтра после 18:00» — сначала свободное время, маршрут — к найденному', async () => {
+    const action = await chat('Построй маршрут до ближайшего терапевта на завтра после 18:00');
+    assert.ok(action.booking, action.replyText);
+    assert.equal(action.booking.request.specialty, 'therapist');
+    assert.equal(action.booking.request.timeFrom, '18:00');
+    assert.equal(action.booking.request.travel.nearest, true);
+    // Маршрут планировщика (к врачу, который завтра может не принимать) не строится — интерфейс проложит его к варианту.
+    assert.equal(action.booking.route, true);
+    assert.equal(action.buildRoute, false);
+    assert.deepEqual(action.targetStops, []);
+    assert.match(action.replyText, /Маршрут проложу к первому подходящему варианту/);
+    // «Ближайший» считается по графу дорог; без графа проверяем само расписание.
+    const result = await run(action, { patch: { travel: { ...action.booking.request.travel, nearest: false } } });
+    assert.equal(result.status, 'ok');
+    assert.ok(result.options.every((option) => option.doctor.specialtyKey === 'therapist'));
+    assert.ok(allSlots(result).every((slot) => slot.day === TOMORROW && slot.start >= '18:00'));
+
+    // Без дня и часов — по-прежнему просто маршрут, а запрос записи без слова «маршрут» — без маршрута.
+    const plain = await chat('Построй маршрут до ближайшего терапевта');
+    assert.equal(plain.booking, null);
+    assert.equal(plain.buildRoute, true);
+    const booking = await chat('Запиши к ближайшему терапевту на завтра после 18:00');
+    assert.equal(booking.booking.route, false);
+  });
+
   it('«невролог или терапевт» — выбор профиля, а не маршрут через двоих', async () => {
     const action = await chat('нужен невролог или терапевт сегодня вечером');
     assert.ok(action.booking, action.replyText);

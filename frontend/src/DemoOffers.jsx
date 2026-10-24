@@ -51,7 +51,10 @@ const CoverageBadge = ({ coverage }) => {
   );
 };
 
-const OptionCard = ({ option, index, today, onBook, onFocus, compact }) => {
+/** Ответы ассистента, по которым маршрут уже проложен автоматически. */
+const ROUTED = new WeakSet();
+
+const OptionCard = ({ option, index, today, onBook, onFocus, onRoute, compact }) => {
   const slots = option.slots || [];
   const text = compact ? 'text-[12.5px]' : 'text-[13.5px]';
   return (
@@ -104,7 +107,7 @@ const OptionCard = ({ option, index, today, onBook, onFocus, compact }) => {
               ))}
             </div>
           )}
-          <div className="mt-2 flex gap-1.5">
+          <div className="mt-2 flex flex-wrap gap-1.5 whitespace-nowrap">
             <button
               type="button"
               onClick={() => onBook(option, option.nextSlot)}
@@ -120,6 +123,16 @@ const OptionCard = ({ option, index, today, onBook, onFocus, compact }) => {
             >
               <MapPin size={12} aria-hidden="true" /> На карте
             </button>
+            {onRoute && (
+              <button
+                type="button"
+                onClick={() => onRoute(option)}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-600 transition-colors hover:border-blue-300 hover:text-blue-700 dark:border-slate-600 dark:text-slate-300"
+                data-testid="demo-offer-route"
+              >
+                <Navigation size={12} aria-hidden="true" /> Маршрут
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -165,6 +178,7 @@ export default function DemoOffers({
   onSelectPlan,
   onBook,
   onFocus,
+  onRoute = null,
   onRequestOrigin,
   onAnswer = null,
 }) {
@@ -199,6 +213,19 @@ export default function DemoOffers({
   useEffect(() => {
     if (autoScroll && state.status === 'ready') sectionRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
   }, [autoScroll, state.status]);
+
+  /*
+   * «Построй маршрут к терапевту на завтра после 18:00»: маршрут — к первому
+   * варианту, который подошёл под все условия. Один раз на ответ ассистента
+   * и только для последнего ответа: повторное открытие чата маршрут не
+   * возвращает, если его уже сбросили.
+   */
+  const firstOption = state.status === 'ready' && state.result?.status === 'ok' ? state.result.options[0] : null;
+  useEffect(() => {
+    if (!booking.route || !autoScroll || !firstOption || !onRoute || ROUTED.has(booking)) return;
+    ROUTED.add(booking);
+    onRoute(firstOption, { auto: true });
+  }, [booking, autoScroll, firstOption, onRoute]);
 
   // Ответ на вопрос подбора: в чат (и в историю диалога), а без чата — только в этом блоке.
   const answer = (text, patchValue) => (onAnswer ? onAnswer(text) : setPatch((current) => ({ ...current, ...patchValue })));
@@ -353,7 +380,7 @@ export default function DemoOffers({
                 )}
                 <ol className="space-y-1.5">
                   {result.options.map((option, index) => (
-                    <OptionCard key={option.id} option={option} index={index} today={result.today} onBook={(item, slot) => onBook?.(item, slot, request.patient)} onFocus={onFocus} compact={compact} />
+                    <OptionCard key={option.id} option={option} index={index} today={result.today} onBook={(item, slot) => onBook?.(item, slot, request.patient)} onFocus={onFocus} onRoute={onRoute} compact={compact} />
                   ))}
                 </ol>
                 <p className="mt-1.5 px-1 text-[10.5px] leading-4 text-slate-400">

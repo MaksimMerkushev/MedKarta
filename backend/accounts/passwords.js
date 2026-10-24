@@ -4,16 +4,25 @@
  * Хэши паролей: scrypt из node:crypto, без внешних зависимостей.
  *
  * Формат строки: scrypt$N$r$p$соль$хэш (base64url). Параметры хранятся
- * вместе с хэшем — их можно усилить позже, не ломая старые пароли.
+ * вместе с хэшем — их можно усилить позже, не ломая старые пароли: при
+ * входе хэш со старыми параметрами пересчитывается (needsRehash).
  * scrypt считается в пуле потоков libuv и не блокирует сервер с одним ядром.
+ *
+ * Почему не Argon2id: в node:crypto Node 22 его нет (появился в Node 24.7),
+ * а нативный модуль усложняет сборку на сервере. scrypt — функция с большим
+ * расходом памяти из того же списка OWASP; N=2^15, r=8, p=3 — равноценная
+ * OWASP-рекомендации настройка (32 МБ, ~0,3 с на ядро). Перейти на Argon2id
+ * можно с новым префиксом в строке хэша и пересчётом при входе.
  */
 
-import { randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomInt, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
 
-const PARAMS = Object.freeze({ N: 16384, r: 8, p: 1, keylen: 32 });
+const PARAMS = Object.freeze({ N: 32768, r: 8, p: 3, keylen: 32 });
 const MAX_MEMORY = 64 * 1024 * 1024;
 
-export const PASSWORD_LIMITS = Object.freeze({ MIN: 8, MAX: 128 });
+import { PASSWORD_LIMITS } from '../../shared/passwordPolicy.js';
+
+export { PASSWORD_LIMITS };
 
 const scrypt = (password, salt, { N, r, p, keylen }) =>
   new Promise((resolve, reject) => {
@@ -22,7 +31,7 @@ const scrypt = (password, salt, { N, r, p, keylen }) =>
 
 /*
  * Не больше двух расчётов scrypt одновременно и не больше 32 в очереди.
- * Каждый — ~60 мс и 16 МБ; без потолка поток входов со многих адресов занял бы
+ * Каждый — ~0,3 с и 32 МБ; без потолка поток входов со многих адресов занял бы
  * все потоки libuv, которыми пользуются и отдача файлов, и gzip.
  */
 const MAX_PARALLEL = 2;
@@ -77,7 +86,7 @@ export const verifyPassword = async (password, stored) => {
   if (parts.length !== 6 || parts[0] !== 'scrypt') return false;
   const [N, r, p] = parts.slice(1, 4).map(Number);
   // Чужие параметры из базы не должны превращать проверку в отказ в обслуживании.
-  if (![N, r, p].every(Number.isInteger) || N > 1 << 17 || r > 16 || p > 4) return false;
+  if (![N, r, p].every(Number.isInteger) || N > 1 << 17 || r > 16 || p > 8) return false;
   const salt = Buffer.from(parts[4], 'base64url');
   const expected = Buffer.from(parts[5], 'base64url');
   if (expected.length < 16 || expected.length > 64) return false;
@@ -92,21 +101,22 @@ export const verifyPassword = async (password, stored) => {
   return timingSafeEqual(actual, expected) && typeof stored === 'string' && stored.length > 0;
 };
 
-// Самые частые пароли из утечек — их подбирают первыми. Список короткий:
-// это отсечение очевидного, а не замена лимитам.
-const COMMON_PASSWORDS = new Set([
-  'password', 'password1', 'password123', 'qwertyui', 'qwerty123', 'qwertyuiop', '1q2w3e4r', '1q2w3e4r5t', 'q1w2e3r4',
-  'iloveyou', 'abcdefgh', 'abc12345', 'asdfghjk', 'zxcvbnm1', 'zaq12wsx', 'admin123', 'welcome1', 'letmein1',
-  'йцукенгш', 'пароль123', 'qazwsxedc', 'aaaaaaaa', 'medkarta', 'medkarta1', 'medkarta123', 'kazan2026',
-]);
+// Правила пароля общие с интерфейсом: shared/passwordPolicy.js.
+export { passwordChecks, passwordProblem } from '../../shared/passwordPolicy.js';
 
-/** Пустая строка — пароль подходит; иначе — что не так, по-русски. */
-export const passwordProblem = (password) => {
-  if (typeof password !== 'string') return 'Введите пароль.';
-  if (password.length < PASSWORD_LIMITS.MIN) return `Пароль — не короче ${PASSWORD_LIMITS.MIN} символов.`;
-  if (password.length > PASSWORD_LIMITS.MAX) return `Пароль — не длиннее ${PASSWORD_LIMITS.MAX} символов.`;
-  if (/^\d+$/.test(password)) return 'Пароль не должен состоять только из цифр.';
-  if (COMMON_PASSWORDS.has(password.toLowerCase())) return 'Этот пароль слишком распространён — его подбирают первым.';
-  if (/^(.)\1+$/u.test(password)) return 'Пароль из одного повторяющегося символа слишком простой.';
-  return '';
+/** Хэш посчитан со старыми параметрами — при входе его стоит пересчитать. */
+export const needsRehash = (stored) => {
+  if (typeof stored !== 'string') return false;
+  const parts = stored.split('$');
+  return parts[0] !== 'scrypt' || Number(parts[1]) !== PARAMS.N || Number(parts[2]) !== PARAMS.r || Number(parts[3]) !== PARAMS.p;
+};
+
+/*
+ * Временный пароль: 20 знаков без похожих (0/O, 1/l/I), группами по 4 —
+ * его диктуют и переписывают. ~116 бит энтропии, randomInt без смещения.
+ */
+const TEMP_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+export const generateTemporaryPassword = () => {
+  const chars = Array.from({ length: 20 }, () => TEMP_ALPHABET[randomInt(TEMP_ALPHABET.length)]);
+  return chars.join('').match(/.{4}/g).join('-');
 };

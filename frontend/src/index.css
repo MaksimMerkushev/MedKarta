@@ -397,6 +397,20 @@ html.dark .leaflet-control-attribution {
   outline-color: #60a5fa;
 }
 
+/*
+ * Экраны входа и приглашения (.mk-auth): общее кольцо фокуса остаётся, но
+ * не меняет скругление кнопок и полей; у полей ввода фокус — своя рамка и
+ * подсветка; заголовок, получивший фокус программно, без кольца.
+ */
+.mk-auth :focus-visible {
+  border-radius: revert-layer;
+}
+
+.mk-auth input:focus-visible,
+.mk-auth [tabindex="-1"]:focus-visible {
+  outline: none;
+}
+
 /* Пользователи, попросившие уменьшить анимацию, получают статичный интерфейс. */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -423,4 +437,31 @@ html.dark .leaflet-control-attribution {
 
 .toast-enter {
   animation: toastIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ============ ГРАФИКИ АДМИН-ПАНЕЛИ ============ */
+/*
+ * Два первых цвета категориальной палитры, проверенные на различимость при
+ * дальтонизме и контраст к фону карточки (белый / slate-900) в обеих темах.
+ */
+.mk-viz {
+  --viz-1: #2a78d6;
+  --viz-2: #eb6834;
+  --viz-surface: #ffffff;
+  --viz-grid: #e2e8f0;
+  --viz-axis: #cbd5e1;
+  --viz-muted: #64748b;
+  --viz-hover: rgba(42, 120, 214, 0.07);
+  --viz-track: #e8f0fb;
+}
+
+html.dark .mk-viz {
+  --viz-1: #3987e5;
+  --viz-2: #d95926;
+  --viz-surface: #0f172a;
+  --viz-grid: #1e293b;
+  --viz-axis: #334155;
+  --viz-muted: #94a3b8;
+  --viz-hover: rgba(57, 135, 229, 0.12);
+  --viz-track: #1e293b;
 }

@@ -12,14 +12,12 @@ import {
   deleteAccount,
   fetchAccount,
   loginAccount,
-  loginDemoAccount,
   logoutAccount,
-  registerAccount,
   updateAccount,
   updateAccountFavorites,
 } from '../services/account';
 
-const NO_FEATURES = Object.freeze({ available: false, registration: false, demo: false, demoAccounts: [] });
+const NO_FEATURES = Object.freeze({ available: false, registration: false });
 
 export const useAccount = ({ onSignedIn, onSignedOut, onGuest } = {}) => {
   const [state, setState] = useState({ status: 'loading', user: null, favorites: [], features: NO_FEATURES });
@@ -78,9 +76,10 @@ export const useAccount = ({ onSignedIn, onSignedOut, onGuest } = {}) => {
     }
   }, [signedOut]);
 
+  // Сервер не узнал сессию в другом месте (например, ассистент ответил 401) — выходим здесь.
+  const expire = useCallback(() => signedOut('expired'), [signedOut]);
+
   const login = useCallback(async (credentials) => signedIn(await loginAccount(credentials)), [signedIn]);
-  const register = useCallback(async (form) => signedIn(await registerAccount(form)), [signedIn]);
-  const loginDemo = useCallback(async (key) => signedIn(await loginDemoAccount(key)), [signedIn]);
 
   const logout = useCallback(async () => {
     try {
@@ -108,5 +107,10 @@ export const useAccount = ({ onSignedIn, onSignedOut, onGuest } = {}) => {
     return payload.favorites;
   }, [guarded]);
 
-  return { ...state, login, register, loginDemo, logout, removeAccount, setPlan, syncFavorites };
+  // Профиль изменили на другой странице (имя, аватар, пароль) — обновить без входа заново.
+  const applyUser = useCallback((user) => {
+    if (user) setState((current) => (current.status === 'user' ? { ...current, user } : current));
+  }, []);
+
+  return { ...state, login, logout, expire, applyUser, removeAccount, setPlan, syncFavorites };
 };
