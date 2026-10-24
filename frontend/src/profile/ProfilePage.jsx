@@ -1,8 +1,9 @@
 /*
  * © 2026 МедКарта Казань. Все права защищены.
  *
- * Страница /profile: свой профиль, аватар, пароль, активные сессии и
- * последние входы. Только свои данные — сервер берёт пользователя из сессии.
+ * Страница /profile: свой профиль, аватар, пароль, безопасность аккаунта
+ * (email, двухфакторная защита, резервные коды), активные сессии и журнал
+ * входов. Только свои данные — сервер берёт пользователя из сессии.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Camera, Clock3, LayoutDashboard, LogOut, Monitor, ShieldCheck, Trash2 } from 'lucide-react';
@@ -11,6 +12,8 @@ import {
   fetchMe, fetchMyLogins, fetchMySessions, logoutAccount, removeAvatar, revokeMySession, revokeOtherSessions, updateMe, uploadAvatar,
 } from '../services/account';
 import { ForcedPasswordChange, PasswordChangeForm } from '../ui/auth';
+import { ReauthProvider } from '../ui/reauth';
+import SecuritySection from './SecuritySection';
 import {
   Avatar, Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, RoleBadge, Skeleton, Spinner, StatusBadge, TextInput, ThemeToggle, ToastProvider,
 } from '../ui/kit';
@@ -190,7 +193,7 @@ function NameCard({ user, onChange }) {
         <TextInput label="Имя" value={firstName} maxLength={60} disabled={user.isDemo} autoComplete="given-name" onChange={(event) => setFirstName(event.target.value)} data-testid="profile-first-name" />
         <TextInput label="Фамилия" value={lastName} maxLength={60} disabled={user.isDemo} autoComplete="family-name" onChange={(event) => setLastName(event.target.value)} data-testid="profile-last-name" />
         <div className="sm:col-span-2">
-          <TextInput label="Email" value={user.email} disabled hint="Email меняет администратор." />
+          <TextInput label="Email" value={user.email} disabled hint={user.isDemo ? 'Email демо-аккаунта не меняется.' : 'Сменить email можно в разделе «Безопасность аккаунта» ниже.'} />
         </div>
         {error && <p className="rounded-xl bg-red-50 px-3 py-2 text-[13px] text-red-700 sm:col-span-2 dark:bg-red-950/50 dark:text-red-300" role="alert">{error}</p>}
         {!user.isDemo && (
@@ -259,6 +262,7 @@ function SessionsCard({ onSignedOut }) {
                 <p className="flex flex-wrap items-center gap-1.5 text-[13.5px] font-semibold text-slate-700 dark:text-slate-200">
                   {session.client}
                   {session.current && <Badge tone="green">Это устройство</Badge>}
+                  {session.mfa && <Badge tone="blue">2FA</Badge>}
                 </p>
                 <p className="text-[12px] text-slate-500 dark:text-slate-400">
                   Активность {formatRelative(session.lastSeenAt)} · вход {formatDateTime(session.createdAt)}{session.network ? ` · сеть ${session.network}` : ''}
@@ -286,12 +290,15 @@ function SessionsCard({ onSignedOut }) {
   );
 }
 
-const EVENT_TONES = { login_ok: 'green', login_failed: 'red', login_denied: 'amber', password_changed: 'blue' };
+const EVENT_TONES = {
+  login_ok: 'green', login_failed: 'red', login_denied: 'amber', login_throttled: 'amber', login_locked: 'amber', password_changed: 'blue', password_reset: 'blue',
+  mfa_failed: 'red', reauth_failed: 'red', mfa_enabled: 'green', mfa_disabled: 'amber', recovery_code_used: 'amber', email_changed: 'blue', sessions_revoked: 'blue',
+};
 
 function LoginsCard() {
   const [state, , load] = useLoaded(resolveLogins, LIST_LOADING);
   return (
-    <Card title="Последние входы" description="Успешные и неудачные попытки, смены пароля. Хранятся ограниченное время." bodyClassName="p-0">
+    <Card title="События безопасности" description="Входы и неудачные попытки, смена пароля и email, изменения двухфакторной защиты. Хранятся ограниченное время." bodyClassName="p-0">
       {state.status === 'loading' && <Spinner />}
       {state.status === 'error' && <ErrorState error={state.error} onRetry={load} />}
       {state.status === 'ready' && state.items.length === 0 && <EmptyState icon={Clock3} title="Записей пока нет" />}
@@ -347,7 +354,7 @@ function ProfileContent() {
         {status === 'ready' && user && (
           <>
             {user.mustChangePassword && <ForcedPasswordChange user={user} onDone={(fresh) => setUser(fresh)} onLogout={logout} />}
-            <div className="grid gap-5 lg:grid-cols-[300px_minmax(0,1fr)]">
+            <div className="grid grid-cols-1 gap-5 lg:grid-cols-[300px_minmax(0,1fr)]">
               <div className="space-y-5">
                 <AvatarCard user={user} onChange={setUser} />
               </div>
@@ -361,6 +368,7 @@ function ProfileContent() {
                     }} />
                   </Card>
                 )}
+                {!user.isDemo && <SecuritySection onSignedOut={() => setState({ status: 'guest', user: null, error: null })} />}
                 <SessionsCard onSignedOut={() => {
                   setState({ status: 'guest', user: null, error: null });
                   navigate('/profile', { replace: true });
@@ -382,7 +390,9 @@ function ProfileContent() {
 export default function ProfilePage() {
   return (
     <ToastProvider>
-      <ProfileContent />
+      <ReauthProvider>
+        <ProfileContent />
+      </ReauthProvider>
     </ToastProvider>
   );
 }

@@ -90,6 +90,7 @@ const GuestView = ({ account, support, onBusy }) => {
               onBusy?.(false);
             }
           }}
+          onVerified={account.acceptLogin}
         />
       </section>
 

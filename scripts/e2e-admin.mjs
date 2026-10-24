@@ -7,9 +7,12 @@
  * активация по приглашению, блокировка с отзывом сессии, разблокировка,
  * новое приглашение (прежнее отзывается), история входов, журнал, создание
  * пользователя с приглашением, вход обычного пользователя, правка профиля,
- * завершение сессии, перезапуск сервера, отсутствие регистрации, повторное
- * использование ссылки. Экраны входа и приглашения подробно —
- * scripts/e2e-auth.mjs.
+ * завершение сессии, перезапуск сервера, закрытая регистрация (режим
+ * invite_only), повторное использование ссылки. Обязательная двухфакторная
+ * защита сотрудника: настройка ключа доступа (виртуальный ключ WebAuthn в
+ * Chromium) при первом входе в панель, резервные коды, подтверждение
+ * личности перед сменой роли. Экраны входа и приглашения подробно —
+ * scripts/e2e-auth.mjs, регистрация и письма — scripts/e2e-register.mjs.
  *
  * Нужны собранный фронтенд (npm run build) и Playwright с Chromium
  * (npm i --no-save playwright && npx playwright install chromium).
@@ -20,6 +23,7 @@
 
 /* global window, document -- код внутри page.evaluate выполняется в браузере */
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -43,7 +47,8 @@ try {
 }
 
 const PORT = Number(process.env.E2E_PORT) || 4200;
-const BASE = `http://127.0.0.1:${PORT}`;
+// localhost, а не 127.0.0.1: ключи доступа (WebAuthn) работают только на доменном имени.
+const BASE = `http://localhost:${PORT}`;
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'medkarta-e2e-'));
 const ROOT_EMAIL = 'maximka2703@bk.ru';
 const ROOT_PASSWORD = `Е2Е-${Math.random().toString(36).slice(2)}-корень`;
@@ -59,6 +64,13 @@ const env = {
   DEMO_BOOKING_DB_PATH: path.join(WORK, 'booking.sqlite'),
   ADMIN_BOOTSTRAP_EMAIL: ROOT_EMAIL,
   ADMIN_BOOTSTRAP_PASSWORD: ROOT_PASSWORD,
+  // Адрес сайта для ссылок и ключей доступа; почта не настроена — ссылки передаются вручную.
+  PUBLIC_BASE_URL: BASE,
+  APP_URL: '',
+  SMTP_URL: '',
+  SMTP_HOST: '',
+  REGISTRATION_MODE: 'invite_only',
+  MFA_SECRET_KEY: randomBytes(32).toString('base64'),
 };
 
 let server = null;
@@ -76,6 +88,16 @@ const startServer = async () => {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error('сервер не запустился');
+};
+const sqlite = async (work) => {
+  const { loadSqlite } = await import('../backend/accounts/sqliteStore.js');
+  const DatabaseSync = await loadSqlite();
+  const db = new DatabaseSync(env.ACCOUNTS_DB_PATH);
+  try {
+    return work(db);
+  } finally {
+    db.close();
+  }
 };
 const stopServer = async () => {
   if (!server) return;
@@ -112,12 +134,15 @@ try {
   const { createAccountContext } = await import('../backend/api/accountContext.js');
   const { createDelivery } = await import('../backend/accounts/delivery.js');
   const seedStore = createSqliteAccountStore({ DatabaseSync: await loadSqlite(), file: env.ACCOUNTS_DB_PATH });
-  const seedContext = createAccountContext({ store: seedStore, delivery: createDelivery({ env: {} }) });
+  const seedContext = createAccountContext({ store: seedStore, delivery: createDelivery({ env: {} }), env: {} });
   const invites = Object.fromEntries((await createTestUsers({ store: seedStore, invitations: seedContext.invitations, base: BASE })).map((item) => [item.email, item.link]));
   seedStore.close();
 
   browser = await chromium.launch();
   const admin = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  // Ключ доступа администратора — виртуальный (WebAuthn через протокол отладки Chromium).
+  const { attachAuthenticator } = await import('./e2e-lib.mjs');
+  const adminKey = await attachAuthenticator(admin);
   const pageErrors = [];
   admin.on('pageerror', (error) => pageErrors.push(String(error)));
   const shot = async (page, name) => {
@@ -169,32 +194,59 @@ try {
     await shot(admin, '01-map-signed-in');
   });
 
-  await step('4–5. Открыть /admin и увидеть дашборд из базы', async () => {
+  await step('4. Админ-панель без второго фактора не открывается: настройка ключа доступа и резервные коды', async () => {
     await admin.click('[data-testid=account-admin-link]');
+    await admin.waitForSelector('[data-testid=admin-mfa-setup]');
+    const denied = await admin.evaluate(() => fetch('/api/admin/users').then(async (response) => ({ status: response.status, code: (await response.json()).code })));
+    expect(denied.status === 403 && denied.code === 'mfa_setup_required', `API без MFA: ${JSON.stringify(denied)}`);
+    await shot(admin, '01b-mfa-setup');
+    await admin.click('[data-testid=mfa-add-passkey]');
+    await admin.waitForSelector('[data-testid=recovery-codes]');
+    const codes = await admin.$$eval('[data-testid=recovery-codes] li', (items) => items.map((item) => item.textContent.trim()));
+    expect(codes.length === 10 && codes.every((code) => /^[a-z2-9]{5}-[a-z2-9]{5}$/.test(code)), `резервные коды: ${codes.length}`);
+    expect(await adminKey.count() === 1, 'ключ не создан в виртуальном устройстве');
+    await shot(admin, '01c-recovery-codes');
+    await admin.click('[data-testid=recovery-done]');
+  });
+
+  await step('5. Открыть /admin и увидеть дашборд из базы', async () => {
     await admin.waitForSelector('[data-testid=tile-total]');
     const total = await admin.textContent('[data-testid=tile-total]');
     expect(/4/.test(total), `всего пользователей: ${total}`);
     await admin.click('[data-testid=period-30d]');
+    expect(await admin.$('[data-testid=admin-mfa-setup]') === null, 'экран настройки MFA не исчез');
     await admin.waitForTimeout(400);
     await shot(admin, '02-dashboard');
   });
 
-  await step('6. Найти трёх тестовых пользователей', async () => {
+  await step('6. Найти трёх тестовых пользователей; у администратора — отметка 2FA', async () => {
     await goto(admin, '/admin/users');
     await admin.fill('[data-testid=users-search]', 'medkarta.test');
     await admin.waitForFunction(() => document.querySelectorAll('[data-testid=user-row]').length === 3);
     await shot(admin, '03-users');
+    await admin.fill('[data-testid=users-search]', ROOT_EMAIL);
+    await admin.waitForSelector(`[data-testid=user-row] >> text=${ROOT_EMAIL}`);
+    expect((await admin.textContent('[data-testid=user-row]')).includes('2FA'), 'нет отметки 2FA у суперадминистратора');
   });
 
-  await step('7–8. Открыть профиль, изменить имя и роль', async () => {
+  await step('7–8. Открыть профиль, изменить имя и роль (смена роли — после подтверждения личности паролем и ключом)', async () => {
     await openUser('anna.smirnova@medkarta.test');
     await tab(admin, 'Управление');
     await admin.fill('[data-testid=edit-first-name]', 'Анна-Мария');
     await admin.click('[data-testid=edit-save]');
     await admin.waitForFunction(() => document.querySelector('[data-testid=user-detail-name]')?.textContent.includes('Анна-Мария'));
+    // Подтверждение личности «устарело» (как через 10 минут): смена роли попросит пароль и ключ.
+    await sqlite((db) => db.prepare('UPDATE sessions SET reauth_at = 1 WHERE user_id = (SELECT id FROM users WHERE email = ?)').run(ROOT_EMAIL));
     await admin.selectOption('[data-testid=role-select]', 'moderator');
     await admin.click('[data-testid=role-save]');
     await admin.click('[data-testid=confirm-action]');
+    await admin.waitForSelector('[data-testid=reauth-dialog]');
+    await admin.fill('[data-testid=reauth-password]', ROOT_PASSWORD);
+    await admin.click('[data-testid=reauth-submit]');
+    await admin.waitForSelector('[data-testid=mfa-passkey]');
+    await shot(admin, '04a-reauth');
+    await admin.click('[data-testid=mfa-passkey]');
+    await admin.waitForSelector('[data-testid=reauth-dialog]', { state: 'detached' });
     await admin.waitForFunction(() => document.querySelector('[data-testid=user-detail-name]')?.parentElement.textContent.includes('Модератор'));
     await shot(admin, '04-user-manage');
   });
@@ -331,24 +383,28 @@ try {
     expect(status === 401, `завершённая сессия ответила ${status}`);
   });
 
-  await step('19. Перезапустить сервер — данные на месте', async () => {
+  await step('19. Перезапустить сервер — данные и сессия со вторым фактором на месте', async () => {
     await stopServer();
     await startServer();
     await admin.reload();
+    expect(await admin.$('[data-testid=admin-mfa-setup]') === null && await admin.$('[data-testid=admin-mfa-verify]') === null, 'после перезапуска снова просит второй фактор');
     await goto(admin, '/admin/users?q=medkarta.test');
     await admin.waitForFunction(() => document.querySelectorAll('[data-testid=user-row]').length === 4);
     const text = await admin.textContent('[data-testid=users-table]');
     expect(text.includes('Петрова-Смирнова') && text.includes('Анна-Мария'), 'изменения пропали после перезапуска');
   });
 
-  await step('20. Публичной регистрации нет', async () => {
-    const status = await admin.evaluate(() => fetch('/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"email":"x@y.ru","password":"пароль-пароль"}' }).then((response) => response.status));
-    expect(status === 404, `регистрация ответила ${status}`);
+  await step('20. Режим «только по приглашению»: регистрация закрыта и не предлагается', async () => {
+    const answer = await admin.evaluate(() => fetch('/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"email":"x@y.ru"}' })
+      .then(async (response) => ({ status: response.status, code: (await response.json()).code })));
+    expect(answer.status === 403 && answer.code === 'registration_closed', `регистрация ответила ${JSON.stringify(answer)}`);
     const guest = await browser.newPage();
     await guest.goto(BASE, { waitUntil: 'domcontentloaded' });
     await guest.click('[data-testid=account-button]');
     await guest.waitForSelector('[data-testid=login-form]');
-    expect(!(await guest.$('text=Создать аккаунт')), 'в интерфейсе есть регистрация');
+    expect(!(await guest.$('[data-testid=auth-register]')), 'в интерфейсе есть регистрация');
+    await guest.goto(`${BASE}/register`, { waitUntil: 'domcontentloaded' });
+    await guest.waitForSelector('[data-testid=register-closed]');
     await guest.close();
   });
 

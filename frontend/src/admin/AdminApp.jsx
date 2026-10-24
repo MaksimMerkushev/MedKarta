@@ -2,7 +2,8 @@
  * © 2026 МедКарта Казань. Все права защищены.
  *
  * Оболочка админ-панели (/admin): проверка прав (без сессии — на /login),
- * боковое меню, маршруты разделов. Что показывать, решает ответ /api/admin/me; доступ к
+ * обязательная двухфакторная защита сотрудников (нет способа — настройка,
+ * сессия без второго фактора — подтверждение), боковое меню, маршруты разделов. Что показывать, решает ответ /api/admin/me; доступ к
  * данным всё равно проверяет сервер на каждом запросе.
  */
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -11,12 +12,14 @@ import {
 } from 'lucide-react';
 
 import { logoutAccount } from '../services/account';
+import { MfaSetupPanel } from '../profile/SecuritySection';
 import { ForcedPasswordChange } from '../ui/auth';
 import { Avatar, Button, EmptyState, ErrorState, IconButton, RoleBadge, Spinner, ThemeToggle, ToastProvider } from '../ui/kit';
-import { useLoaded, useTheme, useToast } from '../ui/hooks';
+import { useLoaded, useReauth, useTheme, useToast } from '../ui/hooks';
+import { ReauthProvider } from '../ui/reauth';
 import { Link } from '../ui/router';
 import { navigate, useLocation } from '../ui/navigation';
-import { api, AUTH_EVENT } from './api';
+import { api, AUTH_EVENT, setReauthHandler } from './api';
 import { AdminContext } from './model';
 
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -126,12 +129,12 @@ function Shell({ me, onLogout, children, title }) {
   );
 }
 
-function CenteredCard({ children }) {
+function CenteredCard({ children, wide = false }) {
   const theme = useTheme();
   return (
     <div className="flex h-full items-center justify-center overflow-y-auto bg-slate-50 p-4 dark:bg-slate-950">
       <div className="absolute right-4 top-4"><ThemeToggle theme={theme} /></div>
-      <div className="w-full max-w-sm rounded-3xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">{children}</div>
+      <div className={`w-full ${wide ? 'max-w-xl' : 'max-w-sm'} rounded-3xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900`}>{children}</div>
     </div>
   );
 }
@@ -143,6 +146,8 @@ const resolveAccess = async () => {
   } catch (error) {
     if (error.status === 401) return { status: 'login', me: null, error: null };
     if (error.code === 'password_change_required') return { status: 'password', me: null, error: null };
+    if (error.code === 'mfa_setup_required') return { status: 'mfa_setup', me: null, error: null };
+    if (error.code === 'mfa_required') return { status: 'mfa_verify', me: null, error: null };
     if (error.status === 403) return { status: 'forbidden', me: null, error: null };
     return { status: 'error', me: null, error };
   }
@@ -191,14 +196,67 @@ function useActivationNotices(enabled) {
   }, [enabled, toast]);
 }
 
+/** Обязательная защита: нет второго фактора — настройка прямо здесь. */
+function MfaSetupScreen({ onDone, onLogout }) {
+  return (
+    <CenteredCard wide>
+      <div data-testid="admin-mfa-setup">
+        <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300" aria-hidden="true"><ShieldCheck size={22} /></span>
+        <h1 className="mt-3 text-[19px] font-extrabold text-slate-800 dark:text-white">Включите двухфакторную защиту</h1>
+        <p className="mb-4 mt-1 text-[13.5px] leading-5 text-slate-600 dark:text-slate-300">
+          Для сотрудников она обязательна: в админ-панели — данные пользователей. Добавьте ключ доступа (отпечаток, лицо, PIN устройства) или приложение-аутентификатор и сохраните резервные коды.
+        </p>
+        <MfaSetupPanel onEnabled={onDone} />
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button onClick={onDone} data-testid="admin-mfa-check">Я настроил — продолжить</Button>
+          <Button variant="ghost" icon={LogOut} onClick={onLogout}>Выйти</Button>
+        </div>
+      </div>
+    </CenteredCard>
+  );
+}
+
+/** Сессия без второго фактора (вход по ссылке или фактор добавлен на другом устройстве): подтвердить. */
+function MfaVerifyScreen({ onDone, onLogout }) {
+  const { confirm } = useReauth();
+  const [error, setError] = useState('');
+  const verify = async () => {
+    setError('');
+    if (await confirm()) onDone();
+    else setError('Без подтверждения вторым фактором админ-панель не откроется.');
+  };
+  return (
+    <CenteredCard>
+      <div data-testid="admin-mfa-verify">
+        <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-50 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300" aria-hidden="true"><ShieldCheck size={22} /></span>
+        <h1 className="mt-3 text-[19px] font-extrabold text-slate-800 dark:text-white">Подтвердите вход</h1>
+        <p className="mt-1 text-[13.5px] leading-5 text-slate-600 dark:text-slate-300">Для админ-панели нужна сессия, подтверждённая вторым фактором: пароль и ключ доступа или код из приложения.</p>
+        {error && <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-[13px] text-amber-800 dark:bg-amber-950/40 dark:text-amber-200" role="alert">{error}</p>}
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button variant="primary" icon={ShieldCheck} onClick={verify} data-testid="admin-mfa-verify-start">Подтвердить</Button>
+          <Button variant="ghost" icon={LogOut} onClick={onLogout}>Выйти</Button>
+        </div>
+      </div>
+    </CenteredCard>
+  );
+}
+
 function AdminRoot() {
   const { path, search } = useLocation();
   const [state, setState, load] = useLoaded(resolveAccess, { status: 'loading', me: null, error: null });
+  const { confirm } = useReauth();
+
+  // Критичные действия без свежего подтверждения личности: окно подтверждения — и повтор запроса.
+  useEffect(() => {
+    setReauthHandler(confirm);
+    return () => setReauthHandler(null);
+  }, [confirm]);
 
   // Сессия кончилась или отозвана посреди работы — сразу на экран входа.
   useEffect(() => {
     const onAuth = (event) => {
-      setState((current) => ({ ...current, status: event.detail?.code === 'password_change_required' ? 'password' : 'login' }));
+      const status = { password_change_required: 'password', mfa_setup_required: 'mfa_setup', mfa_required: 'mfa_verify' }[event.detail?.code] || 'login';
+      setState((current) => ({ ...current, status }));
     };
     window.addEventListener(AUTH_EVENT, onAuth);
     return () => window.removeEventListener(AUTH_EVENT, onAuth);
@@ -247,6 +305,8 @@ function AdminRoot() {
   if (state.status === 'password') {
     return <div className="h-full bg-slate-50 dark:bg-slate-950"><ForcedPasswordChange onDone={load} onLogout={logout} /></div>;
   }
+  if (state.status === 'mfa_setup') return <MfaSetupScreen onDone={load} onLogout={logout} />;
+  if (state.status === 'mfa_verify') return <MfaVerifyScreen onDone={load} onLogout={logout} />;
   if (state.status === 'forbidden') {
     return (
       <CenteredCard>
@@ -283,7 +343,9 @@ function AdminRoot() {
 export default function AdminApp() {
   return (
     <ToastProvider>
-      <AdminRoot />
+      <ReauthProvider>
+        <AdminRoot />
+      </ReauthProvider>
     </ToastProvider>
   );
 }

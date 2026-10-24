@@ -9,7 +9,7 @@
  */
 import { useState } from 'react';
 import {
-  Archive, ArrowLeft, Ban, Copy, KeyRound, Link2, Lock, LogOut, Mail, Monitor, RotateCcw, Save, Send, ShieldAlert, Trash2, Unlock, UserCog,
+  Archive, ArrowLeft, Ban, Copy, KeyRound, Link2, Lock, LogOut, Mail, MailCheck, Monitor, RotateCcw, Save, Send, ShieldAlert, ShieldCheck, Timer, Trash2, Unlock, UserCog,
 } from 'lucide-react';
 
 import { api, useApi } from '../api';
@@ -69,6 +69,29 @@ function ProfileTab({ user }) {
         <Row label="Последняя активность">{user.lastSeenAt ? `${formatDateTime(user.lastSeenAt)} (${formatRelative(user.lastSeenAt)})` : '—'}</Row>
         <Row label="Пароль изменён">{formatDateTime(user.passwordChangedAt)}</Row>
         <Row label="Смена пароля">{user.mustChangePassword ? <Badge tone="amber" icon={KeyRound}>Требуется при входе</Badge> : 'не требуется'}</Row>
+        <Row label="Email подтверждён">
+          {user.emailVerified
+            ? <Badge tone="green" icon={MailCheck}>{user.emailVerifiedAt ? `Да, ${formatDateTime(user.emailVerifiedAt)}` : 'Да'}</Badge>
+            : <Badge tone="slate">Нет</Badge>}
+        </Row>
+        <Row label="Как создан">{user.signupSource === 'self' ? 'Зарегистрировался сам' : user.createdBy ? 'Создан администратором' : '—'}{user.activatedAt ? ` · активирован ${formatDateTime(user.activatedAt)}` : ''}</Row>
+        <Row label="Двухфакторная защита">
+          {user.mfa?.enabled
+            ? <Badge tone="green" icon={ShieldCheck}>Включена · способов: {user.mfa.factors}</Badge>
+            : user.mfa?.required
+              ? <Badge tone="red" icon={ShieldAlert} className="whitespace-normal">Не настроена — обязательна для сотрудника</Badge>
+              : <Badge tone="slate">Не включена</Badge>}
+        </Row>
+        <Row label="Ограничения входа">
+          {user.loginLimits?.active
+            ? (
+              <Badge tone="amber" icon={Timer} className="whitespace-normal">
+                {user.loginLimits.accountLockedUntil ? `Вход с новых устройств закрыт до ${formatDateTime(user.loginLimits.accountLockedUntil)}` : user.loginLimits.mfaLockedUntil ? `Проверка кодов закрыта до ${formatDateTime(user.loginLimits.mfaLockedUntil)}` : `Ограничено мест входа: ${user.loginLimits.lockedPlaces}`}
+              </Badge>
+            )
+            : 'нет'}
+          {user.loginLimits?.recentFailures ? ` · неудачных попыток за последний час: ${user.loginLimits.recentFailures}` : ''}
+        </Row>
         <Row label="Неудачные входы подряд">{user.failedLogins}{user.lastFailedLoginAt ? ` · последний ${formatDateTime(user.lastFailedLoginAt)}` : ''}</Row>
         <Row label="Активные сессии">{user.activeSessions}</Row>
       </dl>
@@ -307,6 +330,9 @@ function ManageTab({ data, onChanged }) {
               <Button variant="dangerGhost" icon={Lock} disabled={!can.block || user.status === 'archived'} onClick={() => setDialog('block')} data-testid="block-user">Заблокировать</Button>
             )}
             <Button variant="ghost" icon={LogOut} disabled={!can.sessions || user.isSelf || user.activeSessions === 0} onClick={() => setDialog('sessions')} data-testid="revoke-sessions">Завершить все сессии</Button>
+            {user.loginLimits?.active && (
+              <Button variant="ghost" icon={Timer} disabled={!can.unlockLogin} onClick={() => setDialog('unlock-login')} data-testid="unlock-login">Снять ограничения входа</Button>
+            )}
             {user.status === 'archived' ? (
               <Button icon={RotateCcw} disabled={!can.archive} onClick={() => setDialog('restore')}>Восстановить из архива</Button>
             ) : (
@@ -353,6 +379,16 @@ function ManageTab({ data, onChanged }) {
             toast(`Завершено сессий: ${result.revoked}.`);
             onChanged(null);
           }} />
+      )}
+      {dialog === 'unlock-login' && (
+        <ConfirmDialog
+          title="Снять ограничения входа?"
+          message="Счётчики неудачных попыток для этого аккаунта обнулятся. Делайте это, только если уверены, что попытки делал сам владелец (например, он позвонил)."
+          confirmLabel="Снять ограничения"
+          tone="primary"
+          onClose={() => setDialog(null)}
+          onConfirm={() => act(() => api.post(`/api/admin/users/${user.id}/unlock-login`, {}), 'Ограничения входа сняты.')}
+        />
       )}
       {dialog === 'archive' && (
         <ConfirmDialog title="Отправить в архив?" message="Вход будет закрыт, сессии завершены. Данные сохранятся, аккаунт можно восстановить." confirmLabel="В архив" onClose={() => setDialog(null)}

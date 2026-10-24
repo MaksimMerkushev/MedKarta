@@ -10,7 +10,7 @@ import { forwardRef, useId, useState } from 'react';
 import { AnimatePresence, motion as Motion, useReducedMotion } from 'motion/react';
 import { AlertCircle, Check, Eye, EyeOff, Loader2 } from 'lucide-react';
 
-import { passwordChecks } from '@shared/passwordPolicy.js';
+import { PASSWORD_LIMITS, passwordChecks, passwordStrength } from '@shared/passwordPolicy.js';
 import { EASE, SPRING } from './motion';
 
 
@@ -92,7 +92,7 @@ export const PasswordField = forwardRef(function PasswordField({ label, invalid 
           ref={ref}
           id={id}
           type={visible ? 'text' : 'password'}
-          maxLength={128}
+          maxLength={PASSWORD_LIMITS.MAX}
           spellCheck={false}
           autoCapitalize="none"
           aria-invalid={invalid || undefined}
@@ -180,6 +180,30 @@ export function PasswordRequirements({ id, password, email }) {
         ))}
       </ul>
       <p className="sr-only" aria-live="polite">{password ? `Выполнено требований: ${done} из ${checks.length}` : ''}</p>
+    </div>
+  );
+}
+
+const STRENGTH_TONES = ['bg-slate-300 dark:bg-slate-600', 'bg-red-500', 'bg-amber-500', 'bg-emerald-500', 'bg-emerald-600 dark:bg-emerald-400'];
+
+/**
+ * Индикатор надёжности: четыре деления и слово. Только подсказка — решает
+ * сервер (длина, частые пароли, по желанию — база утечек). Цвет не
+ * единственный носитель смысла: рядом всегда слово.
+ */
+export function PasswordStrength({ password, email }) {
+  const { score, label } = passwordStrength(password, { email });
+  if (!password) return null;
+  return (
+    <div className="mt-3 flex items-center gap-3" data-testid="password-strength" data-score={score}>
+      <div className="grid flex-1 grid-cols-4 gap-1" aria-hidden="true">
+        {[1, 2, 3, 4].map((step) => (
+          <span key={step} className={`h-1.5 rounded-full transition-colors duration-200 ${score >= step ? STRENGTH_TONES[score] : 'bg-slate-200 dark:bg-slate-700'}`} />
+        ))}
+      </div>
+      <span className="min-w-[88px] text-right text-[13px] font-medium text-slate-600 dark:text-slate-300" aria-live="polite">
+        <span className="sr-only">Надёжность пароля: </span>{label}
+      </span>
     </div>
   );
 }

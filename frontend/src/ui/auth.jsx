@@ -2,14 +2,17 @@
  * © 2026 МедКарта Казань. Все права защищены.
  *
  * Смена пароля — в профиле и (для старых временных паролей) обязательным
- * окном. Вход — auth/AuthFlow.jsx. Регистрации нет: аккаунты выдаёт
- * администратор по приглашению.
+ * окном. Вход — auth/AuthFlow.jsx, регистрация — auth/RegisterPage.jsx.
+ * Если включена двухфакторная защита, сервер попросит подтвердить личность
+ * (reauth_required) — окно подтверждения откроет ReauthProvider.
  */
 import { useEffect, useId, useRef, useState } from 'react';
 import { Eye, EyeOff, KeyRound, Lock } from 'lucide-react';
 
-import { passwordProblem } from '@shared/passwordPolicy.js';
+import { PASSWORD_LIMITS, passwordProblem } from '@shared/passwordPolicy.js';
+import { PasswordStrength } from '../auth/parts';
 import { changePassword } from '../services/account';
+import { useReauth } from './hooks';
 import { Button, inputClass } from './kit';
 
 function PasswordInput({ id, value, onChange, autoComplete, label, inputRef = null, testId }) {
@@ -24,7 +27,7 @@ function PasswordInput({ id, value, onChange, autoComplete, label, inputRef = nu
           ref={inputRef}
           type={visible ? 'text' : 'password'}
           autoComplete={autoComplete}
-          maxLength={128}
+          maxLength={PASSWORD_LIMITS.MAX}
           className={`${inputClass} pl-9 pr-11`}
           value={value}
           onChange={(event) => onChange(event.target.value)}
@@ -60,6 +63,7 @@ export function PasswordChangeForm({ onDone, temporary = false, autoFocus = temp
   const [error, setError] = useState('');
   const [pending, setPending] = useState(false);
   const firstRef = useRef(null);
+  const { withReauth } = useReauth();
 
   useEffect(() => {
     // Фокус — только в обязательной смене пароля (модальное окно), не в профиле.
@@ -75,7 +79,7 @@ export function PasswordChangeForm({ onDone, temporary = false, autoFocus = temp
     setError('');
     setPending(true);
     try {
-      const result = await changePassword({ currentPassword: current, newPassword: next });
+      const result = await withReauth(() => changePassword({ currentPassword: current, newPassword: next }));
       setCurrent('');
       setNext('');
       setRepeat('');
@@ -90,10 +94,13 @@ export function PasswordChangeForm({ onDone, temporary = false, autoFocus = temp
   return (
     <form className="space-y-3" onSubmit={submit} noValidate data-testid="password-form">
       <PasswordInput id={`${ids}-current`} inputRef={firstRef} label={temporary ? 'Временный пароль' : 'Текущий пароль'} value={current} onChange={setCurrent} autoComplete="current-password" testId="password-current" />
-      <PasswordInput id={`${ids}-next`} label="Новый пароль" value={next} onChange={setNext} autoComplete="new-password" testId="password-next" />
+      <div>
+        <PasswordInput id={`${ids}-next`} label="Новый пароль" value={next} onChange={setNext} autoComplete="new-password" testId="password-next" />
+        <PasswordStrength password={next} email={email} />
+      </div>
       <PasswordInput id={`${ids}-repeat`} label="Повторите новый пароль" value={repeat} onChange={setRepeat} autoComplete="new-password" testId="password-repeat" />
       <p className={`text-[12px] ${problem ? 'text-amber-700 dark:text-amber-300' : 'text-slate-500 dark:text-slate-400'}`}>
-        {problem || 'Не короче 8 символов, не из списка распространённых и не содержит email. После смены все другие сессии завершатся.'}
+        {problem || `Не короче ${PASSWORD_LIMITS.MIN} символов — удобно взять фразу из 3–4 слов; не из частых паролей и без email. После смены все другие сессии завершатся.`}
       </p>
       {error && <p className="rounded-xl bg-red-50 px-3 py-2 text-[13px] text-red-700 dark:bg-red-950/50 dark:text-red-300" role="alert">{error}</p>}
       <Button type="submit" variant="primary" icon={KeyRound} loading={pending} disabled={!ready} data-testid="password-submit">{submitLabel}</Button>

@@ -13,12 +13,18 @@
  *   — неверный, просроченный, отозванный, повторно использованный токен;
  *     заблокированный аккаунт; две вкладки с одной ссылкой; другой браузер;
  *   — токен уходит из адреса сразу и не попадает в журналы сервера;
- *   — только клавиатура; prefers-reduced-motion; требования к паролю.
+ *   — только клавиатура; prefers-reduced-motion; требования к паролю;
+ *   — второй фактор при входе: ключ доступа (виртуальный ключ WebAuthn в
+ *     Chromium), код из приложения, резервный код (одноразовый), неверный
+ *     код; добавление ключа в профиле; подтверждение личности перед
+ *     удалением способа входа; последний способ сотрудник удалить не может;
+ *   — регистрация в режиме «только по приглашению» закрыта.
  *
  * Нужны собранный фронтенд (npm run build) и Playwright с Chromium
  * (npm i --no-save playwright && npx playwright install chromium).
  * Сервер поднимается сам на временной базе; почта не настроена — ссылки
- * передаются вручную, как в админ-панели без SMTP.
+ * передаются вручную, как в админ-панели без SMTP. Регистрация и письма —
+ * scripts/e2e-register.mjs.
  *
  *   node scripts/e2e-auth.mjs [--shots каталог]
  */
@@ -49,7 +55,8 @@ try {
 }
 
 const PORT = Number(process.env.E2E_PORT) || 4210;
-const BASE = `http://127.0.0.1:${PORT}`;
+// localhost, а не 127.0.0.1: ключи доступа (WebAuthn) работают только на доменном имени.
+const BASE = `http://localhost:${PORT}`;
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'medkarta-e2e-auth-'));
 const ROOT_EMAIL = 'maximka2703@bk.ru';
 const ROOT_PASSWORD = `Е2Е-${randomBytes(9).toString('base64url')}-корень`;
@@ -73,7 +80,11 @@ const env = {
   SMTP_URL: '',
   SMTP_HOST: '',
   APP_URL: '',
+  PUBLIC_BASE_URL: BASE,
+  REGISTRATION_MODE: 'invite_only',
+  MFA_SECRET_KEY: randomBytes(32).toString('base64'),
 };
+const { attachAuthenticator, totpDevice } = await import('./e2e-lib.mjs');
 
 let server = null;
 let serverOutput = '';
@@ -127,7 +138,7 @@ const adminApi = async (method, url, body) => {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   for (const line of response.headers.getSetCookie?.() || []) {
-    if (line.startsWith('mk_session=')) adminCookie = line.split(';')[0];
+    if (line.startsWith('mk_sid=')) adminCookie = line.split(';')[0];
   }
   return { status: response.status, body: await response.json().catch(() => null) };
 };
@@ -187,10 +198,47 @@ const signIn = async (page, email, password) => {
   await page.click('[data-testid=login-submit]');
 };
 
+/*
+ * Второй фактор суперадминистратора: приложение-аутентификатор (включено
+ * через API при подготовке) и ключ доступа (добавляется в профиле в первом
+ * сценарии «Второй фактор»). Ключ переносится в каждую новую страницу —
+ * как синхронизированный ключ на устройствах владельца.
+ */
+let rootTotp = null;
+let rootRecoveryCodes = [];
+let rootPasskeys = [];
+let passkeyCopies = 0;
+const withPasskey = async (page) => {
+  const key = await attachAuthenticator(page);
+  // Счётчик подписей у каждой «копии» ключа — больше прежнего: сервер отвергает повтор счётчика (клон ключа).
+  passkeyCopies += 1;
+  if (rootPasskeys.length) await key.importCredentials(rootPasskeys.map((credential) => ({ ...credential, signCount: credential.signCount + passkeyCopies * 1000 })));
+  return key;
+};
+/** Вход суперадминистратора в браузере: пароль, затем ключ доступа (или код, если ключа ещё нет). */
+const rootSignIn = async (page) => {
+  await signIn(page, ROOT_EMAIL, ROOT_PASSWORD);
+  await page.waitForSelector('[data-testid=auth-step-mfa]');
+  if (rootPasskeys.length) {
+    await page.click('[data-testid=mfa-passkey]');
+  } else {
+    await page.fill('[data-testid=mfa-code]', await rootTotp.next());
+  }
+};
+
 try {
   await startServer();
   const login = await adminApi('POST', '/api/auth/login', { email: ROOT_EMAIL, password: ROOT_PASSWORD });
   expect(login.status === 200, `вход администратора: ${login.status}`);
+  // Сотруднику без второго фактора админ-панель закрыта — включаем приложение-аутентификатор через API.
+  expect((await adminApi('GET', '/api/admin/users')).body?.code === 'mfa_setup_required', 'админ-панель открылась без второго фактора');
+  const setup = await adminApi('POST', '/api/me/mfa/totp', {});
+  expect(setup.status === 200 && setup.body?.secret, `настройка TOTP: ${setup.status}`);
+  rootTotp = totpDevice(setup.body.secret);
+  const confirmed = await adminApi('POST', '/api/me/mfa/totp/confirm', { factorId: setup.body.factorId, code: await rootTotp.next() });
+  expect(confirmed.status === 200 && confirmed.body?.recoveryCodes?.length === 10, `подтверждение TOTP: ${confirmed.status}`);
+  rootRecoveryCodes = confirmed.body.recoveryCodes;
+  expect((await adminApi('GET', '/api/admin/users')).status === 200, 'после настройки MFA админ-панель закрыта');
   browser = await chromium.launch();
   const issuedTokens = [];
 
@@ -249,11 +297,104 @@ try {
   }
 
   console.log('Вход:');
+  console.log('Второй фактор:');
+  await step('Вход кодом из приложения; ключ доступа добавляется в профиле', async () => {
+    const page = await newPage();
+    const key = await withPasskey(page);
+    await page.goto(`${BASE}/login?next=${encodeURIComponent('/profile#security')}`, { waitUntil: 'domcontentloaded' });
+    await signIn(page, ROOT_EMAIL, ROOT_PASSWORD);
+    await page.waitForSelector('[data-testid=auth-step-mfa]');
+    expect(await page.getAttribute('[data-testid=second-factor]', 'data-method') === 'totp', 'без ключа доступа первым должен быть код');
+    await settle(page);
+    await shot(page, 'mfa-totp-1440');
+    await page.fill('[data-testid=mfa-code]', await rootTotp.next());
+    await page.waitForURL((url) => url.pathname === '/profile', { timeout: 8000 });
+    await page.waitForSelector('[data-testid=mfa-add-passkey]');
+    await page.click('[data-testid=mfa-add-passkey]');
+    await page.waitForSelector('[data-testid=mfa-factor][data-type=webauthn]');
+    expect(await key.count() === 1, 'ключ не создан');
+    expect(!(await page.$('[data-testid=recovery-codes]')), 'резервные коды выданы повторно без запроса');
+    rootPasskeys = await key.exportCredentials();
+    await settle(page);
+    await shot(page, 'profile-security-1440');
+    await page.context().close();
+  });
+
+  await step('Неверный код — ошибка; резервный код срабатывает один раз', async () => {
+    const page = await newPage({ width: 375 });
+    await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
+    await signIn(page, ROOT_EMAIL, ROOT_PASSWORD);
+    await page.waitForSelector('[data-testid=auth-step-mfa]');
+    // Ключа доступа в этом браузере нет: выбираем код из приложения.
+    await page.click('[data-testid=mfa-use-totp]');
+    await page.fill('[data-testid=mfa-code]', rootTotp.wrong());
+    await page.waitForSelector('[data-testid=auth-error]');
+    expect((await page.textContent('[data-testid=auth-error]')).includes('не подошёл') || (await page.textContent('[data-testid=auth-error]')).includes('Неверный'), 'нет понятной ошибки кода');
+    await settle(page);
+    await noOverflow(page, 'второй фактор: ошибка');
+    await shot(page, 'mfa-error-375');
+    await page.click('[data-testid=mfa-use-recovery]');
+    await page.fill('[data-testid=mfa-recovery]', rootRecoveryCodes[0]);
+    await page.click('[data-testid=mfa-submit]');
+    await page.waitForURL((url) => url.pathname === '/admin', { timeout: 8000 });
+    await page.context().clearCookies();
+    await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
+    await signIn(page, ROOT_EMAIL, ROOT_PASSWORD);
+    await page.waitForSelector('[data-testid=auth-step-mfa]');
+    await page.click('[data-testid=mfa-use-recovery]');
+    await page.fill('[data-testid=mfa-recovery]', rootRecoveryCodes[0]);
+    await page.click('[data-testid=mfa-submit]');
+    await page.waitForSelector('[data-testid=auth-error]');
+    expect(new URL(page.url()).pathname === '/login', 'повторный резервный код пустил в аккаунт');
+    await page.context().close();
+  });
+
+  await step('Профиль: удаление способа входа — после подтверждения личности; последний способ сотрудник не удалит', async () => {
+    const page = await newPage();
+    await withPasskey(page);
+    await page.goto(`${BASE}/login?next=%2Fprofile`, { waitUntil: 'domcontentloaded' });
+    await rootSignIn(page);
+    await page.waitForURL((url) => url.pathname === '/profile', { timeout: 8000 });
+    await page.waitForSelector('[data-testid=mfa-factor][data-type=totp]');
+    // Подтверждение личности «устарело» (как через 10 минут после входа).
+    const { loadSqlite } = await import('../backend/accounts/sqliteStore.js');
+    const DatabaseSync = await loadSqlite();
+    const db = new DatabaseSync(env.ACCOUNTS_DB_PATH);
+    db.prepare('UPDATE sessions SET reauth_at = 1 WHERE user_id = (SELECT id FROM users WHERE email = ?)').run(ROOT_EMAIL);
+    db.close();
+    await page.click('[data-testid=mfa-factor][data-type=totp] [data-testid=mfa-factor-remove]');
+    await page.click('[data-testid=confirm-action]');
+    await page.waitForSelector('[data-testid=reauth-dialog]');
+    await page.fill('[data-testid=reauth-password]', ROOT_PASSWORD);
+    await page.click('[data-testid=reauth-submit]');
+    await page.click('[data-testid=mfa-passkey]');
+    await page.waitForSelector('[data-testid=mfa-factor][data-type=totp]', { state: 'detached' });
+    expect(await page.isDisabled('[data-testid=mfa-factor][data-type=webauthn] [data-testid=mfa-factor-remove]'), 'последний способ входа сотрудника можно удалить');
+    await page.setViewportSize({ width: 375, height: 812 });
+    await settle(page);
+    const overflow = await page.evaluate(() => document.querySelector('[data-testid=profile-page]').scrollWidth - window.innerWidth);
+    expect(overflow <= 0, `профиль на 375 px: горизонтальная прокрутка ${overflow}`);
+    await shot(page, 'profile-security-375');
+    await page.context().close();
+  });
+
+  await step('Регистрация закрыта в режиме «только по приглашению»', async () => {
+    const page = await newPage({ width: 375 });
+    await page.goto(`${BASE}/register`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('[data-testid=register-closed]');
+    await noOverflow(page, 'регистрация закрыта');
+    await shot(page, 'register-closed-375');
+    const answer = await publicApi('/api/auth/register', { email: 'new.person@medkarta.test' });
+    expect(answer.status === 403, `регистрация ответила ${answer.status}`);
+    await page.context().close();
+  });
+
   await step('Существующий пользователь: ?next= ведёт обратно, сессия переживает перезагрузку', async () => {
     const page = await newPage();
+    await withPasskey(page);
     await page.goto(`${BASE}/admin/users`, { waitUntil: 'domcontentloaded' });
     await page.waitForURL((url) => url.pathname === '/login' && url.searchParams.get('next') === '/admin/users');
-    await signIn(page, ROOT_EMAIL, ROOT_PASSWORD);
+    await rootSignIn(page);
     await page.waitForURL((url) => url.pathname === '/admin/users', { timeout: 8000 });
     await page.waitForSelector('[data-testid=user-row]');
     await page.reload();
@@ -265,8 +406,9 @@ try {
 
   await step('Открытого редиректа нет: ?next=//внешний-сайт игнорируется', async () => {
     const page = await newPage();
+    await withPasskey(page);
     await page.goto(`${BASE}/login?next=${encodeURIComponent('//evil.example/x')}`, { waitUntil: 'domcontentloaded' });
-    await signIn(page, ROOT_EMAIL, ROOT_PASSWORD);
+    await rootSignIn(page);
     await page.waitForURL((url) => url.origin === BASE && url.pathname === '/admin', { timeout: 8000 });
     await page.context().close();
   });
@@ -434,6 +576,7 @@ try {
     expect((await page.textContent('[data-testid=activation-account]')).includes(email), 'после перезагрузки другой аккаунт');
     const cookies = await page.context().cookies();
     const context = cookies.find((item) => item.name === 'mk_activation');
+    expect(!cookies.some((item) => item.name === 'mk_session'), 'осталась cookie прежнего формата');
     expect(context && context.httpOnly && context.sameSite === 'Strict' && context.path === '/api/auth/activation', `cookie контекста: ${JSON.stringify(context)}`);
     await page.context().close();
   });
@@ -476,6 +619,7 @@ try {
     await page.waitForSelector('[data-testid=activation-success]');
     await page.context().clearCookies();
 
+    await withPasskey(page);
     await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => document.activeElement?.dataset.testid === 'login-email');
     await page.keyboard.type(ROOT_EMAIL);
@@ -483,12 +627,16 @@ try {
     await page.waitForFunction(() => document.activeElement?.dataset.testid === 'login-password');
     await page.keyboard.type(ROOT_PASSWORD);
     await page.keyboard.press('Enter');
+    // Второй шаг: фокус — на кнопке ключа доступа, Enter подтверждает.
+    await page.waitForFunction(() => document.activeElement?.dataset.testid === 'mfa-passkey');
+    await page.keyboard.press('Enter');
     await page.waitForURL((url) => url.pathname === '/admin', { timeout: 8000 });
     await page.context().close();
   });
 
   await step('prefers-reduced-motion: шаги без сдвига, всё работает', async () => {
     const page = await newPage({ reducedMotion: 'reduce' });
+    await withPasskey(page);
     await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
     await page.fill('[data-testid=login-email]', ROOT_EMAIL);
     await page.click('[data-testid=login-continue]');
@@ -500,6 +648,7 @@ try {
     expect(transform === 'none' || /matrix\(1, 0, 0, 1, 0, 0\)/.test(transform), `сдвиг при reduced motion: ${transform}`);
     await page.fill('[data-testid=login-password]', ROOT_PASSWORD);
     await page.click('[data-testid=login-submit]');
+    await page.click('[data-testid=mfa-passkey]');
     await page.waitForURL((url) => url.pathname === '/admin', { timeout: 8000 });
     await page.context().close();
   });

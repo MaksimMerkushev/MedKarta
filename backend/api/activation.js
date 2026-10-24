@@ -255,7 +255,7 @@ export const createActivationHandler = ({
           const current = tokenOf(req);
           const result = emailChange.confirm(body.token, { currentSessionHash: current ? hashToken(current) : null });
           logger.event('account.email_change', { status: 'confirmed' });
-          respondJson(res, 200, { email: result.email, signedIn: result.keptSession });
+          respondJson(res, 200, { email: result.email, signedIn: result.keptSession, verifiedOnly: Boolean(result.verifiedOnly) });
           return;
         }
         case 'peek': {

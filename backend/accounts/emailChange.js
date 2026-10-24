@@ -130,7 +130,7 @@ export const createEmailChangeService = ({ store, accounts, delivery, mailer, no
     /** Что за ссылка — ничего не меняя. */
     peek(token) {
       const { record, user } = findActive(token);
-      return { newEmail: record.newEmail, currentEmail: maskEmail(user.email), expiresAt: iso(record.expiresAt) };
+      return { newEmail: record.newEmail, currentEmail: maskEmail(user.email), verifyOnly: record.newEmail === user.email, expiresAt: iso(record.expiresAt) };
     },
 
     /**

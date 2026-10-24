@@ -79,7 +79,11 @@ export const useAccount = ({ onSignedIn, onSignedOut, onGuest } = {}) => {
   // Сервер не узнал сессию в другом месте (например, ассистент ответил 401) — выходим здесь.
   const expire = useCallback(() => signedOut('expired'), [signedOut]);
 
-  const login = useCallback(async (credentials) => signedIn(await loginAccount(credentials)), [signedIn]);
+  // Пароль верный, но включена двухфакторная защита: сессии ещё нет — форма входа покажет второй шаг.
+  const login = useCallback(async (credentials) => {
+    const payload = await loginAccount(credentials);
+    return payload?.mfaRequired ? payload : signedIn(payload);
+  }, [signedIn]);
 
   const logout = useCallback(async () => {
     try {
@@ -112,5 +116,5 @@ export const useAccount = ({ onSignedIn, onSignedOut, onGuest } = {}) => {
     if (user) setState((current) => (current.status === 'user' ? { ...current, user } : current));
   }, []);
 
-  return { ...state, login, logout, expire, applyUser, removeAccount, setPlan, syncFavorites };
+  return { ...state, login, acceptLogin: signedIn, logout, expire, applyUser, removeAccount, setPlan, syncFavorites };
 };

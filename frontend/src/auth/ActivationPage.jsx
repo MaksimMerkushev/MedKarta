@@ -14,7 +14,7 @@
  */
 import { useEffect, useId, useRef, useState } from 'react';
 import { AnimatePresence, MotionConfig, motion as Motion, useReducedMotion } from 'motion/react';
-import { KeyRound, LogIn, Mail, MailPlus, RotateCw } from 'lucide-react';
+import { KeyRound, LogIn, MailPlus, RotateCw } from 'lucide-react';
 
 import { passwordProblem } from '@shared/passwordPolicy.js';
 import { completeActivation, fetchActivationContext, peekActivation, startActivation } from '../services/account';
@@ -22,30 +22,14 @@ import { navigate } from '../ui/navigation';
 import AuthLayout from './AuthLayout';
 import AutoHeight from './AutoHeight';
 import { AuthSkeleton } from './LoginPage';
-import { AuthButton, FormError, PasswordField, PasswordRequirements, SuccessMark } from './parts';
+import { AuthButton, FormError, PasswordField, PasswordRequirements, PasswordStrength, SuccessMark } from './parts';
 import { homeFor, useAuthEnvironment } from './environment';
+import { AccountRow, cleanUrl as cleanUrlTo, formatMoscow, Heading, readTokenFromUrl } from './linkParts';
 import { stepTransition, stepVariants } from './motion';
 
-const TOKEN = /^[A-Za-z0-9_-]{43}$/u;
 const REDIRECT_MS = 1400;
 
-/** Токен из #token=… — только чтение (рендер может выполниться дважды). */
-const readTokenFromUrl = () => {
-  const token = new URLSearchParams(window.location.hash.replace(/^#/u, '')).get('token');
-  return token && TOKEN.test(token) ? token : null;
-};
-
-/** Чистый адрес без токена — и в истории тоже: «Назад» его не вернёт. */
-const cleanUrl = () => {
-  if (window.location.hash || window.location.search) window.history.replaceState(window.history.state, '', '/activate');
-};
-
-const formatMoscow = (iso, withDate = true) => new Date(iso).toLocaleString('ru-RU', {
-  timeZone: 'Europe/Moscow',
-  ...(withDate ? { day: 'numeric', month: 'long' } : {}),
-  hour: '2-digit',
-  minute: '2-digit',
-});
+const cleanUrl = () => cleanUrlTo('/activate');
 
 const PROBLEMS = {
   invalid_link: { title: 'Ссылка не подходит', text: 'Возможно, она скопирована не полностью. Откройте ссылку из письма или сообщения ещё раз — целиком.' },
@@ -63,27 +47,6 @@ const problemOf = (error) => {
   if (known) return { code: error.code, ...known };
   return { code: error?.code || 'network', title: 'Не получилось открыть ссылку', text: error?.message || 'Проверьте интернет и попробуйте ещё раз.', retry: true };
 };
-
-/** Заголовок шага, который получает фокус, — экранный диктор начинает с него. */
-function Heading({ children, focus = true }) {
-  const ref = useRef(null);
-  useEffect(() => {
-    if (focus) ref.current?.focus({ preventScroll: true });
-  }, [focus]);
-  return <h1 ref={ref} tabIndex={-1} className="text-[28px] font-semibold leading-[34px] tracking-[-0.015em] text-slate-900 outline-none dark:text-white">{children}</h1>;
-}
-
-function AccountRow({ email, name }) {
-  return (
-    <div className="mb-6 mt-5 flex items-center gap-3 rounded-[12px] border border-slate-200 px-3.5 py-3 dark:border-slate-800" data-testid="activation-account">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300" aria-hidden="true"><Mail size={17} /></span>
-      <span className="min-w-0">
-        {name && <span className="block truncate text-[15px] font-semibold text-slate-900 dark:text-white">{name}</span>}
-        <span className={`block truncate ${name ? 'text-[13.5px] text-slate-500 dark:text-slate-400' : 'text-[15px] font-medium text-slate-800 dark:text-slate-100'}`}>{email}</span>
-      </span>
-    </div>
-  );
-}
 
 function ConfirmStep({ link, onAccept }) {
   const [pending, setPending] = useState(false);
@@ -176,6 +139,7 @@ function PasswordStep({ context, onDone, onProblem }) {
         data-testid="activation-password-input"
       />
       <PasswordRequirements id={requirementsId} password={password} email={context.email} />
+      <PasswordStrength password={password} email={context.email} />
       <div className="mt-4"><FormError id={errorId} message={error} /></div>
       <Motion.div layout="position" className="mt-5">
         <AuthButton type="submit" icon={LogIn} loading={pending} loadingLabel="Сохраняем…" data-testid="activation-submit">Сохранить пароль и войти</AuthButton>

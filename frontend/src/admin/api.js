@@ -2,8 +2,11 @@
  * © 2026 МедКарта Казань. Все права защищены.
  *
  * Запросы админ-панели. Сессия — в cookie HttpOnly; изменяющие запросы —
- * всегда JSON (сервер другие не принимает). 401 и «смените пароль»
- * поднимаются событием — оболочка панели показывает вход или смену пароля.
+ * всегда JSON (сервер другие не принимает). 401, «смените пароль» и
+ * «нужен второй фактор» поднимаются событием — оболочка панели показывает
+ * вход, смену пароля или настройку защиты. Критичное действие без свежего
+ * подтверждения личности (403 reauth_required): окно подтверждения
+ * (setReauthHandler) — и запрос повторяется один раз.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -18,6 +21,13 @@ export class ApiError extends Error {
 }
 
 export const AUTH_EVENT = 'medkarta:admin-auth';
+const SHELL_CODES = new Set(['password_change_required', 'mfa_setup_required', 'mfa_required']);
+
+let reauthHandler = null;
+/** Оболочка панели передаёт сюда confirm() из ReauthProvider. */
+export const setReauthHandler = (handler) => {
+  reauthHandler = handler;
+};
 
 export const queryString = (params = {}) => {
   const search = new URLSearchParams();
@@ -29,7 +39,7 @@ export const queryString = (params = {}) => {
   return text ? `?${text}` : '';
 };
 
-const call = async (method, path, { query, body } = {}) => {
+const call = async (method, path, { query, body, retried = false } = {}) => {
   let response;
   try {
     response = await fetch(`${path}${queryString(query)}`, {
@@ -48,8 +58,12 @@ const call = async (method, path, { query, body } = {}) => {
     payload = null;
   }
   if (!response.ok) {
+    if (payload?.code === 'reauth_required' && reauthHandler && !retried) {
+      if (await reauthHandler()) return call(method, path, { query, body, retried: true });
+      throw new ApiError('Действие отменено: личность не подтверждена.', { status: 403, code: 'reauth_cancelled', payload });
+    }
     const error = new ApiError(typeof payload?.error === 'string' ? payload.error : 'Не получилось. Попробуйте ещё раз.', { status: response.status, code: payload?.code || null, payload });
-    if (response.status === 401 || payload?.code === 'password_change_required') {
+    if (response.status === 401 || SHELL_CODES.has(payload?.code)) {
       window.dispatchEvent(new CustomEvent(AUTH_EVENT, { detail: { code: payload?.code || 'unauthenticated' } }));
     }
     throw error;
