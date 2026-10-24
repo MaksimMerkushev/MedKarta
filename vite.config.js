@@ -39,7 +39,7 @@ const devApiPlugin = (env) => ({
   name: 'medkarta-dev-api',
   apply: 'serve',
   configureServer(server) {
-    for (const key of ['OPENROUTER_API_KEY', 'AI_API_KEY', 'AI_UPSTREAM_URL', 'AI_MODEL', 'AI_PROXY_URL', 'AI_REASONING_EFFORT', 'ALLOWED_ORIGINS', 'PRIVACY_TOKEN_SECRET', 'ANALYTICS', 'ANALYTICS_DIR', 'DEMO_DATA', 'ACCOUNTS', 'ACCOUNTS_DB_PATH', 'COOKIE_SECURE', 'CHAT_REQUIRES_ACCOUNT', 'ADMIN_BOOTSTRAP_EMAIL', 'ADMIN_BOOTSTRAP_PASSWORD', 'APP_ENV', 'APP_URL', 'MAIL_FROM', 'SMTP_URL', 'SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASSWORD', 'SMTP_SECURE', 'DEMO_BOOKING', 'DEMO_BOOKING_DB_PATH', 'DEMO_NOW', 'PUBLIC_CLINICS']) {
+    for (const key of ['OPENROUTER_API_KEY', 'AI_API_KEY', 'AI_UPSTREAM_URL', 'AI_MODEL', 'AI_PROXY_URL', 'AI_REASONING_EFFORT', 'ALLOWED_ORIGINS', 'PRIVACY_TOKEN_SECRET', 'ANALYTICS', 'ANALYTICS_DIR', 'DEMO_DATA', 'ACCOUNTS', 'ACCOUNTS_DB_PATH', 'COOKIE_SECURE', 'CHAT_REQUIRES_ACCOUNT', 'ADMIN_BOOTSTRAP_EMAIL', 'ADMIN_BOOTSTRAP_PASSWORD', 'APP_ENV', 'APP_URL', 'MAIL_FROM', 'SMTP_URL', 'SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASSWORD', 'SMTP_SECURE', 'SMTP_FROM', 'SMTP_ALLOW_INSECURE', 'PUBLIC_BASE_URL', 'REGISTRATION_MODE', 'MFA_SECRET_KEY', 'PASSWORD_BREACH_CHECK', 'WEBAUTHN_RP_ID', 'WEBAUTHN_ORIGINS', 'DEMO_BOOKING', 'DEMO_BOOKING_DB_PATH', 'DEMO_NOW', 'PUBLIC_CLINICS']) {
       if (env[key] && !process.env[key]) {
         process.env[key] = env[key]
       }
@@ -73,6 +73,8 @@ const devApiPlugin = (env) => ({
       // Приглашения и ссылки для входа — раньше общего /api/auth (connect сопоставляет по префиксу).
       ['/api/auth/activation', ACTIVATION_HANDLER_URL, 'активации', true],
       ['/api/auth/access-link', ACTIVATION_HANDLER_URL, 'ссылок для входа', true],
+      ['/api/auth/register', ACTIVATION_HANDLER_URL, 'регистрации', true],
+      ['/api/auth/email-change', ACTIVATION_HANDLER_URL, 'смены email', true],
       ['/api/auth', ACCOUNT_HANDLER_URL, 'входа', true],
       ['/api/me', ME_HANDLER_URL, 'профиля', true],
       ['/api/admin', ADMIN_HANDLER_URL, 'админ-панели', true],

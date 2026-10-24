@@ -23,12 +23,24 @@
  *
  * Активацию блокируют: блокировка и архив (токены отзываются), смена email
  * (токен выдан на прежний адрес), истечение срока, повторное использование.
+ *
+ * Письма уходят через почтовую очередь (mail/outbox.js): ссылка от
+ * администратора — сразу, одной попыткой (не ушло — администратор получает
+ * ссылку и передаёт сам); запрошенная самим пользователем — в фоне, с
+ * повторами. Статус доставки пишется в ссылку только по факту отправки.
+ *
+ * Ссылку для смены пароля сотруднику (модератор, администратор,
+ * суперадминистратор) почтой без второго фактора не отправляем: иначе доступ
+ * к админ-панели восстанавливался бы одним письмом. Сотрудник без MFA
+ * восстанавливает доступ через другого администратора или CLI на сервере
+ * (docs/accounts.md, «Восстановление доступа»). После смены пароля по ссылке
+ * второй фактор остаётся включённым.
  */
 
 import { randomBytes } from 'node:crypto';
 
 import { accessLink } from './delivery.js';
-import { hashPassword, PasswordBusyError, passwordProblem } from './passwords.js';
+import { hashPassword, PasswordBusyError } from './passwords.js';
 import { fail, hashToken, maskEmail, normalizeEmail, userLabel, EMAIL_PATTERN, ACCOUNT_LIMITS } from './service.js';
 
 const MINUTE_MS = 60 * 1000;
@@ -82,9 +94,9 @@ export const stateOf = (record, stamp) => {
  * @param {object} deps.delivery доставка (delivery.js)
  * @param {() => number} [deps.now]
  */
-export const createInvitationService = ({ store, accounts, delivery, now = () => Date.now() }) => {
+export const createInvitationService = ({ store, accounts, delivery, mailer = null, now = () => Date.now() }) => {
   const config = accounts.settings;
-  const { startSession, releaseExpiredBlock, statusProblem, permissionsFor, canManage } = accounts.__internal;
+  const { startSession, releaseExpiredBlock, statusProblem, permissionsFor, canManage, notify, checkNewPassword, isStaff, mfaEnabled } = accounts.__internal;
 
   const busy = (error) => {
     if (error instanceof PasswordBusyError) fail('busy', 503, 'Сервер сейчас занят — повторите через минуту.');
@@ -133,7 +145,8 @@ export const createInvitationService = ({ store, accounts, delivery, now = () =>
   const findByToken = (token) => {
     if (typeof token !== 'string' || !TOKEN.test(token)) fail('invalid_link', 404, 'Ссылка недействительна. Проверьте, что она скопирована целиком.');
     const record = store.getAccessTokenByHash(hashToken(token));
-    if (!record) fail('invalid_link', 404, 'Ссылка недействительна. Проверьте, что она скопирована целиком.');
+    // Ссылка подтверждения нового email — у неё своя страница и свой обработчик.
+    if (!record || !['invite', 'reset'].includes(record.purpose)) fail('invalid_link', 404, 'Ссылка недействительна. Проверьте, что она скопирована целиком.');
     return record;
   };
 
@@ -199,16 +212,17 @@ export const createInvitationService = ({ store, accounts, delivery, now = () =>
      * @param {string|null} [options.base] адрес приложения для ссылки, если APP_URL не задан (только manual)
      * @returns {Promise<{invitation: object, link: string|null}>} link — только для ручной передачи
      */
-    async issue({ user, actor = null, source = 'admin', delivery: wanted = 'auto', base = null }) {
+    async issue({ user, actor = null, source = 'admin', delivery: wanted = 'auto', base = null, sourceKey = null }) {
       const target = eligible(user);
       const purpose = target.activatedAt ? 'reset' : 'invite';
-      const byEmail = wanted !== 'manual' && delivery.emailEnabled;
+      const byEmail = wanted !== 'manual' && delivery.emailEnabled && Boolean(mailer);
       if (wanted === 'email' && !delivery.emailEnabled) fail('mail_disabled', 409, 'Почта не настроена — передайте ссылку вручную.');
       const linkBase = delivery.appUrl || base;
       if (!linkBase) fail('no_app_url', 500, 'Не задан адрес приложения (APP_URL).');
       const stamp = now();
       const token = randomBytes(32).toString('base64url');
-      const record = store.transaction(() => {
+      const link = accessLink(linkBase, token);
+      const { record, mailId } = store.transaction(() => {
         // Новая ссылка от администратора или CLI заменяет прежнюю того же вида; самостоятельный запрос — нет,
         // иначе посторонний мог бы, запрашивая ссылки, «гасить» настоящее приглашение.
         if (source !== 'self') store.revokeUserAccessTokens(target.id, 'replaced', stamp, { purpose });
@@ -236,26 +250,26 @@ export const createInvitationService = ({ store, accounts, delivery, now = () =>
             details: { delivery: byEmail ? 'email' : 'manual', expiresAt: iso(created.expiresAt) },
           });
         }
-        return created;
-      });
-      const link = accessLink(linkBase, token);
-      if (!byEmail) return { invitation: view(record, stamp), link };
-      try {
-        await delivery.sendAccessLink({
+        // Письмо — в той же транзакции, что и ссылка: нет ссылки — нет письма, и наоборот.
+        const queued = byEmail ? mailer.enqueue({
+          kind: purpose,
           to: target.email,
-          purpose,
-          name: target.firstName,
-          link,
-          expiresAt: record.expiresAt,
-          inviter: actor ? `${actor.firstName || ''} ${actor.lastName || ''}`.trim() : '',
-        });
-        store.setAccessTokenDelivery(record.id, 'sent');
-        return { invitation: view({ ...record, deliveryStatus: 'sent' }, stamp), link: null };
-      } catch {
-        store.setAccessTokenDelivery(record.id, 'failed');
-        // Письмо не ушло: администратор (и только он, и только сейчас) получает ссылку, чтобы передать её сам.
-        return { invitation: view({ ...record, deliveryStatus: 'failed' }, stamp), link: source === 'self' ? null : link };
+          params: { name: target.firstName, link, expiresAt: created.expiresAt, inviter: actor ? `${actor.firstName || ''} ${actor.lastName || ''}`.trim() : '' },
+          ref: { type: 'access_token', id: created.id },
+          sourceKey,
+        }) : null;
+        return { record: created, mailId: queued };
+      });
+      if (!byEmail) return { invitation: view(record, stamp), link };
+      if (source === 'self') {
+        // Сам пользователь: в фоне, с повторами. Ссылку он не видит — только письмо.
+        mailer.kick();
+        return { invitation: view(record, stamp), link: null };
       }
+      const sent = await mailer.sendNow(mailId);
+      if (sent) return { invitation: view({ ...record, deliveryStatus: 'sent' }, stamp), link: null };
+      // Письмо не ушло: администратор (и только он, и только сейчас) получает ссылку, чтобы передать её сам.
+      return { invitation: view({ ...record, deliveryStatus: 'failed' }, stamp), link };
     },
 
     /**
@@ -264,16 +278,24 @@ export const createInvitationService = ({ store, accounts, delivery, now = () =>
      * если адрес принадлежит действующему аккаунту и лимит не исчерпан.
      * Работа идёт после ответа: время ответа не зависит от адреса.
      */
-    async requestLink(email) {
-      if (!delivery.emailEnabled) return;
+    async requestLink(email, { sourceKey = null } = {}) {
+      if (!delivery.emailEnabled || !mailer) return { sent: false, reason: 'mail_disabled' };
       const address = normalizeEmail(email);
-      if (!address || address.length > ACCOUNT_LIMITS.MAX_EMAIL || !EMAIL_PATTERN.test(address)) return;
+      if (!address || address.length > ACCOUNT_LIMITS.MAX_EMAIL || !EMAIL_PATTERN.test(address)) return { sent: false, reason: 'bad_email' };
       const user = store.getUserByEmail(address);
-      if (!user || user.demoTemplate || user.status !== 'active') return;
+      if (!user || user.demoTemplate || user.status !== 'active') return { sent: false, reason: 'no_account' };
       const stamp = now();
-      if (store.countRecentAccessTokens({ userId: user.id, source: 'self', since: stamp - HOUR_MS }) >= INVITATION_LIMITS.SELF_REQUESTS_PER_HOUR) return;
+      if (store.countRecentAccessTokens({ userId: user.id, source: 'self', since: stamp - HOUR_MS }) >= INVITATION_LIMITS.SELF_REQUESTS_PER_HOUR) return { sent: false, reason: 'limit' };
+      // Сотрудник без второго фактора: доступ одним письмом не восстанавливается.
+      if (user.activatedAt && isStaff(user) && !mfaEnabled(user)) {
+        store.addAuthEvent({ at: stamp, type: 'access_link_requested', userId: user.id, reason: 'staff_without_mfa' });
+        return { sent: false, reason: 'staff_without_mfa' };
+      }
+      const purpose = user.activatedAt ? 'reset' : 'invite';
+      if (!mailer.allows({ kind: purpose, to: user.email, sourceKey }).allowed) return { sent: false, reason: 'mail_limit' };
       store.addAuthEvent({ at: stamp, type: 'access_link_requested', userId: user.id });
-      await service.issue({ user, actor: null, source: 'self', delivery: 'email' }).catch(() => null);
+      await service.issue({ user, actor: null, source: 'self', delivery: 'email', sourceKey }).catch(() => null);
+      return { sent: true, reason: null };
     },
 
     /** Что за ссылка — до подтверждения, ничего не меняя: имя и email маской, срок. */
@@ -338,8 +360,7 @@ export const createInvitationService = ({ store, accounts, delivery, now = () =>
       const record = store.getAccessTokenByContext(contextHash);
       if (!record || stateOf(record, now()) !== 'opened') expired();
       const user = ownerOf(record);
-      const problem = passwordProblem(password, { email: user.email });
-      if (problem) fail('weak_password', 400, problem);
+      await checkNewPassword(password, user.email);
       const passwordHash = await hashPassword(password).catch(busy);
       const stamp = now();
       const session = store.transaction(() => {
@@ -349,7 +370,8 @@ export const createInvitationService = ({ store, accounts, delivery, now = () =>
         // И аккаунт могли заблокировать: проверка владельца — заново, в той же транзакции.
         ownerOf(again);
         if (!store.useAccessToken(again.id, stamp)) expired();
-        store.activateUser(user.id, passwordHash, stamp);
+        // Ссылка пришла письмом на этот адрес — владение ящиком подтверждено.
+        store.activateUser(user.id, passwordHash, stamp, { emailVerified: record.delivery === 'email' });
         store.revokeUserAccessTokens(user.id, 'superseded', stamp);
         store.deleteUserSessions(user.id);
         const fresh = startSession(user, { client, ipPrefix });
@@ -365,6 +387,7 @@ export const createInvitationService = ({ store, accounts, delivery, now = () =>
         store.addAuthEvent({ at: stamp, type: record.purpose === 'invite' ? 'account_activated' : 'password_reset', userId: user.id, sessionId: fresh.publicId, client, ipPrefix });
         return fresh;
       });
+      if (record.purpose === 'reset') notify(user, 'password_changed', { how: 'reset' });
       return { ...accounts.snapshot(store.getUserById(user.id)), session, purpose: record.purpose };
     },
 

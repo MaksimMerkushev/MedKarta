@@ -9,8 +9,8 @@
  * dev-сервер Vite подключают её одинаково (server.js, vite.config.js).
  */
 
-import { chatRequiresAccount, getDefaultAccountService, parseCookies, SESSION_COOKIE } from './account.js';
-import { isTrustedWrite } from './accountHttp.js';
+import { chatRequiresAccount, getDefaultAccountService } from './account.js';
+import { isTrustedWrite, tokenOf } from './accountHttp.js';
 import { respondJson } from '../http/request.js';
 import { logger } from '../observability/safeLogger.js';
 
@@ -54,7 +54,7 @@ export const createChatAccessGate = ({ getService = getDefaultAccountService, is
       return false;
     }
 
-    const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+    const token = tokenOf(req);
     let auth = null;
     try {
       auth = token ? service.authenticate(token) : null;

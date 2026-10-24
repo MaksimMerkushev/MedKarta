@@ -30,7 +30,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 /** Строка для поиска без учёта регистра: LIKE в SQLite не знает кириллицы. */
 export const searchTextOf = ({ firstName = '', lastName = '', email = '', id = '' }) =>
@@ -215,7 +215,173 @@ const MIGRATIONS = [
   CREATE INDEX access_tokens_user ON access_tokens(user_id, created_at);
   CREATE INDEX access_tokens_expiry ON access_tokens(expires_at);
   `,
+  /*
+   * Схема 5: самостоятельная регистрация, MFA, постоянные счётчики попыток
+   * входа, доверенные устройства, почтовая очередь, смена email.
+   *
+   * email_verified_at: прежние активированные аккаунты считаются
+   * подтверждёнными — их создавал администратор, и они уже входили. Новые —
+   * только после перехода по ссылке из письма.
+   *
+   * Все прежние сессии завершаются: у сессии появился уровень
+   * аутентификации (aal), а cookie получает префикс __Host-. Каждому нужно
+   * войти заново — один раз после обновления.
+   */
+  (db) => {
+    db.exec(`
+    ALTER TABLE users ADD COLUMN email_verified_at INTEGER;
+    ALTER TABLE users ADD COLUMN signup_source TEXT;
+    UPDATE users SET email_verified_at = activated_at WHERE activated_at IS NOT NULL AND demo_template IS NULL;
+    UPDATE users SET signup_source = CASE WHEN created_by IS NOT NULL THEN 'admin' ELSE 'legacy' END WHERE demo_template IS NULL;
+
+    DELETE FROM sessions;
+    ALTER TABLE sessions ADD COLUMN aal INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE sessions ADD COLUMN mfa_at INTEGER;
+    ALTER TABLE sessions ADD COLUMN reauth_at INTEGER;
+    ALTER TABLE sessions ADD COLUMN device_hash TEXT;
+
+    CREATE TABLE access_tokens_v5 (
+      id                 TEXT PRIMARY KEY,
+      token_hash         TEXT NOT NULL UNIQUE,
+      user_id            TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      purpose            TEXT NOT NULL CHECK (purpose IN ('invite', 'reset', 'email_change')),
+      email              TEXT NOT NULL,
+      new_email          TEXT,
+      source             TEXT NOT NULL CHECK (source IN ('admin', 'self', 'cli')),
+      delivery           TEXT NOT NULL CHECK (delivery IN ('email', 'manual')),
+      delivery_status    TEXT NOT NULL DEFAULT 'pending' CHECK (delivery_status IN ('pending', 'sent', 'failed', 'manual')),
+      created_at         INTEGER NOT NULL,
+      expires_at         INTEGER NOT NULL,
+      created_by         TEXT,
+      created_by_label   TEXT,
+      opened_at          INTEGER,
+      used_at            INTEGER,
+      revoked_at         INTEGER,
+      revoked_reason     TEXT,
+      context_hash       TEXT UNIQUE,
+      context_expires_at INTEGER
+    );
+    INSERT INTO access_tokens_v5 (id, token_hash, user_id, purpose, email, source, delivery, delivery_status, created_at, expires_at,
+      created_by, created_by_label, opened_at, used_at, revoked_at, revoked_reason, context_hash, context_expires_at)
+      SELECT id, token_hash, user_id, purpose, email, source, delivery, delivery_status, created_at, expires_at,
+      created_by, created_by_label, opened_at, used_at, revoked_at, revoked_reason, context_hash, context_expires_at FROM access_tokens;
+    DROP TABLE access_tokens;
+    ALTER TABLE access_tokens_v5 RENAME TO access_tokens;
+    CREATE INDEX access_tokens_user ON access_tokens(user_id, created_at);
+    CREATE INDEX access_tokens_expiry ON access_tokens(expires_at);
+
+    CREATE TABLE registrations (
+      id                 TEXT PRIMARY KEY,
+      token_hash         TEXT NOT NULL UNIQUE,
+      email              TEXT NOT NULL COLLATE NOCASE,
+      created_at         INTEGER NOT NULL,
+      expires_at         INTEGER NOT NULL,
+      opened_at          INTEGER,
+      context_hash       TEXT UNIQUE,
+      context_expires_at INTEGER,
+      used_at            INTEGER,
+      revoked_at         INTEGER,
+      revoked_reason     TEXT,
+      delivery_status    TEXT NOT NULL DEFAULT 'pending' CHECK (delivery_status IN ('pending', 'sent', 'failed')),
+      ip_prefix          TEXT,
+      user_id            TEXT
+    );
+    CREATE INDEX registrations_email ON registrations(email, created_at);
+    CREATE INDEX registrations_expiry ON registrations(expires_at);
+
+    CREATE TABLE mfa_factors (
+      id            TEXT PRIMARY KEY,
+      user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      type          TEXT NOT NULL CHECK (type IN ('totp', 'webauthn')),
+      label         TEXT NOT NULL,
+      status        TEXT NOT NULL CHECK (status IN ('pending', 'active', 'revoked')),
+      secret_enc    TEXT,
+      last_step     INTEGER,
+      credential_id TEXT UNIQUE,
+      public_key    TEXT,
+      algorithm     INTEGER,
+      sign_count    INTEGER NOT NULL DEFAULT 0,
+      transports    TEXT,
+      backed_up     INTEGER,
+      created_at    INTEGER NOT NULL,
+      confirmed_at  INTEGER,
+      last_used_at  INTEGER,
+      revoked_at    INTEGER,
+      expires_at    INTEGER
+    );
+    CREATE INDEX mfa_factors_user ON mfa_factors(user_id, status);
+
+    CREATE TABLE mfa_recovery_codes (
+      user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      code_hash  TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      used_at    INTEGER,
+      PRIMARY KEY (user_id, code_hash)
+    ) WITHOUT ROWID;
+
+    CREATE TABLE auth_challenges (
+      id_hash     TEXT PRIMARY KEY,
+      user_id     TEXT REFERENCES users(id) ON DELETE CASCADE,
+      purpose     TEXT NOT NULL CHECK (purpose IN ('login', 'webauthn_register', 'reauth')),
+      created_at  INTEGER NOT NULL,
+      expires_at  INTEGER NOT NULL,
+      attempts    INTEGER NOT NULL DEFAULT 0,
+      challenge   TEXT,
+      data        TEXT,
+      consumed_at INTEGER
+    );
+    CREATE INDEX auth_challenges_expiry ON auth_challenges(expires_at);
+    CREATE INDEX auth_challenges_user ON auth_challenges(user_id, purpose);
+
+    CREATE TABLE auth_throttle (
+      key          TEXT PRIMARY KEY,
+      failures     INTEGER NOT NULL DEFAULT 0,
+      window_start INTEGER NOT NULL,
+      locked_until INTEGER,
+      lock_count   INTEGER NOT NULL DEFAULT 0,
+      data         TEXT,
+      updated_at   INTEGER NOT NULL
+    );
+    CREATE INDEX auth_throttle_updated ON auth_throttle(updated_at);
+
+    CREATE TABLE trusted_devices (
+      token_hash   TEXT NOT NULL,
+      user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at   INTEGER NOT NULL,
+      last_used_at INTEGER NOT NULL,
+      expires_at   INTEGER NOT NULL,
+      PRIMARY KEY (token_hash, user_id)
+    ) WITHOUT ROWID;
+    CREATE INDEX trusted_devices_user ON trusted_devices(user_id);
+    CREATE INDEX trusted_devices_expiry ON trusted_devices(expires_at);
+
+    CREATE TABLE mail_outbox (
+      id              TEXT PRIMARY KEY,
+      kind            TEXT NOT NULL,
+      to_hash         TEXT NOT NULL,
+      to_address      TEXT,
+      payload         TEXT,
+      key_id          TEXT,
+      status          TEXT NOT NULL CHECK (status IN ('pending', 'sending', 'sent', 'failed')),
+      attempts        INTEGER NOT NULL DEFAULT 0,
+      next_attempt_at INTEGER NOT NULL,
+      last_error      TEXT,
+      source_key      TEXT,
+      ref_type        TEXT,
+      ref_id          TEXT,
+      created_at      INTEGER NOT NULL,
+      sent_at         INTEGER
+    );
+    CREATE INDEX mail_outbox_due ON mail_outbox(status, next_attempt_at);
+    CREATE INDEX mail_outbox_to ON mail_outbox(to_hash, created_at);
+    CREATE INDEX mail_outbox_source ON mail_outbox(source_key, created_at);
+    `);
+  },
 ];
+
+/** Миграции по порядку — для тестов совместимости со старыми базами. */
+export const ACCOUNT_MIGRATIONS = MIGRATIONS;
+export const ACCOUNT_SCHEMA_VERSION = SCHEMA_VERSION;
 
 // node:sqlite работает без флага с Node 22.13; на более старой версии
 // возвращается null — кабинет выключается, остальной сайт работает.
@@ -251,6 +417,8 @@ const toUser = (row) => (row
     lastFailedLoginAt: row.last_failed_login_at ?? null,
     createdBy: row.created_by ?? null,
     activatedAt: row.activated_at ?? null,
+    emailVerifiedAt: row.email_verified_at ?? null,
+    signupSource: row.signup_source ?? null,
     version: row.version || 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -269,6 +437,10 @@ const toSession = (row) => (row
     expiresAt: row.expires_at,
     client: row.client || null,
     ipPrefix: row.ip_prefix || null,
+    aal: row.aal || 1,
+    mfaAt: row.mfa_at ?? null,
+    reauthAt: row.reauth_at ?? null,
+    deviceHash: row.device_hash ?? null,
   }
   : null);
 
@@ -279,6 +451,7 @@ const toAccessToken = (row) => (row
     userId: row.user_id,
     purpose: row.purpose,
     email: row.email,
+    newEmail: row.new_email ?? null,
     source: row.source,
     delivery: row.delivery,
     deliveryStatus: row.delivery_status,
@@ -292,6 +465,106 @@ const toAccessToken = (row) => (row
     revokedReason: row.revoked_reason ?? null,
     contextHash: row.context_hash ?? null,
     contextExpiresAt: row.context_expires_at ?? null,
+  }
+  : null);
+
+const toRegistration = (row) => (row
+  ? {
+    id: row.id,
+    tokenHash: row.token_hash,
+    email: row.email,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+    openedAt: row.opened_at ?? null,
+    contextHash: row.context_hash ?? null,
+    contextExpiresAt: row.context_expires_at ?? null,
+    usedAt: row.used_at ?? null,
+    revokedAt: row.revoked_at ?? null,
+    revokedReason: row.revoked_reason ?? null,
+    deliveryStatus: row.delivery_status,
+    ipPrefix: row.ip_prefix ?? null,
+    userId: row.user_id ?? null,
+  }
+  : null);
+
+const toFactor = (row) => (row
+  ? {
+    id: row.id,
+    userId: row.user_id,
+    type: row.type,
+    label: row.label,
+    status: row.status,
+    secretEnc: row.secret_enc ?? null,
+    lastStep: row.last_step ?? null,
+    credentialId: row.credential_id ?? null,
+    publicKey: row.public_key ?? null,
+    algorithm: row.algorithm ?? null,
+    signCount: row.sign_count || 0,
+    transports: row.transports ? row.transports.split(',').filter(Boolean) : [],
+    backedUp: row.backed_up === null || row.backed_up === undefined ? null : Boolean(row.backed_up),
+    createdAt: row.created_at,
+    confirmedAt: row.confirmed_at ?? null,
+    lastUsedAt: row.last_used_at ?? null,
+    revokedAt: row.revoked_at ?? null,
+    expiresAt: row.expires_at ?? null,
+  }
+  : null);
+
+const toChallenge = (row) => (row
+  ? {
+    idHash: row.id_hash,
+    userId: row.user_id ?? null,
+    purpose: row.purpose,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+    attempts: row.attempts || 0,
+    challenge: row.challenge ?? null,
+    data: (() => {
+      try {
+        return row.data ? JSON.parse(row.data) : null;
+      } catch {
+        return null;
+      }
+    })(),
+    consumedAt: row.consumed_at ?? null,
+  }
+  : null);
+
+const toThrottle = (row) => (row
+  ? {
+    key: row.key,
+    failures: row.failures || 0,
+    windowStart: row.window_start,
+    lockedUntil: row.locked_until ?? null,
+    lockCount: row.lock_count || 0,
+    data: (() => {
+      try {
+        return row.data ? JSON.parse(row.data) : null;
+      } catch {
+        return null;
+      }
+    })(),
+    updatedAt: row.updated_at,
+  }
+  : null);
+
+const toMail = (row) => (row
+  ? {
+    id: row.id,
+    kind: row.kind,
+    toHash: row.to_hash,
+    toAddress: row.to_address ?? null,
+    payload: row.payload ?? null,
+    keyId: row.key_id ?? null,
+    status: row.status,
+    attempts: row.attempts || 0,
+    nextAttemptAt: row.next_attempt_at,
+    lastError: row.last_error ?? null,
+    sourceKey: row.source_key ?? null,
+    refType: row.ref_type ?? null,
+    refId: row.ref_id ?? null,
+    createdAt: row.created_at,
+    sentAt: row.sent_at ?? null,
   }
   : null);
 
@@ -335,6 +608,7 @@ const USER_COLUMNS = Object.freeze({
   blockReason: 'block_reason',
   mustChangePassword: 'must_change_password',
   dmsPlanId: 'dms_plan_id',
+  emailVerifiedAt: 'email_verified_at',
   searchText: 'search_text',
 });
 
@@ -365,6 +639,25 @@ export const createSqliteAccountStore = ({ DatabaseSync, file }) => {
     // База от более новой версии: молча работать с ней — значит портить данные.
     throw new Error(`accounts schema ${current} is newer than supported ${SCHEMA_VERSION}`);
   }
+  /*
+   * Перед миграцией существующей базы — её копия рядом с файлом
+   * (VACUUM INTO, права 0600): если миграция пойдёт не так, базу можно
+   * вернуть, остановив сервер и подменив файл копией (docs/accounts.md).
+   * Копия не перезаписывается: имя включает версию схемы и время.
+   */
+  let migrationBackup = null;
+  if (file !== ':memory:' && current > 0 && current < SCHEMA_VERSION) {
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '-');
+    migrationBackup = `${file}.before-v${SCHEMA_VERSION}-${stamp}.bak`;
+    if (!fs.existsSync(migrationBackup)) {
+      db.prepare('VACUUM INTO ?').run(migrationBackup);
+      try {
+        fs.chmodSync(migrationBackup, 0o600);
+      } catch {
+        // Права не меняются (том без прав доступа) — копия всё равно нужна.
+      }
+    }
+  }
   for (let version = current; version < SCHEMA_VERSION; version += 1) {
     db.exec('BEGIN IMMEDIATE');
     try {
@@ -381,8 +674,9 @@ export const createSqliteAccountStore = ({ DatabaseSync, file }) => {
 
   const statements = {
     insertUser: db.prepare(`INSERT INTO users (id, email, display_name, first_name, last_name, password_hash, dms_plan_id,
-      demo_template, demo_owner, role, status, must_change_password, password_changed_at, created_by, search_text, activated_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+      demo_template, demo_owner, role, status, must_change_password, password_changed_at, created_by, search_text, activated_at,
+      email_verified_at, signup_source, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
     userById: db.prepare('SELECT u.*, a.etag AS avatar_etag FROM users u LEFT JOIN avatars a ON a.user_id = u.id WHERE u.id = ?'),
     userByEmail: db.prepare('SELECT u.*, a.etag AS avatar_etag FROM users u LEFT JOIN avatars a ON a.user_id = u.id WHERE u.email = ?'),
     demoCopy: db.prepare('SELECT * FROM users WHERE demo_template = ? AND demo_owner = ?'),
@@ -395,10 +689,11 @@ export const createSqliteAccountStore = ({ DatabaseSync, file }) => {
       updated_at = ?, version = version + 1 WHERE id = ?`),
     rehashPassword: db.prepare('UPDATE users SET password_hash = ? WHERE id = ?'),
     activateUser: db.prepare(`UPDATE users SET password_hash = ?, must_change_password = 0, password_changed_at = ?,
-      activated_at = COALESCE(activated_at, ?), failed_logins = 0, updated_at = ?, version = version + 1 WHERE id = ?`),
+      activated_at = COALESCE(activated_at, ?), email_verified_at = CASE WHEN ? = 1 THEN COALESCE(email_verified_at, ?) ELSE email_verified_at END,
+      failed_logins = 0, updated_at = ?, version = version + 1 WHERE id = ?`),
 
-    insertAccessToken: db.prepare(`INSERT INTO access_tokens (id, token_hash, user_id, purpose, email, source, delivery, delivery_status,
-      created_at, expires_at, created_by, created_by_label) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+    insertAccessToken: db.prepare(`INSERT INTO access_tokens (id, token_hash, user_id, purpose, email, new_email, source, delivery, delivery_status,
+      created_at, expires_at, created_by, created_by_label) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
     accessTokenByHash: db.prepare('SELECT * FROM access_tokens WHERE token_hash = ?'),
     accessTokenById: db.prepare('SELECT * FROM access_tokens WHERE id = ?'),
     accessTokenByContext: db.prepare('SELECT * FROM access_tokens WHERE context_hash = ?'),
@@ -422,8 +717,9 @@ export const createSqliteAccountStore = ({ DatabaseSync, file }) => {
     countActiveSuperadmins: db.prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'superadmin' AND status = 'active' AND activated_at IS NOT NULL AND id <> ?"),
     expiredBlocks: db.prepare("SELECT id FROM users WHERE status = 'blocked' AND blocked_until IS NOT NULL AND blocked_until <= ?"),
 
-    insertSession: db.prepare(`INSERT INTO sessions (token_hash, public_id, user_id, created_at, last_seen_at, expires_at, client, ip_prefix)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
+    insertSession: db.prepare(`INSERT INTO sessions (token_hash, public_id, user_id, created_at, last_seen_at, expires_at, client, ip_prefix,
+      aal, mfa_at, reauth_at, device_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+    setSessionReauth: db.prepare('UPDATE sessions SET reauth_at = ? WHERE token_hash = ?'),
     sessionByHash: db.prepare('SELECT * FROM sessions WHERE token_hash = ?'),
     sessionByPublicId: db.prepare('SELECT * FROM sessions WHERE public_id = ?'),
     touchSession: db.prepare('UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE token_hash = ?'),
@@ -579,13 +875,15 @@ export const createSqliteAccountStore = ({ DatabaseSync, file }) => {
      */
     createUser({
       id, email, firstName = '', lastName = '', displayName = null, passwordHash = null, dmsPlanId = null,
-      demoTemplate = null, demoOwner = null, role = 'user', status = 'active', mustChangePassword = false, createdBy = null, now,
+      demoTemplate = null, demoOwner = null, role = 'user', status = 'active', mustChangePassword = false, createdBy = null,
+      emailVerifiedAt = null, signupSource = null, now,
     }) {
       const name = displayName || `${firstName} ${lastName}`.trim();
       const activatedAt = passwordHash || demoTemplate ? now : null;
       statements.insertUser.run(
         id, email, name, firstName, lastName, passwordHash, dmsPlanId, demoTemplate, demoOwner, role, status,
-        mustChangePassword ? 1 : 0, passwordHash ? now : null, createdBy, searchTextOf({ firstName, lastName, email, id }), activatedAt, now, now,
+        mustChangePassword ? 1 : 0, passwordHash ? now : null, createdBy, searchTextOf({ firstName, lastName, email, id }), activatedAt,
+        emailVerifiedAt, signupSource, now, now,
       );
       return toUser(statements.userById.get(id));
     },
@@ -625,7 +923,9 @@ export const createSqliteAccountStore = ({ DatabaseSync, file }) => {
       statements.setPassword.run(passwordHash, mustChange ? 1 : 0, now, now, id).changes > 0,
     rehashPassword: (id, passwordHash) => statements.rehashPassword.run(passwordHash, id).changes > 0,
     /** Пароль задан по приглашению или ссылке: аккаунт активирован, требование смены снято. */
-    activateUser: (id, passwordHash, now) => statements.activateUser.run(passwordHash, now, now, now, id).changes > 0,
+    /** emailVerified — ссылка пришла письмом на этот адрес: владение ящиком подтверждено. */
+    activateUser: (id, passwordHash, now, { emailVerified = false } = {}) =>
+      statements.activateUser.run(passwordHash, now, now, emailVerified ? 1 : 0, now, now, id).changes > 0,
     recordLogin: (id, now) => statements.recordLogin.run(now, now, id).changes > 0,
     recordFailedLogin: (id, now) => statements.recordFailedLogin.run(now, id).changes > 0,
     setLastSeen: (id, now) => statements.setLastSeen.run(now, id, now).changes > 0,
@@ -651,15 +951,19 @@ export const createSqliteAccountStore = ({ DatabaseSync, file }) => {
 
     /* ------------------------------- сессии -------------------------------- */
 
-    createSession({ tokenHash, publicId, userId, now, expiresAt, maxPerUser, client = null, ipPrefix = null }) {
+    createSession({
+      tokenHash, publicId, userId, now, expiresAt, maxPerUser, client = null, ipPrefix = null,
+      aal = 1, mfaAt = null, reauthAt = null, deviceHash = null, createdAt = null,
+    }) {
       transaction(() => {
         // Не больше maxPerUser входов на аккаунт: самый старый вытесняется.
         while (statements.countUserSessions.get(userId).count >= maxPerUser) {
           statements.deleteSession.run(statements.oldestUserSession.get(userId).token_hash);
         }
-        statements.insertSession.run(tokenHash, publicId, userId, now, now, expiresAt, client, ipPrefix);
+        statements.insertSession.run(tokenHash, publicId, userId, createdAt ?? now, now, expiresAt, client, ipPrefix, aal, mfaAt, reauthAt, deviceHash);
       });
     },
+    setSessionReauth: (tokenHash, at) => statements.setSessionReauth.run(at, tokenHash).changes > 0,
     getSession: (tokenHash) => toSession(statements.sessionByHash.get(tokenHash)),
     getSessionByPublicId: (publicId) => (typeof publicId === 'string' ? toSession(statements.sessionByPublicId.get(publicId)) : null),
     touchSession: (tokenHash, now, expiresAt) => statements.touchSession.run(now, expiresAt, tokenHash).changes > 0,
@@ -708,8 +1012,8 @@ export const createSqliteAccountStore = ({ DatabaseSync, file }) => {
 
     /* -------------------- приглашения и ссылки для пароля -------------------- */
 
-    createAccessToken({ id, tokenHash, userId, purpose, email, source, delivery, deliveryStatus, now, expiresAt, createdBy = null, createdByLabel = null }) {
-      statements.insertAccessToken.run(id, tokenHash, userId, purpose, email, source, delivery, deliveryStatus, now, expiresAt, createdBy, createdByLabel);
+    createAccessToken({ id, tokenHash, userId, purpose, email, newEmail = null, source, delivery, deliveryStatus, now, expiresAt, createdBy = null, createdByLabel = null }) {
+      statements.insertAccessToken.run(id, tokenHash, userId, purpose, email, newEmail, source, delivery, deliveryStatus, now, expiresAt, createdBy, createdByLabel);
       return toAccessToken(statements.accessTokenById.get(id));
     },
     getAccessTokenByHash: (tokenHash) => toAccessToken(statements.accessTokenByHash.get(tokenHash)),
@@ -856,6 +1160,175 @@ export const createSqliteAccountStore = ({ DatabaseSync, file }) => {
     }])),
     putRoleOverride: (role, permissions, actorId, now) => statements.putRoleOverride.run(role, JSON.stringify(permissions), now, actorId),
     deleteRoleOverride: (role) => statements.deleteRoleOverride.run(role).changes > 0,
+
+    /* --------------------------- самостоятельная регистрация --------------------------- */
+
+    createRegistration({ id, tokenHash, email, now, expiresAt, ipPrefix = null }) {
+      db.prepare(`INSERT INTO registrations (id, token_hash, email, created_at, expires_at, ip_prefix)
+        VALUES (?, ?, ?, ?, ?, ?)`).run(id, tokenHash, email, now, expiresAt, ipPrefix);
+      return toRegistration(db.prepare('SELECT * FROM registrations WHERE id = ?').get(id));
+    },
+    getRegistrationByHash: (tokenHash) => toRegistration(db.prepare('SELECT * FROM registrations WHERE token_hash = ?').get(tokenHash)),
+    getRegistrationByContext: (contextHash) => toRegistration(db.prepare('SELECT * FROM registrations WHERE context_hash = ?').get(contextHash)),
+    getRegistrationById: (id) => (typeof id === 'string' ? toRegistration(db.prepare('SELECT * FROM registrations WHERE id = ?').get(id)) : null),
+    /** Ссылка обменивается на контекст ровно один раз: второй вызов вернёт false. */
+    openRegistration: ({ id, contextHash, contextExpiresAt, now }) => db.prepare(`UPDATE registrations SET opened_at = ?, context_hash = ?, context_expires_at = ?
+      WHERE id = ? AND opened_at IS NULL AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?`).run(now, contextHash, contextExpiresAt, id, now).changes > 0,
+    useRegistration: (id, now, userId) => db.prepare(`UPDATE registrations SET used_at = ?, user_id = ?, context_hash = NULL, context_expires_at = NULL
+      WHERE id = ? AND used_at IS NULL AND revoked_at IS NULL`).run(now, userId, id).changes > 0,
+    /** Отозвать все неиспользованные заявки на этот email (кроме exceptId). */
+    revokeRegistrations: (email, reason, now, { exceptId = '' } = {}) => db.prepare(`UPDATE registrations SET revoked_at = ?, revoked_reason = ?,
+      context_hash = NULL, context_expires_at = NULL WHERE email = ? AND id <> ? AND used_at IS NULL AND revoked_at IS NULL`).run(now, reason, email, exceptId).changes,
+    setRegistrationDelivery: (id, status) => db.prepare('UPDATE registrations SET delivery_status = ? WHERE id = ?').run(status, id).changes > 0,
+    countRecentRegistrations: ({ email, since }) => db.prepare('SELECT COUNT(*) AS count FROM registrations WHERE email = ? AND created_at >= ?').get(email, since).count,
+    purgeRegistrations: (before) => db.prepare('DELETE FROM registrations WHERE expires_at < ? AND (context_expires_at IS NULL OR context_expires_at < ?)').run(before, before).changes,
+
+    /* ----------------------------------- MFA ----------------------------------- */
+
+    insertFactor({
+      id, userId, type, label, status, secretEnc = null, credentialId = null, publicKey = null, algorithm = null, signCount = 0,
+      transports = null, backedUp = null, now, confirmedAt = null, expiresAt = null,
+    }) {
+      db.prepare(`INSERT INTO mfa_factors (id, user_id, type, label, status, secret_enc, credential_id, public_key, algorithm, sign_count,
+        transports, backed_up, created_at, confirmed_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(id, userId, type, label, status, secretEnc, credentialId, publicKey, algorithm, signCount, transports, backedUp === null ? null : Number(backedUp), now, confirmedAt, expiresAt);
+      return toFactor(db.prepare('SELECT * FROM mfa_factors WHERE id = ?').get(id));
+    },
+    getFactor: (id) => (typeof id === 'string' ? toFactor(db.prepare('SELECT * FROM mfa_factors WHERE id = ?').get(id)) : null),
+    getFactorByCredentialId: (credentialId) => (typeof credentialId === 'string'
+      ? toFactor(db.prepare('SELECT * FROM mfa_factors WHERE credential_id = ?').get(credentialId)) : null),
+    listFactors: (userId, { status = 'active' } = {}) => db.prepare(`SELECT * FROM mfa_factors WHERE user_id = ? ${status ? 'AND status = ?' : ''}
+      ORDER BY created_at ASC, id ASC`).all(...(status ? [userId, status] : [userId])).map(toFactor),
+    countActiveFactors: (userId) => db.prepare("SELECT COUNT(*) AS count FROM mfa_factors WHERE user_id = ? AND status = 'active'").get(userId).count,
+    activateFactor: (id, { now, lastStep = null }) => db.prepare(`UPDATE mfa_factors SET status = 'active', confirmed_at = ?, last_step = COALESCE(?, last_step),
+      expires_at = NULL WHERE id = ? AND status = 'pending'`).run(now, lastStep, id).changes > 0,
+    /*
+     * Шаг TOTP принимается, только если он новее последнего принятого:
+     * один и тот же код дважды не сработает (защита от повтора), даже из
+     * двух вкладок одновременно — проверка и запись одним UPDATE.
+     */
+    acceptTotpStep: (id, step, now) => db.prepare(`UPDATE mfa_factors SET last_step = ?, last_used_at = ?
+      WHERE id = ? AND status = 'active' AND (last_step IS NULL OR last_step < ?)`).run(step, now, id, step).changes > 0,
+    acceptWebauthnCounter: (id, signCount, now) => db.prepare(`UPDATE mfa_factors SET sign_count = ?, last_used_at = ?
+      WHERE id = ? AND status = 'active' AND (? = 0 OR sign_count < ?)`).run(signCount, now, id, signCount, signCount).changes > 0,
+    renameFactor: (id, label) => db.prepare("UPDATE mfa_factors SET label = ? WHERE id = ? AND status = 'active'").run(label, id).changes > 0,
+    revokeFactor: (id, now) => db.prepare("UPDATE mfa_factors SET status = 'revoked', revoked_at = ?, secret_enc = NULL WHERE id = ? AND status <> 'revoked'")
+      .run(now, id).changes > 0,
+    revokeUserFactors: (userId, now) => db.prepare("UPDATE mfa_factors SET status = 'revoked', revoked_at = ?, secret_enc = NULL WHERE user_id = ? AND status <> 'revoked'")
+      .run(now, userId).changes,
+    deletePendingFactors: (userId) => db.prepare("DELETE FROM mfa_factors WHERE user_id = ? AND status = 'pending'").run(userId).changes,
+    purgeFactors: (now) => db.prepare("DELETE FROM mfa_factors WHERE (status = 'pending' AND expires_at < ?) OR (status = 'revoked' AND revoked_at < ?)")
+      .run(now, now - 90 * 24 * 60 * 60 * 1000).changes,
+
+    replaceRecoveryCodes(userId, hashes, now) {
+      transaction(() => {
+        db.prepare('DELETE FROM mfa_recovery_codes WHERE user_id = ?').run(userId);
+        const insert = db.prepare('INSERT INTO mfa_recovery_codes (user_id, code_hash, created_at) VALUES (?, ?, ?)');
+        for (const hash of hashes) insert.run(userId, hash, now);
+      });
+    },
+    /** Код срабатывает один раз: второй вызов с тем же кодом вернёт false. */
+    useRecoveryCode: (userId, hash, now) => db.prepare('UPDATE mfa_recovery_codes SET used_at = ? WHERE user_id = ? AND code_hash = ? AND used_at IS NULL')
+      .run(now, userId, hash).changes > 0,
+    countRecoveryCodes: (userId) => db.prepare(`SELECT COUNT(*) AS total, SUM(CASE WHEN used_at IS NULL THEN 1 ELSE 0 END) AS unused
+      FROM mfa_recovery_codes WHERE user_id = ?`).get(userId),
+    deleteRecoveryCodes: (userId) => db.prepare('DELETE FROM mfa_recovery_codes WHERE user_id = ?').run(userId).changes,
+
+    /* --------------------------- вызовы второго шага --------------------------- */
+
+    createChallenge({ idHash, userId, purpose, now, expiresAt, challenge = null, data = null }) {
+      db.prepare(`INSERT INTO auth_challenges (id_hash, user_id, purpose, created_at, expires_at, challenge, data)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`).run(idHash, userId, purpose, now, expiresAt, challenge, data ? JSON.stringify(data) : null);
+    },
+    getChallenge: (idHash) => toChallenge(db.prepare('SELECT * FROM auth_challenges WHERE id_hash = ?').get(idHash)),
+    /** Попытка засчитана; вернёт новое число попыток (атомарно). */
+    addChallengeAttempt(idHash) {
+      return transaction(() => {
+        db.prepare('UPDATE auth_challenges SET attempts = attempts + 1 WHERE id_hash = ?').run(idHash);
+        return db.prepare('SELECT attempts FROM auth_challenges WHERE id_hash = ?').get(idHash)?.attempts ?? Number.MAX_SAFE_INTEGER;
+      });
+    },
+    setChallengeValue: (idHash, challenge) => db.prepare('UPDATE auth_challenges SET challenge = ? WHERE id_hash = ? AND consumed_at IS NULL')
+      .run(challenge, idHash).changes > 0,
+    /** Вызов используется один раз: второй вызов вернёт false (две вкладки, повтор запроса). */
+    consumeChallenge: (idHash, now) => db.prepare('UPDATE auth_challenges SET consumed_at = ? WHERE id_hash = ? AND consumed_at IS NULL AND expires_at > ?')
+      .run(now, idHash, now).changes > 0,
+    deleteChallenge: (idHash) => db.prepare('DELETE FROM auth_challenges WHERE id_hash = ?').run(idHash).changes > 0,
+    deleteUserChallenges: (userId, purpose = null) => db.prepare(`DELETE FROM auth_challenges WHERE user_id = ? ${purpose ? 'AND purpose = ?' : ''}`)
+      .run(...(purpose ? [userId, purpose] : [userId])).changes,
+    purgeChallenges: (now) => db.prepare('DELETE FROM auth_challenges WHERE expires_at < ?').run(now).changes,
+
+    /* ------------------------- счётчики попыток входа -------------------------- */
+
+    getThrottle: (key) => toThrottle(db.prepare('SELECT * FROM auth_throttle WHERE key = ?').get(key)),
+    putThrottle({ key, failures, windowStart, lockedUntil = null, lockCount = 0, data = null, now }) {
+      db.prepare(`INSERT INTO auth_throttle (key, failures, window_start, locked_until, lock_count, data, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET failures = excluded.failures, window_start = excluded.window_start, locked_until = excluded.locked_until,
+        lock_count = excluded.lock_count, data = excluded.data, updated_at = excluded.updated_at`)
+        .run(key, failures, windowStart, lockedUntil, lockCount, data ? JSON.stringify(data) : null, now);
+    },
+    deleteThrottle: (key) => db.prepare('DELETE FROM auth_throttle WHERE key = ?').run(key).changes > 0,
+    /** Ключи с этим окончанием (например, все пары «адрес + этот аккаунт»). */
+    listThrottleBySuffix: (suffix) => db.prepare("SELECT * FROM auth_throttle WHERE key LIKE ? ESCAPE '\\'")
+      .all(`%${String(suffix).replace(/[\\%_]/g, (char) => `\\${char}`)}`).map(toThrottle),
+    deleteThrottleBySuffix: (suffix) => db.prepare("DELETE FROM auth_throttle WHERE key LIKE ? ESCAPE '\\'")
+      .run(`%${String(suffix).replace(/[\\%_]/g, (char) => `\\${char}`)}`).changes,
+    purgeThrottle: (before, now) => db.prepare('DELETE FROM auth_throttle WHERE updated_at < ? AND (locked_until IS NULL OR locked_until < ?)')
+      .run(before, now).changes,
+
+    /* --------------------------- доверенные устройства --------------------------- */
+
+    addTrustedDevice: ({ tokenHash, userId, now, expiresAt }) => db.prepare(`INSERT INTO trusted_devices (token_hash, user_id, created_at, last_used_at, expires_at)
+      VALUES (?, ?, ?, ?, ?) ON CONFLICT(token_hash, user_id) DO UPDATE SET last_used_at = excluded.last_used_at, expires_at = excluded.expires_at`)
+      .run(tokenHash, userId, now, now, expiresAt),
+    /** Устройство, с которого этот пользователь уже входил (или null). */
+    getTrustedDevice(tokenHash, userId) {
+      const row = db.prepare('SELECT * FROM trusted_devices WHERE token_hash = ? AND user_id = ?').get(tokenHash, userId);
+      return row ? { tokenHash: row.token_hash, userId: row.user_id, createdAt: row.created_at, lastUsedAt: row.last_used_at, expiresAt: row.expires_at } : null;
+    },
+    countTrustedDevices: (userId, now) => db.prepare('SELECT COUNT(*) AS count FROM trusted_devices WHERE user_id = ? AND expires_at > ?').get(userId, now).count,
+    deleteUserDevices: (userId) => db.prepare('DELETE FROM trusted_devices WHERE user_id = ?').run(userId).changes,
+    purgeDevices: (now) => db.prepare('DELETE FROM trusted_devices WHERE expires_at < ?').run(now).changes,
+
+    /* ------------------------------ почтовая очередь ------------------------------ */
+
+    enqueueMail({ id, kind, toHash, toAddress, payload, keyId = null, nextAttemptAt, sourceKey = null, refType = null, refId = null, now }) {
+      db.prepare(`INSERT INTO mail_outbox (id, kind, to_hash, to_address, payload, key_id, status, attempts, next_attempt_at, source_key, ref_type, ref_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?)`).run(id, kind, toHash, toAddress, payload, keyId, nextAttemptAt, sourceKey, refType, refId, now);
+    },
+    getMail: (id) => toMail(db.prepare('SELECT * FROM mail_outbox WHERE id = ?').get(id)),
+    /** Забрать до limit писем, которым пора уходить: статус sending ставится атомарно, второй обработчик их не получит. */
+    claimDueMail(now, limit = 5) {
+      return transaction(() => {
+        const rows = db.prepare("SELECT * FROM mail_outbox WHERE status = 'pending' AND next_attempt_at <= ? ORDER BY next_attempt_at ASC LIMIT ?").all(now, limit);
+        const claim = db.prepare("UPDATE mail_outbox SET status = 'sending', attempts = attempts + 1 WHERE id = ? AND status = 'pending'");
+        return rows.filter((row) => claim.run(row.id).changes > 0).map((row) => toMail({ ...row, attempts: row.attempts + 1, status: 'sending' }));
+      });
+    },
+    /** Забрать одно письмо по id (отправка сразу): null, если его уже взял цикл очереди. */
+    claimMail(id) {
+      const claimed = db.prepare("UPDATE mail_outbox SET status = 'sending', attempts = attempts + 1 WHERE id = ? AND status = 'pending'").run(id).changes > 0;
+      return claimed ? toMail(db.prepare('SELECT * FROM mail_outbox WHERE id = ?').get(id)) : null;
+    },
+    markMailSent: (id, now) => db.prepare("UPDATE mail_outbox SET status = 'sent', sent_at = ?, to_address = NULL, payload = NULL, last_error = NULL WHERE id = ?")
+      .run(now, id).changes > 0,
+    markMailRetry: (id, nextAttemptAt, error) => db.prepare("UPDATE mail_outbox SET status = 'pending', next_attempt_at = ?, last_error = ? WHERE id = ?")
+      .run(nextAttemptAt, error, id).changes > 0,
+    markMailFailed: (id, error) => db.prepare("UPDATE mail_outbox SET status = 'failed', last_error = ?, to_address = NULL, payload = NULL WHERE id = ?")
+      .run(error, id).changes > 0,
+    /** Письма, «застрявшие» в sending после падения процесса, — обратно в очередь. */
+    releaseStuckMail: (olderThan) => db.prepare("UPDATE mail_outbox SET status = 'pending' WHERE status = 'sending' AND next_attempt_at < ?").run(olderThan).changes,
+    listPendingMail: () => db.prepare("SELECT * FROM mail_outbox WHERE status IN ('pending', 'sending')").all().map(toMail),
+    countMailTo: ({ toHash, since, kinds = null }) => db.prepare(`SELECT COUNT(*) AS count FROM mail_outbox WHERE to_hash = ? AND created_at >= ?
+      ${kinds ? `AND kind IN (${kinds.map(() => '?').join(', ')})` : ''}`).get(toHash, since, ...(kinds || [])).count,
+    countMailFromSource: ({ sourceKey, since }) => db.prepare('SELECT COUNT(*) AS count FROM mail_outbox WHERE source_key = ? AND created_at >= ?').get(sourceKey, since).count,
+    countPendingMail: () => db.prepare("SELECT COUNT(*) AS count FROM mail_outbox WHERE status IN ('pending', 'sending')").get().count,
+    mailStats: (since) => Object.fromEntries(db.prepare('SELECT status, COUNT(*) AS count FROM mail_outbox WHERE created_at >= ? GROUP BY status').all(since)
+      .map((row) => [row.status, row.count])),
+    purgeMail: (before) => db.prepare("DELETE FROM mail_outbox WHERE created_at < ? AND status IN ('sent', 'failed')").run(before).changes,
+
+    /** Копия базы, сделанная перед миграцией при этом запуске (или null). */
+    migrationBackup,
 
     close: () => db.close(),
   });

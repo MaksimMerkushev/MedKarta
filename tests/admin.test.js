@@ -8,110 +8,36 @@
  */
 
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
-import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { createAdminService } from '../backend/accounts/adminService.js';
 import { bootstrapSuperadmin, createTestUsers, TEST_USERS } from '../backend/accounts/bootstrap.js';
+import { createDelivery } from '../backend/accounts/delivery.js';
 import { checkRolePermissions, DEFAULT_ROLE_PERMISSIONS, PERMISSION_KEYS } from '../backend/accounts/rbac.js';
 import { createSqliteAccountStore, loadSqlite } from '../backend/accounts/sqliteStore.js';
-import { createAccountHandler, createFailureCounter } from '../backend/api/account.js';
 import { createAccountContext } from '../backend/api/accountContext.js';
 import { SESSION_COOKIE } from '../backend/api/accountHttp.js';
-import { createActivationHandler } from '../backend/api/activation.js';
-import { createAdminHandler } from '../backend/api/admin.js';
-import { createChatAccessGate, withChatAccess } from '../backend/api/chatAccess.js';
-import { createMeHandler } from '../backend/api/me.js';
-import { respondJson } from '../backend/http/request.js';
 import { createRateLimiter } from '../backend/http/rateLimit.js';
+import { acceptLink as acceptLinkBase, browserFor, softAuthenticator, startAuthServer, tokenOfLink } from './helpers/authKit.js';
 
 const DatabaseSync = await loadSqlite();
 const ROOT_PASSWORD = 'Корневой-пароль-2026';
-const unlimited = () => ({ allowed: true });
 const PLANS = new Set(['demo-basic', 'demo-standard', 'demo-premium']);
+// Почта не настроена (ссылки передаются вручную); ключи доступа — для https://medkarta.test.
+const ENV = { PUBLIC_BASE_URL: 'https://medkarta.test' };
 
-/** Сервер со всеми маршрутами кабинета поверх одного контекста. */
-const startServer = async (context, { authLimit = unlimited } = {}) => {
-  const getService = async () => context.accounts;
-  const accountHandler = createAccountHandler({
-    getService,
-    onAccountDeleted: async () => {},
-    authLimit,
-    apiLimit: unlimited,
-    failures: createFailureCounter(),
-    features: () => ({ registration: false, demo: true, chatRequiresAccount: true }),
-  });
-  const meHandler = createMeHandler({ getService, apiLimit: unlimited, passwordLimit: unlimited });
-  const adminHandler = createAdminHandler({ getContext: async () => context, limit: unlimited, systemInfo: async () => ({ components: [], process: { nodeVersion: process.version } }) });
-  const chat = withChatAccess(async (req, res) => respondJson(res, 200, { replyText: 'ok' }), createChatAccessGate({ getService }));
-  const activationHandler = createActivationHandler({ getContext: async () => context, activationLimit: unlimited, requestLimit: unlimited, emailWindow: () => true });
-  const server = http.createServer((req, res) => {
-    if (req.url.startsWith('/api/admin')) return adminHandler(req, res);
-    if (req.url.startsWith('/api/auth/activation') || req.url === '/api/auth/access-link') return activationHandler(req, res);
-    if (req.url === '/api/me' || req.url.startsWith('/api/me/') || req.url.startsWith('/api/me?')) return meHandler(req, res);
-    if (req.url === '/api/chat') return chat(req, res);
-    return accountHandler(req, res);
-  });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  return { server, base: `http://127.0.0.1:${server.address().port}` };
-};
+/** Контекст кабинета для тестов: без почты, свой ключ MFA, без проверки по базе утечек. */
+const makeContext = ({ store, mfaKey = randomBytes(32), now }) => createAccountContext({
+  store, delivery: createDelivery({ env: {} }), env: ENV, mfaKey, breachCheck: async () => ({ breached: false }),
+  isKnownPlan: (id) => PLANS.has(id), onAccountDeleted: async () => {}, systemInfo: async () => null, ...(now ? { now } : {}),
+});
 
-/** «Браузер»: свой набор cookie, Origin своего сайта, JSON. */
-const browserFor = (base) => {
-  const jar = new Map();
-  const call = async (urlPath, { method = 'GET', body, headers = {}, raw = false } = {}) => {
-    const response = await fetch(`${base}${urlPath}`, {
-      method,
-      headers: {
-        origin: base,
-        ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
-        ...(jar.size ? { cookie: [...jar].map(([name, value]) => `${name}=${value}`).join('; ') } : {}),
-        ...headers,
-      },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
-    for (const line of response.headers.getSetCookie()) {
-      const [pair] = line.split(';');
-      const name = pair.slice(0, pair.indexOf('='));
-      const value = pair.slice(pair.indexOf('=') + 1);
-      if (/Max-Age=0/i.test(line) || !value) jar.delete(name);
-      else jar.set(name, value);
-    }
-    if (raw) return response;
-    const text = await response.text();
-    let json = null;
-    try {
-      json = text ? JSON.parse(text) : null;
-    } catch {
-      json = null;
-    }
-    return { status: response.status, body: json, text, headers: response.headers };
-  };
-  return {
-    jar,
-    call,
-    login: (email, password) => call('/api/auth/login', { method: 'POST', body: { email, password } }),
-    logout: () => call('/api/auth/logout', { method: 'POST', body: {} }),
-  };
-};
-
-const tokenOfLink = (link) => new URL(link).hash.replace(/^#token=/, '');
-
-/** Пройти приглашение как человек в новом браузере: подтвердить ссылку и задать пароль. */
-const acceptLink = async (base, link, password) => {
-  const tab = browserFor(base);
-  const token = tokenOfLink(link);
-  const peek = await tab.call('/api/auth/activation/peek', { method: 'POST', body: { token } });
-  assert.equal(peek.status, 200, JSON.stringify(peek.body));
-  const started = await tab.call('/api/auth/activation/start', { method: 'POST', body: { token } });
-  assert.equal(started.status, 200, JSON.stringify(started.body));
-  const done = await tab.call('/api/auth/activation/complete', { method: 'POST', body: { password } });
-  assert.equal(done.status, 200, JSON.stringify(done.body));
-  return { tab, user: done.body.user };
-};
+const startServer = (context, options = {}) => startAuthServer(context, options);
+const acceptLink = acceptLinkBase;
 
 describe('Права: матрица и правила', () => {
   it('superadmin — все разрешения; у user — ни одного; зависимости проверяются', () => {
@@ -134,14 +60,18 @@ describe('Админ-панель: сценарии', { skip: !DatabaseSync && '
   let base;
   let root;
   const links = {};
+  // Ключи доступа сотрудников: без второго фактора админ-панель не открывается.
+  const keys = new Map();
 
   before(async () => {
-    context = createAccountContext({ store: createSqliteAccountStore({ DatabaseSync, file: ':memory:' }), isKnownPlan: (id) => PLANS.has(id), onAccountDeleted: async () => {} });
+    context = makeContext({ store: createSqliteAccountStore({ DatabaseSync, file: ':memory:' }) });
     await bootstrapSuperadmin({ store: context.store, email: 'root@medkarta.test', firstName: 'Максим', password: ROOT_PASSWORD });
     ({ server, base } = await startServer(context));
     for (const item of await createTestUsers({ store: context.store, invitations: context.invitations, base })) links[item.email] = item.link;
     root = browserFor(base);
     assert.equal((await root.login('root@medkarta.test', ROOT_PASSWORD)).status, 200);
+    keys.set('root@medkarta.test', softAuthenticator());
+    await root.enrollPasskey(keys.get('root@medkarta.test'));
   });
 
   after(() => server?.close());
@@ -153,7 +83,20 @@ describe('Админ-панель: сценарии', { skip: !DatabaseSync && '
     const created = await root.call('/api/admin/users', { method: 'POST', body: { email, firstName, lastName, role } });
     assert.equal(created.status, 201, JSON.stringify(created.body));
     const { tab } = await acceptLink(base, created.body.link, password);
+    if (role !== 'user') {
+      // Сотрудник сразу добавляет ключ доступа (первые 15 минут после входа — без повторного пароля).
+      keys.set(email, softAuthenticator());
+      await tab.enrollPasskey(keys.get(email));
+    }
     return { tab, id: created.body.user.id, password };
+  };
+
+  /** Вход сотрудника в новом браузере: пароль и ключ доступа. */
+  const staffSignIn = async (email, password) => {
+    const tab = browserFor(base);
+    const result = await tab.signIn(email, password, keys.get(email));
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    return tab;
   };
 
   it('bootstrap идемпотентен: повтор не меняет пароль и не создаёт дубль', async () => {
@@ -312,7 +255,7 @@ describe('Админ-панель: сценарии', { skip: !DatabaseSync && '
   it('временная блокировка снимается сама по истечении срока', async () => {
     let clock = Date.now();
     const store = createSqliteAccountStore({ DatabaseSync, file: ':memory:' });
-    const local = createAccountContext({ store, now: () => clock, onAccountDeleted: async () => {} });
+    const local = makeContext({ store, now: () => clock });
     await bootstrapSuperadmin({ store, email: 'boss@medkarta.test', password: ROOT_PASSWORD, now: () => clock });
     const boss = (await local.accounts.login({ email: 'boss@medkarta.test', password: ROOT_PASSWORD })).user;
     const actor = { ...store.getUserById(boss.id), permissions: PERMISSION_KEYS };
@@ -528,7 +471,7 @@ describe('Админ-панель: сценарии', { skip: !DatabaseSync && '
     assert.equal((await root.call('/api/account', { method: 'DELETE', body: { confirm: true } })).body.code, 'staff_account');
     // Даже если бы действие выполнял кто-то другой с полными правами — инвариант держит база.
     const ghost = { id: 'f'.repeat(32), role: 'superadmin', status: 'active', firstName: 'Призрак', lastName: '', email: 'ghost@medkarta.test', permissions: PERMISSION_KEYS };
-    const admin = createAdminService({ store: context.store, accounts: context.accounts });
+    const admin = createAdminService({ store: context.store, accounts: context.accounts, invitations: context.invitations, throttle: context.throttle, mailer: context.mailer });
     assert.throws(() => admin.block(ghost, rootId, {}), (error) => error.code === 'last_superadmin');
     await assert.rejects(admin.deleteUser(ghost, rootId, { confirmEmail: 'root@medkarta.test' }), (error) => error.code === 'last_superadmin');
     assert.throws(() => admin.setRole(ghost, rootId, { role: 'user' }), (error) => error.code === 'last_superadmin');
@@ -580,8 +523,7 @@ describe('Админ-панель: сценарии', { skip: !DatabaseSync && '
     assert.equal((await root.call('/api/admin/roles/superadmin', { method: 'PUT', body: { permissions: [] } })).status, 400);
     const updated = await root.call('/api/admin/roles/moderator', { method: 'PUT', body: { permissions: ['admin.access', 'users.view', 'users.block', 'audit.view'] } });
     assert.equal(updated.status, 200);
-    const moder = browserFor(base);
-    await moder.login('moder@medkarta.test', 'Постоянный-пароль-1');
+    const moder = await staffSignIn('moder@medkarta.test', 'Постоянный-пароль-1');
     assert.equal((await moder.call('/api/admin/audit')).status, 200, 'новое разрешение действует сразу');
     await root.call('/api/admin/roles/moderator/reset', { method: 'POST', body: {} });
     assert.equal((await moder.call('/api/admin/audit')).status, 403);
@@ -605,8 +547,7 @@ describe('Админ-панель: сценарии', { skip: !DatabaseSync && '
     assert.equal((await root.call('/api/chat', { method: 'POST', body: { messages: [] } })).body.code, 'assistant_disabled');
     await root.call('/api/admin/settings', { method: 'PATCH', body: { values: { 'assistant.enabled': true } } });
     assert.equal((await root.call('/api/chat', { method: 'POST', body: { messages: [] } })).status, 200);
-    const admin = browserFor(base);
-    await admin.login('admin@medkarta.test', 'Постоянный-пароль-1');
+    const admin = await staffSignIn('admin@medkarta.test', 'Постоянный-пароль-1');
     assert.equal((await admin.call('/api/admin/settings')).status, 200, 'админ видит настройки');
     assert.equal((await admin.call('/api/admin/settings', { method: 'PATCH', body: { values: { 'app.name': 'Взлом' } } })).status, 403);
     const audit = await root.call('/api/admin/audit?action=settings.update');
@@ -645,7 +586,7 @@ describe('Админ-панель: сценарии', { skip: !DatabaseSync && '
 
 describe('Админ-панель: лимит входов и сохранность после перезапуска', { skip: !DatabaseSync && 'нужен Node 22.13+' }, () => {
   it('частые попытки входа упираются в лимит', async () => {
-    const context = createAccountContext({ store: createSqliteAccountStore({ DatabaseSync, file: ':memory:' }), onAccountDeleted: async () => {} });
+    const context = makeContext({ store: createSqliteAccountStore({ DatabaseSync, file: ':memory:' }) });
     const { server, base } = await startServer(context, { authLimit: createRateLimiter({ windowMs: 60_000, maxPerIp: 3, maxPerInstance: Number.POSITIVE_INFINITY }) });
     const tab = browserFor(base);
     const statuses = [];
@@ -656,12 +597,14 @@ describe('Админ-панель: лимит входов и сохраннос
 
   it('аккаунты, сессии и журнал переживают перезапуск', async () => {
     const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'medkarta-admin-')), 'accounts.sqlite');
+    const mfaKey = randomBytes(32);
     let store = createSqliteAccountStore({ DatabaseSync, file });
-    let context = createAccountContext({ store, onAccountDeleted: async () => {} });
+    let context = makeContext({ store, mfaKey });
     await bootstrapSuperadmin({ store, email: 'root@medkarta.test', password: ROOT_PASSWORD });
     let { server, base } = await startServer(context);
     const tab = browserFor(base);
     await tab.login('root@medkarta.test', ROOT_PASSWORD);
+    await tab.enrollPasskey(softAuthenticator());
     const created = await tab.call('/api/admin/users', { method: 'POST', body: { email: 'persist@medkarta.test', firstName: 'Сохранённый', lastName: 'Пользователь' } });
     await tab.call(`/api/admin/users/${created.body.user.id}/block`, { method: 'POST', body: { reason: 'Проверка перезапуска' } });
     server.close();
@@ -669,7 +612,7 @@ describe('Админ-панель: лимит входов и сохраннос
 
     // «Перезапуск»: новый процесс открывает тот же файл.
     store = createSqliteAccountStore({ DatabaseSync, file });
-    context = createAccountContext({ store, onAccountDeleted: async () => {} });
+    context = makeContext({ store, mfaKey });
     ({ server, base } = await startServer(context));
     const rebooted = browserFor(base);
     rebooted.jar.set(SESSION_COOKIE, tab.jar.get(SESSION_COOKIE));
@@ -679,7 +622,7 @@ describe('Админ-панель: лимит входов и сохраннос
     assert.equal(card.body.user.status, 'blocked');
     assert.equal(card.body.user.blockReason, 'Проверка перезапуска');
     const audit = await rebooted.call('/api/admin/audit?sort=at&dir=asc');
-    assert.deepEqual(audit.body.items.map((item) => item.action), ['account.bootstrap', 'user.create', 'user.invite', 'user.block']);
+    assert.deepEqual(audit.body.items.map((item) => item.action), ['account.bootstrap', 'mfa.enable', 'user.create', 'user.invite', 'user.block']);
     assert.equal((await bootstrapSuperadmin({ store, email: 'root@medkarta.test', password: 'другой-пароль-2026' })).status, 'exists');
     server.close();
     store.close();

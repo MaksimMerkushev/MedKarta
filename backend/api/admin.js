@@ -2,9 +2,13 @@
  * © 2026 МедКарта Казань. Все права защищены.
  *
  * HTTP-слой админ-панели (/admin). Каждый запрос: действующая сессия, смена
- * временного пароля уже выполнена, разрешение admin.access; конкретное
- * разрешение и ранг проверяет adminService. Изменяющие запросы — только JSON
- * со своего Origin (как у кабинета). id пользователя — только 32 hex-символа.
+ * временного пароля уже выполнена, разрешение admin.access, второй фактор
+ * (MFA обязательна сотрудникам: нет факторов — 403 mfa_setup_required,
+ * сессия без второго фактора — 403 mfa_required); конкретное разрешение и
+ * ранг проверяет adminService. Критические действия (роли, удаление, архив,
+ * матрица прав, настройки, экспорт, массовые операции) — только со свежим
+ * подтверждением личности (403 reauth_required). Изменяющие запросы — только
+ * JSON со своего Origin (как у кабинета). id пользователя — только 32 hex-символа.
  *
  *   GET    /api/admin/me                           кто вошёл и что ему можно
  *   GET    /api/admin/dashboard?period=7d          дашборд (24h, 7d, 30d, 90d)
@@ -26,6 +30,7 @@
  *   GET    /api/admin/notifications?since=…        кто недавно активировал аккаунт
  *   POST   /api/admin/users/:id/password-require   потребовать смену пароля
  *   POST   /api/admin/users/:id/sessions/revoke    завершить все сессии
+ *   POST   /api/admin/users/:id/unlock-login       снять временные ограничения входа
  *   GET    /api/admin/users/:id/sessions|logins|blocks|audit|avatar
  *   GET    /api/admin/sessions                     активные сессии
  *   DELETE /api/admin/sessions/:id                 отозвать сессию
@@ -42,7 +47,7 @@ import { createRateLimiter, getClientIp } from '../http/rateLimit.js';
 import { createRouter } from '../http/router.js';
 import { logger } from '../observability/safeLogger.js';
 import { getAccountContext } from './accountContext.js';
-import { isTrustedWrite, pathOf, queryOf, readJsonObject, requestOrigin, requireSession, sendError } from './accountHttp.js';
+import { isTrustedWrite, pathOf, queryOf, readJsonObject, requestOrigin, requireFresh, requireSession, sendError } from './accountHttp.js';
 import { sendImage } from './me.js';
 
 const MAX_BODY_BYTES = 32 * 1024;
@@ -69,6 +74,7 @@ const route = createRouter([
   ['GET', '/api/admin/notifications', 'notifications'],
   ['POST', '/api/admin/users/:id/password-require', 'requirePasswordChange'],
   ['POST', '/api/admin/users/:id/sessions/revoke', 'revokeUserSessions'],
+  ['POST', '/api/admin/users/:id/unlock-login', 'unlockLogin'],
   ['GET', '/api/admin/users/:id/sessions', 'userSessions'],
   ['GET', '/api/admin/users/:id/logins', 'userLogins'],
   ['GET', '/api/admin/users/:id/blocks', 'userBlocks'],
@@ -87,6 +93,14 @@ const route = createRouter([
 
 // Операции с телом запроса: остальные тело не читают.
 const WITH_BODY = new Set(['createUser', 'bulk', 'updateUser', 'deleteUser', 'setRole', 'block', 'updateRole', 'updateSettings', 'issueAccessLink']);
+
+/*
+ * Критические действия: нужна свежая проверка личности (пароль и второй
+ * фактор не старше auth.reauthMinutes). Украденная сессия администратора
+ * сама по себе не позволит раздать роли, удалить пользователей или
+ * выгрузить базу.
+ */
+const CRITICAL = new Set(['setRole', 'deleteUser', 'archive', 'bulk', 'exportUsers', 'updateRole', 'resetRole', 'updateSettings']);
 
 const collectSystemInfo = async () => (await import('./systemInfo.js')).collectSystemInfo();
 
@@ -134,6 +148,16 @@ export const createAdminHandler = ({ getContext = getAccountContext, limit = def
       respondJson(res, 403, { error: 'Нет доступа к админ-панели.', code: 'forbidden' });
       return;
     }
+    // Второй фактор обязателен всем, у кого есть доступ к админ-панели; проверяется на каждом запросе.
+    if (!auth.security?.mfaEnabled) {
+      respondJson(res, 403, { error: 'Для админ-панели нужна двухфакторная защита. Настройте её — это займёт минуту.', code: 'mfa_setup_required' });
+      return;
+    }
+    if ((auth.session?.aal || 1) < 2) {
+      respondJson(res, 403, { error: 'Подтвердите вход вторым фактором.', code: 'mfa_required' });
+      return;
+    }
+    if (CRITICAL.has(operation) && !requireFresh(res, auth, context.accounts)) return;
 
     const { admin } = context;
     const query = queryOf(url);
@@ -171,6 +195,7 @@ export const createAdminHandler = ({ getContext = getAccountContext, limit = def
         case 'notifications': result = admin.notifications(actor, query); break;
         case 'requirePasswordChange': result = admin.requirePasswordChange(actor, params.id); break;
         case 'revokeUserSessions': result = admin.revokeUserSessions(actor, params.id); break;
+        case 'unlockLogin': result = admin.unlockLogin(actor, params.id); break;
         case 'userSessions': result = admin.userSessions(actor, params.id); break;
         case 'userLogins': result = admin.userLogins(actor, params.id, query); break;
         case 'userBlocks': result = admin.userBlocks(actor, params.id); break;

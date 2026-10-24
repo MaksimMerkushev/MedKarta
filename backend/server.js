@@ -27,7 +27,7 @@ import demoBookingHandler, { DEMO_BOOKING_PATHS } from './api/demoBooking.js';
 import eventsHandler from './api/events.js';
 import routeHandler from './api/route.js';
 import travelTimesHandler from './api/travelTimes.js';
-import { applySecurityHeaders } from './http/securityHeaders.js';
+import { applySecurityHeaders, isTokenPage } from './http/securityHeaders.js';
 import { rateLimitKey, validateTrustProxy } from './http/rateLimit.js';
 import { getDefaultRoutingEngine } from './routing/engine.js';
 import { logger } from './observability/safeLogger.js';
@@ -283,6 +283,7 @@ const handleRequest = async (req, res) => {
     return;
   }
   // SPA: любой неизвестный путь отдаёт index.html, маршрутизацию делает клиент.
+  if (isTokenPage(apiPathOf(req.url))) res.setHeader('Referrer-Policy', 'no-referrer');
   const index = path.join(DIST, 'index.html');
   const indexStats = await fs.promises.stat(index).catch(() => null);
   if (!indexStats?.isFile()) {

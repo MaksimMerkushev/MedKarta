@@ -21,6 +21,15 @@
  *       то же, что access-link, плюс завершает все сессии пользователя.
  *   npm run accounts -- restore-admin --email адрес
  *       вернуть аккаунту роль superadmin и статус «активен» (потеря доступа).
+ *   npm run accounts -- mfa-reset --email адрес [--yes]
+ *       процедура восстановления при потере всех факторов входа (телефон,
+ *       ключи и резервные коды): факторы и коды удаляются, все сессии и
+ *       доверенные устройства завершаются. Только на сервере, с подтверждением:
+ *       для сотрудника это единственный способ вернуть доступ без второго
+ *       фактора — письма для этого недостаточно. После входа MFA нужно
+ *       настроить заново (админ-панель потребует это сама).
+ *   npm run accounts -- unlock --email адрес
+ *       снять временные ограничения входа (счётчики неудачных попыток).
  *   npm run accounts -- list-staff | status
  *   npm run accounts -- backup --out файл.sqlite
  *
@@ -46,6 +55,8 @@ const { bootstrapSuperadmin, createTestUsers, DEFAULT_SUPERADMIN } = await impor
 const { normalizeEmail, userLabel } = await import('../backend/accounts/service.js');
 const { createSqliteAccountStore, loadSqlite } = await import('../backend/accounts/sqliteStore.js');
 const { createAccountContext, defaultAccountsDbPath } = await import('../backend/api/accountContext.js');
+const { loadMfaKey } = await import('../backend/accounts/secrets.js');
+const { emailKey } = await import('../backend/accounts/throttle.js');
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -83,7 +94,9 @@ const DatabaseSync = await loadSqlite();
 if (!DatabaseSync) die('Нужен Node 22.13+ (node:sqlite).');
 const file = defaultAccountsDbPath();
 const store = createSqliteAccountStore({ DatabaseSync, file });
-const context = createAccountContext({ store, onAccountDeleted: async () => {}, systemInfo: async () => null });
+// Ключ MFA — тот же, что у сервера (MFA_SECRET_KEY или файл рядом с базой).
+const mfaKey = loadMfaKey({ keyFile: path.join(path.dirname(file), 'secrets', 'mfa.key') }).key;
+const context = createAccountContext({ store, mfaKey, onAccountDeleted: async () => {}, systemInfo: async () => null });
 const linkBase = () => {
   const base = option('base') || `http://localhost:${process.env.PORT || 3001}`;
   try {
@@ -189,6 +202,35 @@ switch (command) {
     if (!user.activatedAt) console.log('Аккаунт ещё не активирован — выдайте ссылку: npm run accounts -- access-link --email …');
     break;
   }
+  case 'mfa-reset': {
+    const user = findByEmail(option('email'));
+    if (user.demoTemplate) die('У демо-копии нет факторов входа.');
+    if (!flag('yes')) {
+      if (!process.stdin.isTTY) die('Подтвердите в терминале или передайте --yes.');
+      console.log(`Будут удалены все факторы входа и резервные коды ${user.email}, завершены все сессии.`);
+      const answer = await ask('Введите email ещё раз для подтверждения: ');
+      if (normalizeEmail(answer) !== user.email) die('Email не совпал — ничего не изменено.');
+    }
+    const revoked = store.transaction(() => {
+      const count = context.mfa.resetAll(user.id);
+      store.deleteUserSessions(user.id);
+      store.deleteUserDevices(user.id);
+      audit('user.mfa_reset', user, { factors: count, via: 'cli' });
+      store.addAuthEvent({ at: Date.now(), type: 'mfa_reset', userId: user.id, reason: 'cli' });
+      return count;
+    });
+    console.log(`${user.email}: удалено факторов — ${revoked}, резервные коды и сессии сброшены.`);
+    console.log('Дальше: войдите паролем (если пароль тоже утрачен — access-link --email …) и сразу настройте второй фактор.');
+    break;
+  }
+  case 'unlock': {
+    const user = findByEmail(option('email'));
+    const cleared = context.throttle.clearAccount(emailKey(user.email));
+    audit('user.login_unlock', user, { cleared, via: 'cli' });
+    store.addAuthEvent({ at: Date.now(), type: 'login_unlocked', userId: user.id, reason: 'cli' });
+    console.log(`${user.email}: ограничения входа сняты (${cleared}).`);
+    break;
+  }
   case 'list-staff': {
     const { rows } = store.listUsers({ filters: { roles: ['superadmin', 'admin', 'moderator'], kind: 'real' }, sort: 'role', dir: 'desc', limit: 100, now: Date.now() });
     for (const user of rows) console.log(`${user.role.padEnd(11)} ${user.status.padEnd(9)} ${user.email}`);
@@ -203,6 +245,11 @@ switch (command) {
     for (const row of counts) console.log(`  ${row.role.padEnd(11)} ${row.status.padEnd(9)} ${row.count}`);
     console.log(`Ожидают активации: ${store.countPendingUsers()}`);
     console.log(`Активных суперадминистраторов: ${store.countActiveSuperadmins()}`);
+    console.log(`Регистрация: ${context.registration.mode === 'open' ? (context.registration.enabled ? 'открыта' : 'open, но почта не настроена — выключена') : 'только по приглашению'}`);
+    const staff = store.listUsers({ filters: { roles: ['superadmin', 'admin', 'moderator'], kind: 'real' }, sort: 'role', dir: 'desc', limit: 100, now: Date.now() }).rows;
+    const withoutMfa = staff.filter((user) => store.countActiveFactors(user.id) === 0);
+    console.log(`Сотрудников без второго фактора: ${withoutMfa.length}${withoutMfa.length ? ` (${withoutMfa.map((user) => user.email).join(', ')}) — админ-панель попросит настроить при входе` : ''}`);
+    if (store.migrationBackup) console.log(`Перед миграцией сделана копия базы: ${store.migrationBackup}`);
     const mail = context.delivery.describe();
     console.log(mail.mode === 'smtp' ? `Почта: SMTP ${mail.host}, ссылки ведут на ${mail.appUrl}` : `Почта: не настроена — ссылки передаются вручную${mail.problems.length ? ` (${mail.problems.join('; ')})` : ''}`);
     break;
@@ -219,7 +266,7 @@ switch (command) {
     break;
   }
   default:
-    console.log('Команды: bootstrap, seed-test-users, access-link, reset-password, restore-admin, list-staff, status, backup. Подробности — docs/accounts.md.');
+    console.log('Команды: bootstrap, seed-test-users, access-link, reset-password, restore-admin, mfa-reset, unlock, list-staff, status, backup. Подробности — docs/accounts.md.');
     if (command) process.exitCode = 1;
 }
 
