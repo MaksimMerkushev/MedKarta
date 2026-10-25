@@ -11,29 +11,8 @@ import { motion as Motion } from 'motion/react';
 import { Fingerprint, KeyRound, LifeBuoy, ShieldCheck, Smartphone } from 'lucide-react';
 
 import { AuthButton, FormError, TextAction, TextField } from './parts';
+import { secondFactorError } from './secondFactorText';
 import { getPasskeyAssertion, passkeyErrorMessage, passkeysSupported } from './webauthn';
-
-export const METHOD_LABELS = {
-  webauthn: 'Ключ доступа',
-  totp: 'Приложение-аутентификатор',
-  recovery: 'Резервный код',
-};
-
-/** Текст ошибки второго шага: что не так и сколько попыток осталось. */
-export const secondFactorError = (error) => {
-  switch (error?.code) {
-    case 'bad_mfa_code': {
-      const left = error.payload?.attemptsLeft;
-      return `${error.message}${Number.isInteger(left) && left <= 3 ? ` Осталось попыток: ${left}.` : ''}`;
-    }
-    case 'too_many_attempts':
-      return error.message || 'Слишком много неверных кодов. Подождите 15 минут.';
-    case 'mfa_expired':
-      return 'Время на подтверждение вышло. Войдите заново.';
-    default:
-      return error?.message || 'Не получилось проверить. Попробуйте ещё раз.';
-  }
-};
 
 const firstMethod = (methods) => {
   if (methods.includes('webauthn') && passkeysSupported()) return 'webauthn';

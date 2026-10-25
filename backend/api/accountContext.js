@@ -92,7 +92,7 @@ export const createAccountContext = ({
   const invitations = createInvitationService({ store, accounts, delivery, mailer, now });
   const registration = createRegistrationService({ store, accounts, delivery, mailer, mode: registrationMode, now });
   const emailChange = createEmailChangeService({ store, accounts, delivery, mailer, now });
-  const admin = createAdminService({ store, accounts, invitations, onAccountDeleted, systemInfo, throttle, mailer, now });
+  const admin = createAdminService({ store, accounts, invitations, onAccountDeleted, systemInfo, throttle, now });
   return Object.freeze({ store, settings, accounts, invitations, registration, emailChange, delivery, mailer, throttle, mfa, admin });
 };
 

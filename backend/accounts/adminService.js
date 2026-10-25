@@ -90,7 +90,7 @@ const csvCell = (value) => {
  * @param {() => Promise<object>} [deps.systemInfo] состояние компонентов для дашборда
  */
 export const createAdminService = ({
-  store, accounts, invitations = null, onAccountDeleted = async () => {}, systemInfo = async () => null, throttle = null, mailer = null, now = () => Date.now(),
+  store, accounts, invitations = null, onAccountDeleted = async () => {}, systemInfo = async () => null, throttle = null, now = () => Date.now(),
 }) => {
   const settings = accounts.settings;
 

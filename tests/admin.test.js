@@ -471,7 +471,7 @@ describe('Админ-панель: сценарии', { skip: !DatabaseSync && '
     assert.equal((await root.call('/api/account', { method: 'DELETE', body: { confirm: true } })).body.code, 'staff_account');
     // Даже если бы действие выполнял кто-то другой с полными правами — инвариант держит база.
     const ghost = { id: 'f'.repeat(32), role: 'superadmin', status: 'active', firstName: 'Призрак', lastName: '', email: 'ghost@medkarta.test', permissions: PERMISSION_KEYS };
-    const admin = createAdminService({ store: context.store, accounts: context.accounts, invitations: context.invitations, throttle: context.throttle, mailer: context.mailer });
+    const admin = createAdminService({ store: context.store, accounts: context.accounts, invitations: context.invitations, throttle: context.throttle });
     assert.throws(() => admin.block(ghost, rootId, {}), (error) => error.code === 'last_superadmin');
     await assert.rejects(admin.deleteUser(ghost, rootId, { confirmEmail: 'root@medkarta.test' }), (error) => error.code === 'last_superadmin');
     assert.throws(() => admin.setRole(ghost, rootId, { role: 'user' }), (error) => error.code === 'last_superadmin');

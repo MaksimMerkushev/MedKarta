@@ -28,7 +28,8 @@ import AutoHeight from './AutoHeight';
 import { AuthSkeleton } from './LoginPage';
 import { AuthButton, FormError, PasswordField, PasswordRequirements, PasswordStrength, SuccessMark, TextAction, TextField } from './parts';
 import { homeFor, useAuthEnvironment } from './environment';
-import { AccountRow, cleanUrl, formatMoscow, Heading, LinkProblem, readTokenFromUrl } from './linkParts';
+import { AccountRow, Heading, LinkProblem } from './linkParts';
+import { cleanUrl, formatMoscow, readTokenFromUrl } from './links';
 import { stepTransition, stepVariants } from './motion';
 
 const EMAIL = /^[^\s@<>()[\]\\,;:"]{1,64}@[^\s@]+\.[^\s@]{2,}$/u;

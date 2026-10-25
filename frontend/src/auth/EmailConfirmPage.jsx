@@ -18,7 +18,8 @@ import AutoHeight from './AutoHeight';
 import { AuthSkeleton } from './LoginPage';
 import { AuthButton, SuccessMark } from './parts';
 import { useAuthEnvironment } from './environment';
-import { AccountRow, cleanUrl, formatMoscow, Heading, LinkProblem, readTokenFromUrl } from './linkParts';
+import { AccountRow, Heading, LinkProblem } from './linkParts';
+import { cleanUrl, formatMoscow, readTokenFromUrl } from './links';
 import { stepTransition, stepVariants } from './motion';
 
 const PROFILE = { label: 'Открыть профиль', to: '/profile#security' };

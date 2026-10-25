@@ -24,7 +24,8 @@ import AutoHeight from './AutoHeight';
 import { AuthSkeleton } from './LoginPage';
 import { AuthButton, FormError, PasswordField, PasswordRequirements, PasswordStrength, SuccessMark } from './parts';
 import { homeFor, useAuthEnvironment } from './environment';
-import { AccountRow, cleanUrl as cleanUrlTo, formatMoscow, Heading, readTokenFromUrl } from './linkParts';
+import { AccountRow, Heading } from './linkParts';
+import { cleanUrl as cleanUrlTo, formatMoscow, readTokenFromUrl } from './links';
 import { stepTransition, stepVariants } from './motion';
 
 const REDIRECT_MS = 1400;
