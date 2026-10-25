@@ -79,55 +79,46 @@
 |---|---|---|---|
 | `ACCOUNTS` | включено | `off` — выключить аккаунты и админ-панель | [accountContext.js](../backend/api/accountContext.js) |
 | `ACCOUNTS_DB_PATH` | `var/accounts/medkarta.sqlite` | файл базы | [accountContext.js](../backend/api/accountContext.js) |
-| `ADMIN_BOOTSTRAP_PASSWORD` | — | пароль главного суперадминистратора; создаётся при запуске, **только если такого email ещё нет**, повторный запуск ничего не меняет. После первого входа уберите переменную | [accountContext.js](../backend/api/accountContext.js), [bootstrap.js](../backend/accounts/bootstrap.js) |
+| `REGISTRATION_MODE` | `invite_only` | `open` — регистрация по email (нужна настроенная почта), `invite_only` — аккаунты только по приглашению; другое значение — `invite_only` | [registration.js](../backend/accounts/registration.js) |
+| `MFA_SECRET_KEY` | файл `var/accounts/secrets/mfa.key` | 32 байта (base64 или hex, `openssl rand -base64 32`): шифрование секретов приложений-аутентификаторов и HMAC резервных кодов. Без переменной ключ создаётся в файле (права 600) рядом с базой. **Храните копию отдельно от базы**; смена ключа делает существующие коды недействительными | [secrets.js](../backend/accounts/secrets.js) |
+| `WEBAUTHN_RP_ID` | домен из `PUBLIC_BASE_URL` | домен ключей доступа (passkeys); ключ, созданный для домена, работает только на нём и его поддоменах | [mfa.js](../backend/accounts/mfa.js) |
+| `WEBAUTHN_ORIGINS` | — | дополнительные адреса страниц (через запятую), с которых принимаются ключи доступа, например `https://www.navimed.tech` | [mfa.js](../backend/accounts/mfa.js) |
+| `PASSWORD_BREACH_CHECK` | выключено | `hibp` — проверять новый пароль по базе утечек Have I Been Pwned: уходят только первые 5 символов SHA-1, пароль и email — нет; сервис недоступен — проверка пропускается | [breachedPasswords.js](../backend/accounts/breachedPasswords.js) |
+| `ADMIN_BOOTSTRAP_PASSWORD` | — | **только вне production** (разработка, автотесты): создать главного суперадминистратора при запуске, если его ещё нет. В production игнорируется — суперадминистратор создаётся командой `npm run accounts -- bootstrap` | [accountContext.js](../backend/api/accountContext.js), [bootstrap.js](../backend/accounts/bootstrap.js) |
 | `ADMIN_BOOTSTRAP_EMAIL` | `maximka2703@bk.ru` | email главного суперадминистратора | [bootstrap.js](../backend/accounts/bootstrap.js) |
-| `APP_ENV` | — | `production` — как и `NODE_ENV=production`, запрещает `npm run accounts -- seed-test-users` без `--allow-production` | [accounts.mjs](../scripts/accounts.mjs) |
-| `COOKIE_SECURE` | автоматически | `on` / `off` — принудительно ставить или не ставить `Secure` | [accountHttp.js](../backend/api/accountHttp.js) |
+| `APP_ENV` | — | `production` — как и `NODE_ENV=production`: игнорировать `ADMIN_BOOTSTRAP_PASSWORD`, запрещать `seed-test-users` без `--allow-production` | [accounts.mjs](../scripts/accounts.mjs) |
+| `COOKIE_SECURE` | автоматически | `on` / `off` — принудительно считать запрос HTTPS (cookie `__Host-mk_sid` с `Secure`) или HTTP (`mk_sid`) | [accountHttp.js](../backend/api/accountHttp.js) |
+| `TRUST_PROXY`, `TRUSTED_PROXIES` | 0; только `127.0.0.1` | сколько прокси перед сервером и с каких адресов принимать `X-Forwarded-For` — от этого зависят счётчики подбора по адресу | [rateLimit.js](../backend/http/rateLimit.js) |
 | `CHAT_REQUIRES_ACCOUNT` | включено | `off` — открыть ассистента гостям; значение по умолчанию для настройки «Ассистент только после входа» в админ-панели | [chatAccess.js](../backend/api/chatAccess.js), [settings.js](../backend/accounts/settings.js) |
 
-Публичной регистрации нет (`ACCOUNTS_REGISTRATION` больше не читается).
-Пароль новому пользователю не выдаётся — он задаёт его сам по приглашению
-(почта — раздел ниже).
-Сроки сессий, порог неудачных входов, сроки хранения журналов, сообщение о
-технических работах, включение ассистента и демо-кнопок — **настройки в
-админ-панели** (таблица `settings`), а не переменные окружения; секретов и
-переменных окружения админ-панель не показывает и не меняет.
+Сроки сессий (в том числе сотрудников), порог неудачных входов, срок
+подтверждения личности, сроки ссылок, сроки хранения журналов, сообщение о
+технических работах и включение ассистента — **настройки в админ-панели**
+(таблица `settings`), а не переменные окружения; секретов и переменных
+окружения админ-панель не показывает и не меняет.
 
-## Почта: приглашения и ссылки для входа
+## Почта: регистрация, приглашения, восстановление
 
-Письма с приглашениями и ссылками для смены пароля уходят, только если заданы
-**все три**: SMTP (`SMTP_URL` или `SMTP_HOST`), `MAIL_FROM` и `APP_URL`. Иначе —
-ручной режим: ссылку один раз видит администратор, который её выдал, а кнопка
-«Нет пароля или забыли его?» объясняет, что ссылку присылает администратор.
-Фиктивной отправки нет. Что не так с настройками — в разделе «Система»
-админ-панели (компонент «Письма с приглашениями») и в `npm run accounts -- status`.
+Письма уходят, только если заданы **все три**: SMTP (`SMTP_URL` или
+`SMTP_HOST`), отправитель (`SMTP_FROM` или `MAIL_FROM`) и адрес сайта
+(`PUBLIC_BASE_URL` или `APP_URL`). Иначе — ручной режим: ссылку один раз
+видит администратор, который её выдал; регистрация и «Нет пароля или забыли
+его?» выключены. Фиктивной отправки нет. Что не так с настройками — раздел
+«Система» админ-панели и `npm run accounts -- status`. Подробно, с SPF, DKIM
+и DMARC, — [mail-setup.md](mail-setup.md).
 
 | Переменная | По умолчанию | Что делает | Где |
 |---|---|---|---|
-| `APP_URL` | — | публичный адрес приложения для ссылок в письмах: только `https://…` (или `http://localhost…` для отладки); заголовок `Host` для писем не используется | [delivery.js](../backend/accounts/delivery.js) |
-| `MAIL_FROM` | — | отправитель: `МедКарта <noreply@домен>` или просто адрес | [delivery.js](../backend/accounts/delivery.js) |
-| `SMTP_URL` | — | всё сразу: `smtps://логин:пароль@smtp.example.ru:465` (TLS) или `smtp://…:587` (STARTTLS, обязателен); спецсимволы в логине и пароле — в URL-кодировке | [smtp.js](../backend/mail/smtp.js) |
+| `PUBLIC_BASE_URL` (или `APP_URL`) | — | публичный адрес сайта для всех ссылок в письмах и для ключей доступа: только `https://…` (или `http://localhost…` для отладки); заголовок `Host` не используется; при заданном `ALLOWED_HOSTS` — только из этого списка | [delivery.js](../backend/accounts/delivery.js) |
+| `SMTP_FROM` (или `MAIL_FROM`) | — | отправитель: `МедКарта <noreply@navimed.tech>` или просто адрес | [delivery.js](../backend/accounts/delivery.js) |
+| `SMTP_URL` | — | всё сразу: `smtps://логин:пароль@smtp.example.ru:465` (TLS) или `smtp://…:587` (STARTTLS, обязателен); спецсимволы — в URL-кодировке | [smtp.js](../backend/mail/smtp.js) |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | порт 465 для `tls`, 587 для `starttls` | то же по отдельности, если `SMTP_URL` не задан | [smtp.js](../backend/mail/smtp.js) |
 | `SMTP_SECURE` | `starttls` | `tls` (сразу TLS, порт 465), `starttls` (обязательный STARTTLS) или `none` (без шифрования — пароль не отправляется) | [smtp.js](../backend/mail/smtp.js) |
-| `SMTP_ALLOW_INSECURE` | — | `on` — вход без TLS, **только** для `localhost` (локальный тестовый сервер вроде MailHog) | [smtp.js](../backend/mail/smtp.js) |
+| `SMTP_ALLOW_INSECURE` | — | `on` — без TLS, **только** для `localhost` (учебный SMTP-сервер в тестах) | [smtp.js](../backend/mail/smtp.js) |
 
 Сертификат почтового сервера проверяется всегда; вход (AUTH) без TLS
 запрещён. Пароль SMTP — секрет: только в `.env` или в окружении сервиса, не
-в git и не в админ-панели. Сроки ссылок — настройки «Приглашения» в
-админ-панели: `auth.inviteTtlHours` (24 ч) и `auth.resetTtlMinutes` (60 мин).
-
-Пример для Яндекс 360 (пароль приложения, а не пароль от ящика):
-
-```bash
-APP_URL=https://medkarta.example.ru
-MAIL_FROM="МедКарта <noreply@medkarta.example.ru>"
-SMTP_URL=smtps://noreply%40medkarta.example.ru:ПАРОЛЬ_ПРИЛОЖЕНИЯ@smtp.yandex.ru:465
-```
-
-Проверка после перезапуска: создайте в админ-панели пользователя со своим
-вторым адресом — в окне итога будет «Приглашение отправлено», письмо придёт
-в течение минуты. Не пришло — «Система» → «Письма с приглашениями» и журнал
-сервера (`mail.send_failed` с кодом ошибки, без адресов и текста письма).
+в git и не в админ-панели.
 
 ## Аналитика
 
@@ -189,6 +180,13 @@ SERVE_STATIC=off
 TRUST_PROXY=1
 ALLOWED_HOSTS=medkarta.example
 PRIVACY_TOKEN_SECRET=<не короче 16 символов, случайная строка>
+# аккаунты
+PUBLIC_BASE_URL=https://medkarta.example
+MFA_SECRET_KEY=<openssl rand -base64 32>
+REGISTRATION_MODE=invite_only
+# почта — по желанию (без неё ссылки передаются вручную), см. mail-setup.md
+# SMTP_URL=smtps://<логин>:<пароль приложения>@<smtp-сервер>:465
+# SMTP_FROM="МедКарта <noreply@medkarta.example>"
 # внешняя модель — по желанию
 OPENROUTER_API_KEY=<ключ>
 AI_UPSTREAM_URL=https://openrouter.ai/api/v1/chat/completions

@@ -70,6 +70,9 @@ npm start              # backend/server.js: API + статика из dist/
 | `HOST` | 127.0.0.1 |
 | `SERVE_STATIC` | включено, если существует `dist/`; `off` — только API |
 | `TRUST_PROXY` | 0; за nginx — 1 |
+| `PUBLIC_BASE_URL` | — ; адрес сайта для ссылок в письмах и ключей доступа (`https://…`) |
+| `MFA_SECRET_KEY` | файл `var/accounts/secrets/mfa.key`; ключ двухфакторной защиты, копию хранить отдельно от базы |
+| `REGISTRATION_MODE` | `invite_only`; `open` — регистрация по email (нужна почта) |
 | `AI_DAILY_CALL_LIMIT` | 2000 обращений к модели в сутки |
 | `CHAT_MAX_CONCURRENCY` | 1 |
 
@@ -161,8 +164,10 @@ add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" alway
 add_header X-Content-Type-Options "nosniff" always;
 add_header X-Frame-Options "DENY" always;
 add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-add_header Permissions-Policy "geolocation=(self), camera=(), microphone=(), payment=(), usb=(), magnetometer=(), accelerometer=(), gyroscope=(), browsing-topics=()" always;
+add_header Permissions-Policy "geolocation=(self), camera=(), microphone=(), payment=(), usb=(), magnetometer=(), accelerometer=(), gyroscope=(), browsing-topics=(), publickey-credentials-get=(self), publickey-credentials-create=(self)" always;
 ```
+
+`publickey-credentials-*` — ключи доступа (passkeys) только на своём сайте.
 
 `/etc/nginx/sites-available/medkarta`:
 
@@ -209,6 +214,16 @@ server {
         try_files $uri /index.html;
         add_header Cache-Control "no-cache" always;
         include snippets/medkarta-headers.conf;
+    }
+
+    # Страницы, открываемые по ссылке из письма (#token=…): не кэшировать и не
+    # отправлять Referer. Токен во фрагменте и так не уходит в Referer — это
+    # вторая линия защиты. Последнее значение Referrer-Policy действует.
+    location ~ ^/(activate|register/confirm|email/confirm)/?$ {
+        try_files /index.html =404;
+        add_header Cache-Control "no-store" always;
+        include snippets/medkarta-headers.conf;
+        add_header Referrer-Policy "no-referrer" always;
     }
 
     # Имена файлов в assets/ содержат хэш содержимого — их можно кэшировать навсегда.

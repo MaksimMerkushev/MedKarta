@@ -166,9 +166,9 @@ cd /srv/medkarta/app && sudo -u medkarta git pull && sudo -u medkarta npm ci \
    откажется при `NODE_ENV=production`); настоящие аккаунты — в разделе
    «Пользователи».
 7. **По желанию — доступ к `/admin` только из своих сетей** в nginx
-   (`location /admin` и `location /api/admin/` с `allow … ; deny all;`): второго
-   фактора у входа нет. Это изменение конфигурации сервера — делайте его
-   осознанно.
+   (`location /admin` и `location /api/admin/` с `allow … ; deny all;`) —
+   дополнительно ко второму фактору сотрудников. Это изменение конфигурации
+   сервера — делайте его осознанно.
 
 Откат: остановить сервис, вернуть прежний код и файл базы из копии шага 1
 (`chmod 600`), запустить. Всё, что изменилось после копии, будет потеряно.
@@ -184,7 +184,7 @@ cd /srv/medkarta/app && sudo -u medkarta git pull && sudo -u medkarta npm ci \
    `npm test`, `npm run lint`, `npm run build` — без перезапуска.
 3. **Почта (по желанию, можно позже)** — в `/srv/medkarta/app/.env`:
    `APP_URL=https://<домен>`, `MAIL_FROM`, `SMTP_URL` (или `SMTP_HOST` и
-   др.) — [14-configuration.md](14-configuration.md#почта-приглашения-и-ссылки-для-входа).
+   др.) — [14-configuration.md](14-configuration.md#почта-регистрация-приглашения-восстановление).
    Без почты приглашения работают в ручном режиме: ссылку видит
    администратор и передаёт сам.
 4. **Перезапуск** — миграция при открытии базы: у всех аккаунтов с паролем
@@ -196,6 +196,34 @@ cd /srv/medkarta/app && sudo -u medkarta git pull && sudo -u medkarta npm ci \
    фрагменте адреса в журналы не попадает.
 
 Откат — как выше: прежний код и файл базы из копии шага 1.
+
+### Выпуск с регистрацией и двухфакторной защитой (схема 5)
+
+Регистрация по email (по умолчанию выключена), второй фактор (обязателен
+сотрудникам), защита входа в базе, очередь писем. Порядок:
+
+1. **Копия базы** до `git pull`: `sudo -u medkarta npm run accounts -- backup
+   --out /backup/accounts-before-v5.sqlite`. Сервер при миграции и сам
+   сделает копию `medkarta.sqlite.before-v5-….bak`.
+2. **Код и проверки:** `git pull`, `npm ci` (новых зависимостей нет),
+   `npm test`, `npm run lint`, `npm run build` — без перезапуска.
+3. **Окружение** (`/srv/medkarta/app/.env`): `PUBLIC_BASE_URL=https://<домен>`,
+   `MFA_SECRET_KEY=` (`openssl rand -base64 32`; копию — в менеджер паролей,
+   отдельно от базы), `REGISTRATION_MODE=invite_only`. Почта — по желанию:
+   [mail-setup.md](mail-setup.md).
+4. **nginx:** обновить сниппет заголовков (`Permissions-Policy` с ключами
+   доступа) и добавить блок для страниц ссылок с `Referrer-Policy:
+   no-referrer` — [deployment.md](deployment.md). `nginx -t`, затем reload.
+5. **Перезапуск** — миграция при открытии базы. Все сессии завершатся: каждый
+   войдёт один раз заново; пароли и роли не меняются.
+6. **Суперадминистратор:** вход в `/admin` → «Включите двухфакторную
+   защиту» → ключ доступа (и второй способ) → сохранить резервные коды —
+   [admin-security-runbook.md](admin-security-runbook.md).
+7. **Проверка:** `npm run accounts -- status` — схема 5, регистрация «только
+   по приглашению», «Сотрудников без второго фактора: 0».
+
+Откат — прежний код и файл базы из копии шага 1 (ключ `MFA_SECRET_KEY` на
+схеме 4 не нужен).
 
 Потеря доступа к админ-панели — `npm run accounts -- access-link --email …`
 (ссылка в терминал, если почта не настроена), `reset-password --email …`

@@ -32,11 +32,13 @@ OpenAPI-спецификация не приводится: запросы `/api
 | GET, HEAD | `/api/config` | флаги демо-режима и публичные настройки | [config.js](../backend/api/config.js) |
 | GET, PATCH, DELETE | `/api/account` | кабинет: профиль, программа ДМС, удаление | [account.js](../backend/api/account.js) |
 | POST | `/api/account/favorites` | избранное | [account.js](../backend/api/account.js) |
-| POST | `/api/auth/login`, `/api/auth/logout` | вход по email и паролю, выход (регистрации и демо-входа нет) | [account.js](../backend/api/account.js) |
+| POST | `/api/auth/login`, `/api/auth/mfa/options`, `/api/auth/mfa/verify`, `/api/auth/logout` | вход: пароль, затем (если включён) второй фактор; выход | [account.js](../backend/api/account.js) |
+| GET, POST | `/api/auth/register`, `/register/peek`, `/start`, `/complete` | регистрация по email (если `REGISTRATION_MODE=open` и настроена почта) | [activation.js](../backend/api/activation.js) |
+| POST | `/api/auth/email-change/peek`, `/confirm` | подтверждение нового или текущего email по ссылке | [activation.js](../backend/api/activation.js) |
 | POST | `/api/auth/access-link` | «нет пароля или забыли его?» — ссылка на почту; ответ одинаков для любого адреса | [activation.js](../backend/api/activation.js) |
 | GET, POST | `/api/auth/activation`, `/api/auth/activation/peek`, `/start`, `/complete` | приглашение и ссылка для смены пароля: проверить, принять, задать пароль | [activation.js](../backend/api/activation.js) |
-| GET, PATCH, POST, PUT, DELETE | `/api/me/*` | свой профиль, пароль, сессии, история входов, аватар | [me.js](../backend/api/me.js) |
-| GET, POST, PATCH, PUT, DELETE | `/api/admin/*` | админ-панель (по разрешениям роли) | [admin.js](../backend/api/admin.js) |
+| GET, PATCH, POST, PUT, DELETE | `/api/me/*` | свой профиль, пароль, безопасность (факторы входа, резервные коды, email, подтверждение личности), сессии, события, аватар | [me.js](../backend/api/me.js) |
+| GET, POST, PATCH, PUT, DELETE | `/api/admin/*` | админ-панель (по разрешениям роли, только со вторым фактором) | [admin.js](../backend/api/admin.js) |
 | POST | `/api/demo/search` | строгий подбор | [demoBooking.js](../backend/api/demoBooking.js) |
 | GET | `/api/demo/slots` | расписание демо-врача | [demoBooking.js](../backend/api/demoBooking.js) |
 | POST | `/api/demo/hold`, `/api/demo/release` | удержание слота | [demoBooking.js](../backend/api/demoBooking.js) |
@@ -322,33 +324,34 @@ Content-Type: application/json
 
 ## Кабинет: /api/account и /api/auth/*
 
-Сессия — cookie `mk_session`: `HttpOnly; SameSite=Lax; Path=/api`, `Secure` в
-продакшене. Подробности — [accounts.md](accounts.md).
+Сессия — cookie `__Host-mk_sid` по HTTPS (`HttpOnly; Secure; SameSite=Lax;
+Path=/`, без `Domain`) или `mk_sid` по HTTP (разработка). Подробности —
+[accounts.md](accounts.md#сессии).
 
 | Метод и путь | Тело | Ответ | Лимит на адрес |
 |---|---|---|---|
-| `GET /api/account` | — | `{user, favorites, features}`; гость — `user: null` | 300 за 5 мин |
-| `PATCH /api/account` | `{displayName}`, `{firstName, lastName}` или `{dmsPlanId}` (только из справочника) | `{user, favorites, features}` | 300 за 5 мин |
-| `DELETE /api/account` | `{"confirm": true}`; только роль `user`, у сотрудников — `403 staff_account` | `{user: null, …}`, cookie стирается | 300 за 5 мин |
+| `GET /api/account` | — | `{user, favorites, security, features}`; гость — `user: null` | 300 за 5 мин |
+| `PATCH /api/account` | `{firstName, lastName}` или `{dmsPlanId}` (только из справочника) | `{user, favorites, features}` | 300 за 5 мин |
+| `DELETE /api/account` | `{"confirm": true}`; только роль `user`; нужно свежее подтверждение личности | `{user: null, …}`, cookie стирается | 300 за 5 мин |
 | `POST /api/account/favorites` | `{action: "add" \| "remove" \| "merge", ids: [...]}` | `{favorites}` | 300 за 5 мин |
-| `POST /api/auth/login` | `{email, password}` | `{user, favorites, features}` + cookie | 20 за 15 мин |
+| `POST /api/auth/login` | `{email, password}` | без второго фактора — `{user, favorites, security, features}` + cookie сессии; со вторым фактором — `{mfaRequired: true, methods, expiresAt}` + cookie `mk_mfa` (`HttpOnly; SameSite=Strict`, 5 минут) | 20 за 15 мин + счётчики в базе |
+| `POST /api/auth/mfa/options` | `{}` (cookie `mk_mfa`) | `{methods: ["webauthn", "totp", "recovery"], passkey, expiresAt}`; `passkey` — параметры для `navigator.credentials.get` (base64url) | 300 за 5 мин |
+| `POST /api/auth/mfa/verify` | `{method: "totp", code}`, `{method: "recovery", code}` или `{method: "webauthn", credential}` | `{user, favorites, security, recoveryCodesLeft, features}` + cookie сессии (уровень 2), `mk_mfa` стирается | 20 за 15 мин; 5 попыток на вход, 10 неверных кодов на аккаунт за 15 мин |
 | `POST /api/auth/logout` | `{}` | `{user: null, …}`, cookie стирается | 300 за 5 мин |
 
-`features` — `{available, registration, assistant, chatRequiresAccount,
-emailLinks}`; `registration` всегда `false` (`POST /api/auth/register` —
-`404`), гостевого демо-входа нет (`POST /api/auth/demo` — `404`);
-`emailLinks` — настроена ли почта (свойство сервера, не адреса).
+`features` — `{available, registration, registrationMode, passkeys,
+assistant, chatRequiresAccount, emailLinks}`: `registration` — открыта ли
+регистрация сейчас (режим `open` и настроенная почта), `passkeys` — включены
+ли ключи доступа на сервере, `emailLinks` — настроена ли почта.
 
 Вход заблокированного аккаунта (пароль верный) — `403 account_blocked` с
 `blockedUntil` и причиной, архивного — `403 account_inactive`; при неверном
 пароле, несуществующем email и **неактивированном** аккаунте — одинаково
-`401 bad_credentials`, статус аккаунта не раскрывается.
-У пользователя, которому до схемы 4 выдали временный пароль или для которого
-администратор включил «Потребовать смену при входе», `user.mustChangePassword: true`:
-до смены пароля остальные маршруты `/api/me/*` и `/api/admin/*` отвечают
-`403 password_change_required`.
+`401 bad_credentials`. Ограничение по счётчикам подбора — `429
+too_many_attempts` с `retryAfterSeconds`. Второй шаг: неверный код —
+`400 bad_mfa_code` с `attemptsLeft`; истёк вызов — `401 mfa_expired`.
 
-Пример входа:
+Пример входа со вторым фактором:
 
 ```http
 POST /api/auth/login
@@ -359,18 +362,53 @@ Content-Type: application/json
 
 ```http
 HTTP/1.1 200 OK
-Set-Cookie: mk_session=<token>; Path=/api; HttpOnly; SameSite=Lax; Max-Age=1209600
+Set-Cookie: __Host-mk_mfa=<вызов>; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=300
+
+{"mfaRequired":true,"methods":["webauthn","totp","recovery"],"expiresAt":"…"}
 ```
 
-Тело — `{user, favorites, features}`, как у `GET /api/account`.
+```http
+POST /api/auth/mfa/verify
+Content-Type: application/json
 
-**Ошибки кабинета:** `401 {"error":"Войдите в личный кабинет."}` — изменение
-без сессии; `403` — нарушена защита от CSRF или функция выключена; `429` —
-лимит (`code: too_many_attempts` — 10 неудачных входов на email за 15 минут,
-`Retry-After: 900`); `503` — кабинет недоступен (нет `node:sqlite` или
-`ACCOUNTS=off`), при этом `GET /api/account` отвечает гостю `200`. Ошибки
-сервиса кабинета возвращают `{error, code}` со статусом из
+{"method":"totp","code":"123456"}
+```
+
+```http
+HTTP/1.1 200 OK
+Set-Cookie: __Host-mk_sid=<token>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=…
+```
+
+**Ошибки кабинета:** `401 unauthenticated` — изменение без сессии; `403` —
+нарушена защита от CSRF (`csrf`), функция выключена или нужно подтверждение
+личности (`reauth_required`); `429` — лимит; `503` — кабинет недоступен (нет
+`node:sqlite` или `ACCOUNTS=off`), при этом `GET /api/account` отвечает гостю
+`200`. Ошибки сервиса — `{error, code}` со статусом из
 [service.js](../backend/accounts/service.js).
+
+### Регистрация
+
+Логика — [registration.js](../backend/accounts/registration.js). Токен
+ссылки (`/register/confirm#token=…`, 43 символа base64url) — только в теле
+`POST`.
+
+| Метод и путь | Тело | Ответ | Лимит на адрес |
+|---|---|---|---|
+| `POST /api/auth/register` | `{email}` — другие поля (`role`, `password` …): `400 unexpected_field` | `202 {ok, message}` — **одинаково** для свободного и занятого адреса; письмо уходит после ответа. Регистрация закрыта — `403 registration_closed` | 5 за 15 мин; 10 писем в час с адреса; 3 в час на email |
+| `POST /api/auth/register/peek` | `{token}` | `{link: {email (маской), expiresAt}}` — ничего не меняет | 30 за 15 мин |
+| `POST /api/auth/register/start` | `{token}` | `{context: {email, expiresAt}}` + cookie `mk_register` (`HttpOnly; SameSite=Strict; Path=/api/auth/register`, 30 мин; по HTTPS — `__Secure-mk_register`); токен больше не действует | 30 за 15 мин |
+| `GET /api/auth/register` | — | `{context}` по cookie или `404 no_context` | 30 за 15 мин |
+| `POST /api/auth/register/complete` | `{password, firstName?}` | `{user, favorites, security}` + cookie сессии; роль — `user`, email подтверждён | 30 за 15 мин |
+
+Ошибки — как у ссылок ниже, плюс `409 email_taken` (адрес заняли, пока
+ссылка была открыта) и `400 bad_name`.
+
+### Подтверждение email
+
+| Метод и путь | Тело | Ответ |
+|---|---|---|
+| `POST /api/auth/email-change/peek` | `{token}` | `{change: {newEmail, currentEmail (маской), verifyOnly, expiresAt}}` — ничего не меняет |
+| `POST /api/auth/email-change/confirm` | `{token}` | `{email, signedIn, verifiedOnly}`; при смене адреса остальные сессии завершены (текущая — если это тот же человек — остаётся); занятый адрес — `409 email_taken` |
 
 ### Приглашения и ссылки для входа
 
@@ -382,7 +420,7 @@ Set-Cookie: mk_session=<token>; Path=/api; HttpOnly; SameSite=Lax; Max-Age=12096
 
 | Метод и путь | Тело | Ответ | Лимит на адрес |
 |---|---|---|---|
-| `POST /api/auth/access-link` | `{email}` | `202 {ok, message}` — **одинаково** для любого адреса; письмо (приглашение или смена пароля) уходит после ответа и только владельцу действующего аккаунта. Почта не настроена — `409 mail_disabled` для всех | 5 за 15 мин; 3 в час на email |
+| `POST /api/auth/access-link` | `{email}` | `202 {ok, message}` — **одинаково** для любого адреса; письмо (приглашение или смена пароля) уходит после ответа и только владельцу действующего аккаунта (сотруднику без второго фактора — не уходит). Почта не настроена — `409 mail_disabled` для всех | 5 за 15 мин; 10 писем в час с адреса; 3 в час на email |
 | `POST /api/auth/activation/peek` | `{token}` | `{link: {purpose: "invite"\|"reset", firstName, email (маской), expiresAt, invitedBy}}` — ничего не меняет | 30 за 15 мин |
 | `POST /api/auth/activation/start` | `{token}` | `{context: {purpose, email, firstName, lastName, expiresAt}}` + cookie `mk_activation` (`HttpOnly; SameSite=Strict; Path=/api/auth/activation`, 30 мин; по HTTPS — `__Secure-mk_activation`). Токен больше не действует; тот же браузер с действующей cookie получает контекст снова | 30 за 15 мин |
 | `GET /api/auth/activation` | — | `{context}` по cookie или `404 no_context` | 30 за 15 мин |
@@ -401,16 +439,33 @@ Set-Cookie: mk_session=<token>; Path=/api; HttpOnly; SameSite=Lax; Max-Age=12096
 ## Профиль: /api/me/*
 
 Только с сессией (иначе `401 unauthenticated`). Лимит — 300 запросов за 5
-минут с адреса, смена пароля — 10 за 15 минут.
+минут с адреса; запросы, проверяющие пароль или код (смена пароля,
+подтверждение личности, подтверждение TOTP, смена email), — 10 за 15 минут.
+Маршруты с пометкой **свежесть** требуют подтверждения личности не старше
+`auth.reauthMinutes` (10 минут): иначе `403 reauth_required` с `mfa: true|false`
+— интерфейс вызывает `POST /api/me/reauth` и повторяет запрос.
 
 | Метод и путь | Тело | Ответ |
 |---|---|---|
 | `GET /api/me` | — | `{user, favorites, session: {id}}`; `user` с ролью, статусом, `permissions`, `avatarUrl` |
 | `PATCH /api/me` | `{firstName, lastName}` — другие поля: `400 unexpected_field` | `{user, favorites}` |
-| `POST /api/me/password` | `{currentPassword, newPassword}` | `{user}`; все прежние сессии завершены, выдаётся новая cookie. Доступен и с временным паролем |
+| `POST /api/me/password` | `{currentPassword, newPassword}` | `{user}`; все прежние сессии завершены, выдаётся новая cookie; письмо «Пароль изменён». С включённой MFA — **свежесть**. Доступен и с временным паролем |
 | `GET /api/me/sessions` | — | `{items: [{id, createdAt, lastSeenAt, expiresAt, client, network, current}]}` |
 | `DELETE /api/me/sessions/:id` | `{}` | `{revoked, current}`; своя текущая — выход |
 | `POST /api/me/sessions/revoke-others` | `{}` | `{revoked}` |
+| `POST /api/me/sessions/revoke-all` | `{}` | `{revoked}`; все сессии, включая текущую («Выйти везде»), cookie стирается |
+| `GET /api/me/security` | — | `{enabled, factors: [{id, type, typeLabel, label, createdAt, lastUsedAt, synced}], recoveryCodes: {total, unused}, methods, passkeysAvailable, mfaRequired, sessionLevel, fresh, canAddFactor, email, emailVerified, emailChange}` — без секретов |
+| `POST /api/me/reauth/options` | `{}` | `{methods, passkey}` — вызов для ключа доступа |
+| `POST /api/me/reauth` | `{password}` и, если MFA включена, `{method, code}` или `{method: "webauthn", credential}` | `{ok, security, sessionLevel}` + новая cookie сессии с отметкой подтверждения; неверно — `400 bad_password` / `bad_mfa_code` |
+| `POST /api/me/mfa/totp` | `{}` | `{factorId, secret, uri, expiresAt}` — секрет показывается один раз, живёт 10 минут до подтверждения. **Свежесть** (первый фактор — без неё в первые 15 минут после входа) |
+| `POST /api/me/mfa/totp/confirm` | `{factorId, code, label?}` | `{factor, recoveryCodes, security}`; `recoveryCodes` — при первом факторе, один раз; сессия повышается до уровня 2 |
+| `POST /api/me/mfa/passkey` | `{}` | `{publicKey}` — параметры для `navigator.credentials.create` (base64url). **Свежесть** (как у TOTP) |
+| `POST /api/me/mfa/passkey/finish` | `{credential, label?}` | `{factor, recoveryCodes, security}` |
+| `PATCH /api/me/mfa/factors/:id` | `{label}` | `{factor}` |
+| `DELETE /api/me/mfa/factors/:id` | `{}` | `{removed, remaining}`; сотруднику последний фактор не удалить — `400 last_factor`. **Свежесть** |
+| `POST /api/me/mfa/recovery-codes` | `{}` | `{recoveryCodes}` — новые 10 кодов, старые гаснут. **Свежесть** |
+| `POST /api/me/email` | `{newEmail}` | `202 {ok, sentTo (маской), message}` — письмо на новый адрес, уведомление на прежний; ответ одинаков, занят адрес или нет. **Свежесть**. Без почты — `503`/`409` |
+| `POST /api/me/email/verify` | `{}` | `202 {ok, sentTo, message}` — письмо для подтверждения текущего адреса; уже подтверждён — `409 already_verified` |
 | `GET /api/me/logins?limit=20` | — (не больше 50) | `{items: [{at, type, label, client, network, reason}]}` |
 | `GET /api/me/avatar` | — | изображение; `404`, если фото нет |
 | `PUT /api/me/avatar` | `{image: "data:image/webp;base64,…"}` до 256 КБ | `{user, favorites}` |
@@ -440,9 +495,13 @@ Set-Cookie: mk_session=<token>; Path=/api; HttpOnly; SameSite=Lax; Max-Age=12096
 
 Каждый маршрут проверяет разрешение роли на сервере (список и умолчания —
 [accounts.md](accounts.md#роли-и-разрешения)). Без сессии — `401`, без
-`admin.access` или нужного разрешения — `403 forbidden`. Лимит — 600 запросов
-за 5 минут с адреса. Тела — только перечисленные поля: лишнее поле —
-`400 unexpected_field` (например, `role` в `PATCH`).
+`admin.access` или нужного разрешения — `403 forbidden`. **Второй фактор
+обязателен:** у сотрудника нет ни одного — `403 mfa_setup_required`, сессия
+без второго фактора — `403 mfa_required`. Критичные маршруты (смена роли,
+правка ролей и настроек, удаление, архив, массовые действия, экспорт) —
+только со свежим подтверждением личности, иначе `403 reauth_required`.
+Лимит — 600 запросов за 5 минут с адреса. Тела — только перечисленные поля:
+лишнее поле — `400 unexpected_field` (например, `role` в `PATCH`).
 
 | Метод и путь | Разрешение | Тело или параметры | Ответ |
 |---|---|---|---|
@@ -452,7 +511,8 @@ Set-Cookie: mk_session=<token>; Path=/api; HttpOnly; SameSite=Lax; Max-Age=12096
 | `POST /api/admin/users` | `users.create` (роль выше `user` — и `roles.assign`) | `{email, firstName, lastName, role, delivery: "auto"\|"manual"}` | `201 {user, invitation, link}` — аккаунт без пароля («ожидает активации»); `link` — только при ручной передаче или если письмо не ушло, **один раз** |
 | `GET /api/admin/users/export` | `users.export` | те же фильтры или `?ids=a,b` | CSV (UTF-8 с BOM, `;`), до 10 000 строк |
 | `POST /api/admin/users/bulk` | `users.block` | `{action: "block"\|"unblock", ids, reason, until}` до 100 id | `{succeeded, failed, results: [{id, ok, error}]}` |
-| `GET /api/admin/users/:id` | `users.view` | — | `{user, can, permissions}`: что текущий сотрудник может сделать с этим аккаунтом |
+| `GET /api/admin/users/:id` | `users.view` | — | `{user, can, permissions}`: что текущий сотрудник может сделать с этим аккаунтом; в `user` — `emailVerified`, `signupSource`, `mfa: {enabled, factors, required}`, `loginLimits: {accountLockedUntil, mfaLockedUntil, lockedPlaces, recentFailures, active}` |
+| `POST /api/admin/users/:id/unlock-login` | `users.block` | `{}` | `{user, can, …}`; счётчики неудачных попыток аккаунта сброшены, запись в журнал |
 | `PATCH /api/admin/users/:id` | `users.edit`; смена email — ещё и `users.password` | `{firstName, lastName, email, version}` | `{user, can, …}`; устаревшая `version` — `409 conflict`; смена email отзывает ссылки |
 | `DELETE /api/admin/users/:id` | `users.delete` | `{confirmEmail}` | `{deleted: true}` |
 | `POST /api/admin/users/:id/role` | `roles.assign` | `{role, version}` | `{user, can, …}`; ссылки пользователя отзываются; `superadmin` не назначается никому — `403` |
