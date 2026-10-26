@@ -95,7 +95,7 @@ export const stateOf = (record, stamp) => {
  * @param {object} deps.delivery доставка (delivery.js)
  * @param {() => number} [deps.now]
  */
-export const createInvitationService = ({ store, accounts, delivery, mailer = null, now = () => Date.now() }) => {
+export const createInvitationService = ({ store, accounts, delivery, mailer = null, consents = null, now = () => Date.now() }) => {
   const config = accounts.settings;
   const { startSession, releaseExpiredBlock, statusProblem, permissionsFor, canManage, notify, checkNewPassword, isStaff, mfaEnabled } = accounts.__internal;
 
@@ -195,6 +195,28 @@ export const createInvitationService = ({ store, accounts, delivery, mailer = nu
     return { required: true, methods: accounts.mfa.status(user.id).methods };
   };
 
+  /*
+   * Аккаунту «Пользователь», который ещё не принимал действующую редакцию
+   * пользовательского соглашения (приглашение или аккаунт до схемы 7),
+   * пароль по ссылке задаётся только вместе с принятием соглашения.
+   * Сотрудники работают по внутренним документам оператора — им не нужно.
+   */
+  /*
+   * Соглашение принимают при первой установке пароля (приглашение: с этого
+   * момента договор заключён). Ссылка восстановления пароля его не требует —
+   * уже зарегистрированному пользователю новую редакцию предложат после
+   * входа (legalPending в /api/account), а не ценой доступа к аккаунту.
+   */
+  const pendingOf = (record, user) => (consents && record.purpose === 'invite' ? consents.pendingFor(user) : []);
+
+  const legalOf = (record, user) => {
+    const pending = pendingOf(record, user);
+    if (pending.length === 0) return null;
+    const documents = {};
+    for (const item of pending) documents[item.document] = { version: item.version, title: item.title, draft: item.draft };
+    return { required: true, documents };
+  };
+
   const contextView = (record, user) => ({
     purpose: record.purpose,
     email: user.email,
@@ -202,6 +224,7 @@ export const createInvitationService = ({ store, accounts, delivery, mailer = nu
     lastName: user.lastName || '',
     expiresAt: iso(record.contextExpiresAt),
     mfa: mfaOf(user),
+    legal: legalOf(record, user),
   });
 
   /** Открытый контекст ссылки по токену контекста или ошибка «время истекло». */
@@ -383,10 +406,24 @@ export const createInvitationService = ({ store, accounts, delivery, mailer = nu
      * до того, как пароль изменится: ссылка из письма (то есть доступ к
      * ящику) без второго фактора не меняет пароль и не даёт сессии.
      */
-    async complete(contextToken, password, { client = null, ipPrefix = null, factor = null } = {}) {
+    async complete(contextToken, password, { client = null, ipPrefix = null, factor = null, legal = null } = {}) {
       const { record, contextHash, expired } = openedContext(contextToken);
       const user = ownerOf(record);
       await checkNewPassword(password, user.email);
+      // Соглашение — до второго фактора и хэша: без него ничего не меняется.
+      const pendingLegal = pendingOf(record, user);
+      if (pendingLegal.length > 0) {
+        if (!legal || legal.acceptTerms !== true) {
+          fail('terms_required', 400, 'Чтобы продолжить, примите пользовательское соглашение.');
+        }
+        for (const item of pendingLegal) {
+          if ((legal.documents || {})[item.document] !== item.version) {
+            fail('documents_changed', 409, 'Документы обновились. Ознакомьтесь с новой редакцией и подтвердите снова.', {
+              current: { document: item.document, version: item.version },
+            });
+          }
+        }
+      }
       const mfaRequired = mfaOf(user);
       let secondFactor = null;
       if (mfaRequired) {
@@ -413,6 +450,9 @@ export const createInvitationService = ({ store, accounts, delivery, mailer = nu
         store.activateUser(user.id, passwordHash, stamp, { emailVerified: record.delivery === 'email' });
         store.revokeUserAccessTokens(user.id, 'superseded', stamp);
         store.deleteUserSessions(user.id);
+        if (pendingLegal.length > 0) {
+          consents.acceptCurrent(store.getUserById(user.id), legal.documents, { method: 'activation_form' });
+        }
         // Второй фактор подтверждён — сессия того же уровня, что и после обычного входа с MFA.
         const fresh = startSession(user, { client, ipPrefix }, secondFactor ? { aal: 2, mfaAt: stamp } : {});
         store.recordLogin(user.id, stamp);

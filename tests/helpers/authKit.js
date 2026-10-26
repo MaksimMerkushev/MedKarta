@@ -16,6 +16,7 @@ import { createActivationHandler } from '../../backend/api/activation.js';
 import { createAdminHandler } from '../../backend/api/admin.js';
 import { createChatAccessGate, withChatAccess } from '../../backend/api/chatAccess.js';
 import { createMeHandler } from '../../backend/api/me.js';
+import { createPrivacyHandler } from '../../backend/api/privacy.js';
 import { respondJson } from '../../backend/http/request.js';
 
 export const TEST_ORIGIN = 'https://medkarta.test';
@@ -115,13 +116,18 @@ export const startAuthServer = async (context, { authLimit = unlimited, activati
   const meHandler = createMeHandler({ getContext, apiLimit: unlimited, passwordLimit: unlimited });
   const adminHandler = createAdminHandler({ getContext, limit: unlimited, systemInfo: async () => ({ components: [], process: { nodeVersion: process.version } }) });
   const activationHandler = createActivationHandler({ getContext, activationLimit, requestLimit, emailWindow });
-  const chat = withChatAccess(chatHandler || (async (req, res) => respondJson(res, 200, { replyText: 'ok' })), createChatAccessGate({ getService }));
+  const chat = withChatAccess(
+    chatHandler || (async (req, res) => respondJson(res, 200, { replyText: 'ok' })),
+    createChatAccessGate({ getService, getPass: async () => context.assistantPass }),
+  );
+  const privacyHandler = createPrivacyHandler({ getContext, getDocuments: () => context.documents, limit: unlimited });
   const server = http.createServer((req, res) => {
     const url = req.url;
     if (url.startsWith('/api/admin')) return adminHandler(req, res);
     if (url === '/api/me' || url.startsWith('/api/me/') || url.startsWith('/api/me?')) return meHandler(req, res);
     if (url.startsWith('/api/auth/activation') || url === '/api/auth/access-link' || url.startsWith('/api/auth/register') || url.startsWith('/api/auth/email-change')) return activationHandler(req, res);
     if (url === '/api/chat') return chat(req, res);
+    if (url.startsWith('/api/legal') || url.startsWith('/api/privacy')) return privacyHandler(req, res);
     return accountHandler(req, res);
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -185,6 +191,8 @@ export const browserFor = (base) => {
       return done;
     },
     logout: () => call('/api/auth/logout', { method: 'POST', body: {} }),
+    /** Пропуск к ассистенту (cookie mk_ai) по текущей сессии. */
+    chatPass: () => call('/api/account/assistant-pass', { method: 'POST', body: {} }),
     /** Второй шаг входа ключом доступа. */
     async passkeyStep(authenticator, overrides = {}) {
       const options = await call('/api/auth/mfa/options', { method: 'POST', body: {} });
@@ -228,7 +236,19 @@ export const capture = (outbox) => async ({ to, content }) => {
   outbox.push({ to, subject: content.subject, text: content.text, html: content.html });
 };
 
-/** Пройти ссылку-приглашение в новом браузере: подтвердить и задать пароль. */
+/**
+ * Отметка «принимаю соглашение» с редакциями, которые показала страница
+ * (context.legal или context.documents), — как её отправляет интерфейс.
+ */
+export const legalAcceptance = (context) => {
+  const source = context?.legal?.documents || context?.documents || null;
+  if (!source) return {};
+  const documents = {};
+  for (const [key, value] of Object.entries(source)) documents[key] = value.version;
+  return { acceptTerms: true, documents };
+};
+
+/** Пройти ссылку-приглашение в новом браузере: подтвердить и задать пароль (и принять соглашение, если нужно). */
 export const acceptLink = async (base, link, password) => {
   const tab = browserFor(base);
   const token = tokenOfLink(link);
@@ -236,7 +256,8 @@ export const acceptLink = async (base, link, password) => {
   assert.equal(peek.status, 200, JSON.stringify(peek.body));
   const started = await tab.call('/api/auth/activation/start', { method: 'POST', body: { token } });
   assert.equal(started.status, 200, JSON.stringify(started.body));
-  const done = await tab.call('/api/auth/activation/complete', { method: 'POST', body: { password } });
+  const legal = started.body.context.legal ? legalAcceptance(started.body.context) : {};
+  const done = await tab.call('/api/auth/activation/complete', { method: 'POST', body: { password, ...legal } });
   assert.equal(done.status, 200, JSON.stringify(done.body));
   return { tab, user: done.body.user };
 };

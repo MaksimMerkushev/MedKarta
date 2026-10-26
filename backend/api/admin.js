@@ -35,6 +35,10 @@
  *   POST   /api/admin/users/:id/sessions/revoke    завершить все сессии
  *   POST   /api/admin/users/:id/unlock-login       снять временные ограничения входа
  *   POST   /api/admin/users/:id/mfa-reset          сбросить второй фактор «Пользователя» (утрата всех факторов)
+ *   GET    /api/admin/users/:id/consents           принятые документы и согласия (privacy.requests)
+ *   GET    /api/admin/privacy-requests             обращения субъектов ПДн (privacy.requests)
+ *   GET    /api/admin/privacy-requests/:id         обращение
+ *   POST   /api/admin/privacy-requests/:id/:action take | extend | complete | reject
  *   GET    /api/admin/users/:id/sessions|logins|blocks|audit|avatar
  *   GET    /api/admin/sessions                     активные сессии
  *   DELETE /api/admin/sessions/:id                 отозвать сессию
@@ -80,6 +84,10 @@ const route = createRouter([
   ['POST', '/api/admin/users/:id/sessions/revoke', 'revokeUserSessions'],
   ['POST', '/api/admin/users/:id/unlock-login', 'unlockLogin'],
   ['POST', '/api/admin/users/:id/mfa-reset', 'mfaReset'],
+  ['GET', '/api/admin/users/:id/consents', 'userConsents'],
+  ['GET', '/api/admin/privacy-requests', 'privacyRequests'],
+  ['GET', '/api/admin/privacy-requests/:id', 'privacyRequest'],
+  ['POST', '/api/admin/privacy-requests/:id/:action', 'privacyRequestAction'],
   ['GET', '/api/admin/users/:id/sessions', 'userSessions'],
   ['GET', '/api/admin/users/:id/logins', 'userLogins'],
   ['GET', '/api/admin/users/:id/blocks', 'userBlocks'],
@@ -97,7 +105,7 @@ const route = createRouter([
 ]);
 
 // Операции с телом запроса: остальные тело не читают.
-const WITH_BODY = new Set(['createUser', 'bulk', 'updateUser', 'deleteUser', 'setRole', 'block', 'updateRole', 'updateSettings', 'issueAccessLink', 'mfaReset']);
+const WITH_BODY = new Set(['createUser', 'bulk', 'updateUser', 'deleteUser', 'setRole', 'block', 'updateRole', 'updateSettings', 'issueAccessLink', 'mfaReset', 'privacyRequestAction']);
 
 /*
  * Критические действия: нужно свежее явное подтверждение личности (пароль
@@ -235,6 +243,19 @@ export const createAdminHandler = ({ getContext = getAccountContext, limit = def
         case 'revokeUserSessions': result = admin.revokeUserSessions(actor, params.id); break;
         case 'unlockLogin': result = admin.unlockLogin(actor, params.id); break;
         case 'mfaReset': result = admin.resetUserMfa(actor, params.id, body); break;
+        case 'userConsents': {
+          if (!actor.permissions.includes('privacy.requests')) {
+            respondJson(res, 403, { error: 'Недостаточно прав.', code: 'forbidden' });
+            return;
+          }
+          admin.getUser(actor, params.id);
+          const subject = context.store.getUserById(params.id);
+          result = { history: context.consents.history(params.id), pending: context.consents.pendingFor(subject) };
+          break;
+        }
+        case 'privacyRequests': result = context.privacy.list(actor, query); break;
+        case 'privacyRequest': result = context.privacy.get(actor, params.id); break;
+        case 'privacyRequestAction': result = context.privacy.act(actor, params.id, params.action, body); break;
         case 'userSessions': result = admin.userSessions(actor, params.id); break;
         case 'userLogins': result = admin.userLogins(actor, params.id, query); break;
         case 'userBlocks': result = admin.userBlocks(actor, params.id); break;

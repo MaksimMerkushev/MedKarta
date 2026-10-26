@@ -1,0 +1,40 @@
+{
+  "documents": {
+    "privacy_policy": {
+      "current": "2026-10-26",
+      "status": "published",
+      "versions": [
+        {
+          "version": "2026-10-26",
+          "file": "privacy-policy/2026-10-26.md",
+          "sha256": "239b1bdb0e95aa30ed37deecda240e7851ea7caadf12d548b7c38cb133cf33f1",
+          "publishedAt": "2026-10-26"
+        }
+      ]
+    },
+    "terms": {
+      "current": "2026-10-26",
+      "status": "published",
+      "versions": [
+        {
+          "version": "2026-10-26",
+          "file": "terms/2026-10-26.md",
+          "sha256": "5ecff2f066cf7d9dd74c49221d734f77b0813238de22144d789aed09e21dfdd8",
+          "publishedAt": "2026-10-26"
+        }
+      ]
+    },
+    "health_consent": {
+      "current": "2026-10-26",
+      "status": "not_offered",
+      "versions": [
+        {
+          "version": "2026-10-26",
+          "file": "health-consent/2026-10-26.md",
+          "sha256": "8a3b8ae1ee86b071c1fbb05a90ea6027cf5a33296069387cae6fc8599691d6cb",
+          "publishedAt": "2026-10-26"
+        }
+      ]
+    }
+  }
+}

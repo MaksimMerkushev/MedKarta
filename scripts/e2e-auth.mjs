@@ -84,7 +84,7 @@ const env = {
   REGISTRATION_MODE: 'invite_only',
   MFA_SECRET_KEY: randomBytes(32).toString('base64'),
 };
-const { attachAuthenticator, totpDevice } = await import('./e2e-lib.mjs');
+const { acceptTermsIfShown, attachAuthenticator, totpDevice } = await import('./e2e-lib.mjs');
 
 let server = null;
 let serverOutput = '';
@@ -302,6 +302,7 @@ try {
       await noOverflow(page, 'пароль');
       await shot(page, `activate-password-${tag}`);
       await page.fill('[data-testid=activation-password-input]', 'Казань-клиника-2026');
+      await acceptTermsIfShown(page);
       await page.click('[data-testid=activation-submit]');
       await page.waitForSelector('[data-testid=activation-success]');
       await page.waitForTimeout(250);
@@ -542,6 +543,7 @@ try {
     const block = await adminApi('POST', `/api/admin/users/${user.id}/block`, { reason: 'Проверка' });
     expect(block.status === 200, `блокировка: ${block.status}`);
     await page.fill('[data-testid=activation-password-input]', 'Казань-клиника-2026');
+    await acceptTermsIfShown(page);
     await page.click('[data-testid=activation-submit]');
     await page.waitForSelector('[data-testid=activation-problem]');
     const code = await page.getAttribute('[data-testid=activation-problem]', 'data-code');
@@ -553,6 +555,7 @@ try {
     await page.goto(fresh.body.link, { waitUntil: 'domcontentloaded' });
     await page.click('[data-testid=activation-accept]');
     await page.fill('[data-testid=activation-password-input]', 'Казань-клиника-2026');
+    await acceptTermsIfShown(page);
     await page.click('[data-testid=activation-submit]');
     await page.waitForSelector('[data-testid=activation-success]');
     await page.context().close();
@@ -573,9 +576,11 @@ try {
     await stranger.goto(link, { waitUntil: 'domcontentloaded' });
     await stranger.waitForSelector('[data-testid=activation-problem][data-code=link_used]');
     await second.fill('[data-testid=activation-password-input]', 'Казань-клиника-2026');
+    await acceptTermsIfShown(second);
     await second.click('[data-testid=activation-submit]');
     await second.waitForSelector('[data-testid=activation-success]');
     await first.fill('[data-testid=activation-password-input]', 'Другой-пароль-2026');
+    await acceptTermsIfShown(first);
     await first.click('[data-testid=activation-submit]');
     await first.waitForSelector('[data-testid=activation-problem][data-code=activation_expired]');
     await settle(first);
@@ -615,6 +620,7 @@ try {
     expect(await page.getAttribute('[data-testid=requirement-common]', 'data-ok') === 'false', 'частый пароль принят');
     await page.fill(input, `${email.split('@')[0]}-2026`);
     expect(await page.getAttribute('[data-testid=requirement-email]', 'data-ok') === 'false', 'пароль с email принят');
+    await acceptTermsIfShown(page);
     await page.click('[data-testid=activation-submit]');
     await page.waitForSelector('[data-testid=auth-error]');
     await page.fill(input, 'Длинный-пароль-без-email');
@@ -636,6 +642,19 @@ try {
     await page.waitForSelector('[data-testid=activation-password-input]');
     await page.waitForFunction(() => document.activeElement?.dataset.testid === 'activation-password-input');
     await page.keyboard.type('Клавиатура-2026-пароль');
+    // Отметка о соглашении: Tab до неё (по умолчанию снята), пробел — отметить, дальше Tab до кнопки.
+    const focusOn = async (testId) => {
+      for (let index = 0; index < 8; index += 1) {
+        if (await page.evaluate((id) => document.activeElement?.dataset.testid === id, testId)) return true;
+        await page.keyboard.press('Tab');
+      }
+      return false;
+    };
+    expect(await focusOn('legal-accept-terms'), 'Tab не доходит до отметки о соглашении');
+    expect(!(await page.isChecked('[data-testid=legal-accept-terms]')), 'отметка стоит заранее');
+    await page.keyboard.press('Space');
+    expect(await page.isChecked('[data-testid=legal-accept-terms]'), 'пробел не отмечает соглашение');
+    expect(await focusOn('activation-submit'), 'Tab не доходит до кнопки');
     await page.keyboard.press('Enter');
     await page.waitForSelector('[data-testid=activation-success]');
     await page.context().clearCookies();

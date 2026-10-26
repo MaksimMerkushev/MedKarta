@@ -221,6 +221,30 @@ const TEMPLATES = {
     note: ['Если вы не просили помочь со входом — свяжитесь с поддержкой.'],
   }),
 
+  /*
+   * Обращения по персональным данным. Текст обращения и ответ в письмо не
+   * вставляются: они могут содержать лишнее, а письмо проходит через
+   * почтовые серверы. Человек читает ответ в профиле после входа.
+   */
+  privacy_request_received: ({ name, requestId, typeLabel, dueAt }) => compose({
+    subject: 'Обращение по персональным данным получено — МедКарта',
+    greeting: greetingOf(name),
+    paragraphs: [
+      `Мы получили ваше обращение «${typeLabel}» (№ ${String(requestId || '').slice(0, 8)}).`,
+      `Ответим не позже ${formatMoscow(dueAt)}. Ответ появится в профиле, в разделе «Мои данные», — мы пришлём письмо, когда он будет готов.`,
+    ],
+    note: ['Если вы не отправляли обращение — смените пароль и завершите другие сеансы в профиле.'],
+  }),
+
+  privacy_request_update: ({ name, requestId, typeLabel, statusLabel, dueAt, extended }) => compose({
+    subject: extended ? 'Срок ответа на обращение продлён — МедКарта' : 'Ответ на обращение по персональным данным — МедКарта',
+    greeting: greetingOf(name),
+    paragraphs: extended
+      ? [`Срок ответа на обращение «${typeLabel}» (№ ${String(requestId || '').slice(0, 8)}) продлён до ${formatMoscow(dueAt)}. Причина указана в профиле, в разделе «Мои данные».`]
+      : [`Обращение «${typeLabel}» (№ ${String(requestId || '').slice(0, 8)}): ${String(statusLabel || '').toLowerCase()}. Ответ — в профиле, в разделе «Мои данные».`],
+    note: ['Письмо отправлено автоматически, отвечать на него не нужно.'],
+  }),
+
   recovery_codes: ({ name, at }) => compose({
     subject: 'Новые резервные коды — МедКарта',
     greeting: greetingOf(name),
@@ -261,7 +285,7 @@ export const SECRET_KINDS = Object.freeze(new Set(['register_confirm', 'invite',
 /** Уведомления о действиях с аккаунтом (их вызывает сам владелец): свой лимит, не общий с информационными. */
 export const ACCOUNT_NOTICE_KINDS = Object.freeze(new Set([
   'password_changed', 'email_changed', 'email_change_requested', 'mfa_enabled', 'mfa_disabled', 'recovery_codes', 'recovery_code_used',
-  'mfa_reset', 'reset_link_issued',
+  'mfa_reset', 'reset_link_issued', 'privacy_request_received', 'privacy_request_update',
 ]));
 
 /** Письмо по виду: {subject, text, html}. */

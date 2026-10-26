@@ -22,7 +22,7 @@ import { createSqliteAccountStore, loadSqlite } from '../backend/accounts/sqlite
 import { createAccountContext } from '../backend/api/accountContext.js';
 import { SESSION_COOKIE } from '../backend/api/accountHttp.js';
 import { createRateLimiter } from '../backend/http/rateLimit.js';
-import { acceptLink as acceptLinkBase, browserFor, softAuthenticator, startAuthServer, tokenOfLink } from './helpers/authKit.js';
+import { acceptLink as acceptLinkBase, browserFor, legalAcceptance, softAuthenticator, startAuthServer, tokenOfLink } from './helpers/authKit.js';
 
 const DatabaseSync = await loadSqlite();
 const ROOT_PASSWORD = 'Корневой-пароль-2026';
@@ -150,13 +150,15 @@ describe('Админ-панель: сценарии', { skip: !DatabaseSync && '
     context.store.createUser({ id: 'f'.repeat(32), email: 'legacy@medkarta.test', firstName: 'Тимур', lastName: 'Старый', passwordHash: await hashPassword(temporary), mustChangePassword: true, now: Date.now() });
     assert.equal((await tab.login('legacy@medkarta.test', temporary)).body.user.mustChangePassword, true);
     assert.equal((await tab.call('/api/account/favorites', { method: 'POST', body: { action: 'add', ids: ['x'] } })).body.code, 'password_change_required');
-    assert.equal((await tab.call('/api/chat', { method: 'POST', body: { messages: [] } })).body.code, 'password_change_required');
+    assert.equal((await tab.chatPass()).body.code, 'password_change_required', 'пропуск к ассистенту — только после смены пароля');
+    assert.equal((await tab.call('/api/chat', { method: 'POST', body: { messages: [] } })).body.code, 'assistant_pass_required');
     assert.equal((await tab.call('/api/me/sessions')).body.code, 'password_change_required');
     assert.equal((await tab.call('/api/me')).status, 200);
     const changed = await tab.call('/api/me/password', { method: 'POST', body: { currentPassword: temporary, newPassword: 'Тимур-новый-пароль-1' } });
     assert.equal(changed.status, 200);
     assert.equal(changed.body.user.mustChangePassword, false);
     assert.equal((await tab.call('/api/account/favorites', { method: 'POST', body: { action: 'add', ids: ['x'] } })).status, 200);
+    assert.equal((await tab.chatPass()).status, 200);
     assert.equal((await tab.call('/api/chat', { method: 'POST', body: { messages: [] } })).status, 200);
   });
 
@@ -262,7 +264,7 @@ describe('Админ-панель: сценарии', { skip: !DatabaseSync && '
     const actor = { ...store.getUserById(boss.id), permissions: PERMISSION_KEYS };
     const { user, link } = await local.admin.createUser(actor, { email: 'temp@medkarta.test', firstName: 'Врем', lastName: 'Блок' }, { base: 'http://localhost' });
     const opened = local.invitations.start(tokenOfLink(link));
-    await local.invitations.complete(opened.contextToken, 'Временно-закрытый-1');
+    await local.invitations.complete(opened.contextToken, 'Временно-закрытый-1', { legal: legalAcceptance(opened.context) });
     local.admin.block(actor, user.id, { reason: 'Остыть', until: new Date(clock + 60 * 60 * 1000).toISOString() });
     await assert.rejects(local.accounts.login({ email: 'temp@medkarta.test', password: 'Временно-закрытый-1' }), (error) => error.code === 'account_blocked' && Boolean(error.extra.blockedUntil));
     clock += 61 * 60 * 1000;
@@ -547,6 +549,7 @@ describe('Админ-панель: сценарии', { skip: !DatabaseSync && '
     assert.deepEqual(off.body.changed.sort(), ['app.name', 'assistant.enabled']);
     assert.equal((await root.call('/api/chat', { method: 'POST', body: { messages: [] } })).body.code, 'assistant_disabled');
     await root.call('/api/admin/settings', { method: 'PATCH', body: { values: { 'assistant.enabled': true } } });
+    await root.chatPass();
     assert.equal((await root.call('/api/chat', { method: 'POST', body: { messages: [] } })).status, 200);
     const admin = await staffSignIn('admin@medkarta.test', 'Постоянный-пароль-1');
     assert.equal((await admin.call('/api/admin/settings')).status, 200, 'админ видит настройки');

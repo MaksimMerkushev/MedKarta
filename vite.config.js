@@ -20,6 +20,7 @@ const DEMO_BOOKING_HANDLER_URL = new URL('./backend/api/demoBooking.js', import.
 const ME_HANDLER_URL = new URL('./backend/api/me.js', import.meta.url)
 const ADMIN_HANDLER_URL = new URL('./backend/api/admin.js', import.meta.url)
 const ACTIVATION_HANDLER_URL = new URL('./backend/api/activation.js', import.meta.url)
+const PRIVACY_HANDLER_URL = new URL('./backend/api/privacy.js', import.meta.url)
 const FULL_DB_PATH = fileURLToPath(new URL('./data/doctors.full.js', import.meta.url))
 const PUBLIC_DB_PATH = fileURLToPath(new URL('./data/doctors.js', import.meta.url))
 const HAS_FULL_DB = fs.existsSync(FULL_DB_PATH)
@@ -78,6 +79,8 @@ const devApiPlugin = (env) => ({
       ['/api/auth', ACCOUNT_HANDLER_URL, 'входа', true],
       ['/api/me', ME_HANDLER_URL, 'профиля', true],
       ['/api/admin', ADMIN_HANDLER_URL, 'админ-панели', true],
+      ['/api/legal', PRIVACY_HANDLER_URL, 'документов', true],
+      ['/api/privacy', PRIVACY_HANDLER_URL, 'персональных данных', true],
       ['/api/demo', DEMO_BOOKING_HANDLER_URL, 'демо-записи', true],
     ]) {
       try {

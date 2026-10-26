@@ -107,7 +107,7 @@ http(s); телефон — цифры и разделители; координ
 
 Режимы доступа и приоритет правил — [10-medical-search-and-data.md](10-medical-search-and-data.md).
 
-## SQLite: аккаунты (схема 6)
+## SQLite: аккаунты (схема 7)
 
 [backend/accounts/sqliteStore.js](../backend/accounts/sqliteStore.js); файл
 `ACCOUNTS_DB_PATH` (по умолчанию `var/accounts/medkarta.sqlite`). Прагмы:
@@ -115,7 +115,9 @@ http(s); телефон — цифры и разделители; координ
 файла; миграции — по `user_version` в транзакции: 1 — пользователи, сессии,
 избранное; 2 — демо-копии; 3 — роли, статусы, журналы, аватары, настройки;
 4 — приглашения: `users.activated_at` и таблица `access_tokens`; 5 —
-регистрация, двухфакторная защита, счётчики подбора, очередь писем (ниже).
+регистрация, двухфакторная защита, счётчики подбора, очередь писем; 6 —
+проверка человека у ключей доступа, срок ссылки у письма; 7 — журнал
+согласий и обращения субъектов ПДн (ниже).
 Перед миграцией сервер сам копирует базу (`VACUUM INTO`,
 `medkarta.sqlite.before-v5-….bak`, права 600). При переходе на схему 5
 пароли, роли и статусы сохраняются, email активированных аккаунтов
@@ -236,6 +238,23 @@ CREATE TABLE user_activity (user_id → users ON DELETE CASCADE, day, PRIMARY KE
 CREATE TABLE avatars (user_id PRIMARY KEY → users ON DELETE CASCADE, mime, data BLOB, etag, updated_at);
 CREATE TABLE settings (key PRIMARY KEY, value JSON, updated_at, updated_by);
 CREATE TABLE role_overrides (role PRIMARY KEY, permissions JSON, updated_at, updated_by);
+CREATE TABLE consent_log (                      -- схема 7: принятие документов и согласия (152-ФЗ)
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE, user_id TEXT NOT NULL,  -- без FK: переживает удаление аккаунта
+  purpose, kind CHECK (kind IN ('acceptance', 'acknowledgement', 'consent')),
+  action CHECK (action IN ('granted', 'withdrawn', 'closed')),
+  document, version, document_hash,            -- редакция и SHA-256 её текста из legal/manifest.json
+  method, at, prev_hash, hash UNIQUE           -- hash = SHA-256(prev_hash + запись); цепочка по каждому user_id
+);
+  -- триггер consent_log_append_only: UPDATE запрещён; consent_log_retention: DELETE — только если аккаунта
+  -- нет и последней записи этого user_id больше 3 лет. Email, IP и User-Agent не пишутся
+CREATE TABLE privacy_requests (                 -- схема 7: обращения субъектов ПДн
+  id TEXT PRIMARY KEY, user_id → users ON DELETE SET NULL, subject_label,  -- маска email
+  type CHECK (type IN ('access', 'rectify', 'restrict', 'erase', 'withdraw', 'other')),
+  status CHECK (status IN ('received', 'in_progress', 'completed', 'rejected')),
+  message, created_at, due_at, extended_at, extension_reason, closed_at, response,
+  handled_by, handled_label, updated_at
+);
+  -- message стирается при удалении аккаунта; закрытые обращения хранятся 3 года
 ```
 
 Индексы: `users(role)`, `users(status)`, `users(created_at)`, демо-копии,
@@ -252,8 +271,14 @@ CREATE TABLE role_overrides (role PRIMARY KEY, permissions JSON, updated_at, upd
 Раз в час сервер удаляет просроченные сессии, окончившиеся блокировки
 переводит в «активен», журналы старше срока хранения — удаляет, ссылки и
 заявки, истёкшие больше 30 дней назад, — тоже; заодно — просроченные вызовы,
-счётчики подбора, доверенные устройства и записи об отправленных письмах. Подробности
-о ролях и безопасности — [accounts.md](accounts.md).
+счётчики подбора, доверенные устройства и записи об отправленных письмах, а также
+записи журнала согласий удалённых аккаунтов старше 3 лет и обращения, закрытые
+больше 3 лет назад. Подробности о ролях и безопасности — [accounts.md](accounts.md),
+о сроках хранения — [privacy/05-retention-and-destruction.md](privacy/05-retention-and-destruction.md).
+
+Вне базы, рядом с ней: `erasures.jsonl` — строка `{userId, at}` на каждое
+удаление аккаунта (без email), чтобы повторить удаление после восстановления
+копии (`npm run accounts -- reapply-erasures`).
 
 ## SQLite: демо-запись
 

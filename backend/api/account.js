@@ -29,8 +29,9 @@ import { createRateLimiter, getClientIp } from '../http/rateLimit.js';
 import { logger } from '../observability/safeLogger.js';
 import { metrics } from '../observability/metrics.js';
 import { forgetDemoBookings, getDefaultAccountService, peekAccountContext } from './accountContext.js';
+import { ASSISTANT_PASS_COOKIE, ASSISTANT_PASS_PATH } from './assistantPass.js';
 import {
-  clientContext, ensureDevice, isTrustedWrite, legacyCookieClear, mfaCookie, mfaTokenOf, parseCookies, pathOf, readJsonObject, requireFresh,
+  clientContext, cookie, ensureDevice, isTrustedWrite, legacyCookieClear, mfaCookie, mfaTokenOf, parseCookies, pathOf, readJsonObject, requireFresh,
   requireSession, sendError, SESSION_COOKIE, sessionCookie, tokenOf,
 } from './accountHttp.js';
 
@@ -62,6 +63,8 @@ export const chatRequiresAccount = (service = null) => {
 const ROUTES = new Map([
   ['/api/account', { GET: 'me', PATCH: 'update', DELETE: 'delete' }],
   ['/api/account/favorites', { POST: 'favorites' }],
+  // Пропуск к ассистенту без id аккаунта (api/assistantPass.js).
+  ['/api/account/assistant-pass', { POST: 'assistantPass' }],
   ['/api/auth/login', { POST: 'login' }],
   ['/api/auth/mfa/options', { POST: 'mfaOptions' }],
   ['/api/auth/mfa/verify', { POST: 'mfaVerify' }],
@@ -87,6 +90,8 @@ const defaultFeatures = (service, context = null) => {
   return {
     registration: Boolean(context?.registration?.enabled),
     registrationMode: context?.registration?.mode || 'invite_only',
+    // Почему регистрация закрыта (invite_only | mail_disabled | legal_unavailable | legal_documents_incomplete) — для текста на странице.
+    registrationClosed: context?.registration ? context.registration.closedReason : 'invite_only',
     passkeys: Boolean(service?.mfa?.passkeysAvailable),
     assistant: read('assistant.enabled', true) !== false,
     chatRequiresAccount: chatRequiresAccount(service),
@@ -166,7 +171,9 @@ export const createAccountHandler = ({
           const auth = token ? service.authenticate(token) : null;
           const clears = [...(!auth && token ? [sessionCookie(req, '', 0)] : []), ...legacyCookieClear(req)];
           if (clears.length > 0) res.setHeader('Set-Cookie', clears);
-          respondJson(res, 200, auth ? { ...service.snapshot(auth.user, auth.session), features: flags } : { user: null, favorites: [], features: flags });
+          // Документы, которые аккаунт «Пользователь» ещё не принял в действующей редакции (интерфейс попросит принять).
+          const legalPending = auth && context?.consents ? context.consents.pendingFor(auth.user) : [];
+          respondJson(res, 200, auth ? { ...service.snapshot(auth.user, auth.session), legalPending, features: flags } : { user: null, favorites: [], features: flags });
           return;
         }
         case 'login': {
@@ -220,7 +227,10 @@ export const createAccountHandler = ({
         }
         case 'logout': {
           service.logout(token);
-          res.setHeader('Set-Cookie', [sessionCookie(req, '', 0), mfaCookie(req, '', 0), ...legacyCookieClear(req)]);
+          res.setHeader('Set-Cookie', [
+            sessionCookie(req, '', 0), mfaCookie(req, '', 0), cookie(req, ASSISTANT_PASS_COOKIE, '', 0, { path: ASSISTANT_PASS_PATH, sameSite: 'Strict' }),
+            ...legacyCookieClear(req),
+          ]);
           respondJson(res, 200, { user: null, favorites: [], features: flags });
           return;
         }
@@ -231,6 +241,19 @@ export const createAccountHandler = ({
       const auth = requireSession(req, res, service);
       if (!auth) return;
       const { user } = auth;
+
+      if (operation === 'assistantPass') {
+        // Пропуск без id аккаунта: дальше /api/chat проверяет только его подпись и срок. Выдача нигде не записывается.
+        if (!context?.assistantPass) {
+          respondJson(res, 503, { error: 'Ассистент сейчас недоступен.', code: 'accounts_unavailable' });
+          return;
+        }
+        res.setHeader('Set-Cookie', cookie(req, ASSISTANT_PASS_COOKIE, context.assistantPass.issue(), context.assistantPass.ttlMs / 1000, {
+          path: ASSISTANT_PASS_PATH, sameSite: 'Strict',
+        }));
+        respondJson(res, 200, { ok: true, expiresIn: Math.floor(context.assistantPass.ttlMs / 1000) });
+        return;
+      }
 
       if (operation === 'update') {
         const allowed = ['displayName', 'firstName', 'lastName', 'dmsPlanId'];

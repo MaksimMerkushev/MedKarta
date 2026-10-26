@@ -233,6 +233,7 @@ const MFA_FAILED = 'Код не подошёл. Проверьте и попро
 export const createAccountService = ({
   store, settings = null, isKnownPlan = () => false, mfa = null, mailer = null, throttle = null,
   breachCheck = async () => ({ breached: false }), appUrl = null, now = () => Date.now(),
+  consents = null, onErased = null,
 }) => {
   const config = settings || createSettingsService({ store, now });
   // Гостевые демо-аккаунты убраны: их прежние копии и сессии больше не нужны.
@@ -481,6 +482,39 @@ export const createAccountService = ({
       aal, mfaAt, reauthAt, deviceHash: session.deviceHash, createdAt: session.createdAt,
     });
   });
+
+  /*
+   * Удаление аккаунта (самим человеком или администратором): аккаунт и всё,
+   * что связано с ним каскадом (сессии, факторы, коды, избранное, аватар,
+   * ссылки, устройства), история входов, письма на его адрес в очереди и
+   * записи о них, заявки на регистрацию с этим адресом, текст его обращений.
+   * Остаются: журнал согласий (доказательство основания, 3 года) с записью
+   * «закрыто», обращения без текста (сроки и ответ), журнал действий с
+   * маской email (срок — retention.auditDays). id удалённого аккаунта
+   * пишется в журнал удалений вне базы (onErased): после восстановления из
+   * резервной копии удаление повторяется (npm run accounts -- reapply-erasures).
+   */
+  const eraseUser = (user, { method }, inTransaction = () => {}) => {
+    store.transaction(() => {
+      consents?.closeAll(user.id, { method });
+      store.deleteUserAuthEvents(user.id);
+      store.deleteMailForAddress?.(createHash('sha256').update(String(user.email || '').trim().toLowerCase()).digest('hex'));
+      store.deleteRegistrationsForEmail?.(user.email);
+      store.clearPrivacyRequestMessages?.(user.id);
+      store.deleteUser(user.id);
+      inTransaction();
+      // Собственные действия удалённого аккаунта в журнале — без имени и email (действия сотрудников — с меткой).
+      store.pseudonymizeAuditActor?.(user.id, 'Удалённый аккаунт');
+    });
+  };
+  /** Запись в журнал удалений — только после того, как транзакция удаления зафиксирована. */
+  const recordErasure = (userId) => {
+    try {
+      onErased?.(userId, now());
+    } catch {
+      // Журнал удалений недоступен — аккаунт уже удалён; см. журнал сервера.
+    }
+  };
 
   const service = {
     settings: config,
@@ -938,11 +972,10 @@ export const createAccountService = ({
     deleteAccount(user) {
       if (isDemoUser(user)) fail('demo_account', 403, 'Демо-аккаунт удалить нельзя.');
       if (user.role !== 'user') fail('staff_account', 403, 'Аккаунт сотрудника удаляет администратор.');
-      store.transaction(() => {
-        store.deleteUserAuthEvents(user.id);
-        store.deleteUser(user.id);
+      eraseUser(user, { method: 'account_deleted' }, () => {
         audit({ action: 'user.delete', actorId: user.id, actorLabel: userLabel(user), targetId: user.id, targetLabel: userLabel(user), details: { self: true } });
       });
+      recordErasure(user.id);
     },
 
     /**
@@ -974,7 +1007,7 @@ export const createAccountService = ({
     /* Для adminService, invitations и registration: общие части без дублирования. */
     __internal: {
       startSession, releaseExpiredBlock, statusProblem, newId, permissionsFor, canManage, generateTemporaryPassword,
-      notify, checkNewPassword, isStaff, mfaEnabled, appUrl, authEvent,
+      notify, checkNewPassword, isStaff, mfaEnabled, appUrl, authEvent, eraseUser, recordErasure,
     },
   };
 

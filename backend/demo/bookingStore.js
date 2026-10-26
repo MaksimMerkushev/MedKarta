@@ -39,6 +39,8 @@ import { addDays, moscowDay, moscowMoment, moscowParts } from './time.js';
 
 export const SLOT_STATUS = Object.freeze({ FREE: 'FREE', HELD: 'HELD', BOOKED: 'BOOKED', BLOCKED: 'BLOCKED' });
 export const HOLD_TTL_MS = 5 * 60 * 1000;
+/** Сколько дней после даты приёма демо-запись связана с аккаунтом. */
+export const OWNER_RETENTION_DAYS = 30;
 
 export class BookingError extends Error {
   constructor(code, message) {
@@ -174,6 +176,8 @@ export const createBookingStore = ({ DatabaseSync, file, index, now = () => Date
       VALUES (?, ?, ?, 'CONFIRMED', ?, ?, ?, ?)`),
     bookingsOfAccount: db.prepare('SELECT * FROM bookings WHERE account_id = ? ORDER BY created_at DESC LIMIT ?'),
     forgetAccount: db.prepare('UPDATE bookings SET account_id = NULL WHERE account_id = ?'),
+    // Через 30 дней после даты приёма запись больше не связана с аккаунтом (152-ФЗ: срок хранения по цели).
+    forgetPastOwners: db.prepare('UPDATE bookings SET account_id = NULL WHERE account_id IS NOT NULL AND slot_id IN (SELECT id FROM slots WHERE day < ?)'),
     cancelBooking: db.prepare("UPDATE bookings SET status = 'CANCELLED', cancelled_at = ? WHERE id = ? AND status = 'CONFIRMED'"),
     activeBookingForSlot: db.prepare("SELECT 1 AS found FROM bookings WHERE slot_id = ? AND status = 'CONFIRMED'"),
     purgeOldSlots: db.prepare('DELETE FROM slots WHERE day < ? AND id NOT IN (SELECT slot_id FROM bookings)'),
@@ -242,6 +246,7 @@ export const createBookingStore = ({ DatabaseSync, file, index, now = () => Date
     const cutoff = addDays(today, -7);
     statements.purgeOldSlots.run(cutoff);
     statements.purgeOldDays.run(cutoff);
+    statements.forgetPastOwners.run(addDays(today, -OWNER_RETENTION_DAYS));
   };
 
   /** Сброс демо: все записи и состояния — к исходным. */
@@ -431,6 +436,12 @@ export const createBookingStore = ({ DatabaseSync, file, index, now = () => Date
       .map((booking) => ({ ...bookingView(booking, at), cancelToken: cancelTokenFor(booking.id), owned: true }));
   };
 
+  /** Записи аккаунта для выгрузки «Мои данные» — без токенов отмены. */
+  const accountBookings = (accountId, at = now()) => {
+    if (typeof accountId !== 'string' || !ACCOUNT_ID.test(accountId)) return [];
+    return statements.bookingsOfAccount.all(accountId, MAX_ACCOUNT_BOOKINGS).map((booking) => bookingView(booking, at));
+  };
+
   /** Удалённый аккаунт: его записи остаются занятыми слотами, но больше ни к кому не привязаны. */
   const forgetAccount = (accountId) =>
     (typeof accountId === 'string' && ACCOUNT_ID.test(accountId) ? statements.forgetAccount.run(accountId).changes : 0);
@@ -450,6 +461,7 @@ export const createBookingStore = ({ DatabaseSync, file, index, now = () => Date
     cancel,
     lookup,
     listForAccount,
+    accountBookings,
     forgetAccount,
     stats,
     close: () => db.close(),

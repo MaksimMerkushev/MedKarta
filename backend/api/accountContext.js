@@ -21,6 +21,9 @@ import { fileURLToPath } from 'node:url';
 
 import { demoInsurance } from '../../data/demo/insurance.js';
 import { createAdminService } from '../accounts/adminService.js';
+import { createConsentRegistry } from '../accounts/consents.js';
+import { createErasureLog } from '../accounts/erasureLog.js';
+import { createPrivacyService } from '../accounts/privacyRequests.js';
 import { bootstrapSuperadmin, DEFAULT_SUPERADMIN } from '../accounts/bootstrap.js';
 import { createBreachChecker } from '../accounts/breachedPasswords.js';
 import { createDelivery } from '../accounts/delivery.js';
@@ -28,13 +31,15 @@ import { createEmailChangeService } from '../accounts/emailChange.js';
 import { createInvitationService } from '../accounts/invitations.js';
 import { createMfaService, webauthnConfigFromEnv } from '../accounts/mfa.js';
 import { createRegistrationService, registrationModeFromEnv } from '../accounts/registration.js';
-import { createSecretBox, loadMfaKey } from '../accounts/secrets.js';
+import { createSecretBox, deriveKey, loadMfaKey } from '../accounts/secrets.js';
 import { createAccountService } from '../accounts/service.js';
 import { createSettingsService } from '../accounts/settings.js';
 import { createSqliteAccountStore, loadSqlite } from '../accounts/sqliteStore.js';
 import { createLoginThrottle } from '../accounts/throttle.js';
+import { getLegalDocuments } from '../legal/documents.js';
 import { createMailer } from '../mail/outbox.js';
 import { logger } from '../observability/safeLogger.js';
+import { createAssistantPass } from './assistantPass.js';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const MAINTENANCE_INTERVAL_MS = 60 * 60 * 1000;
@@ -47,6 +52,18 @@ export const defaultAccountsDbPath = () => process.env.ACCOUNTS_DB_PATH || path.
  * Удалённый аккаунт отвязывается от своих демо-записей: записи остаются
  * занятыми слотами, но больше ни с кем не связаны.
  */
+/** Демо-записи аккаунта для выгрузки «Мои данные». */
+export const demoBookingsOf = async (userId) => {
+  try {
+    const { getDefaultDemoBookingService } = await import('./demoBooking.js');
+    const service = await getDefaultDemoBookingService();
+    return service?.store.accountBookings ? service.store.accountBookings(userId) : [];
+  } catch (error) {
+    logger.error('account.export_bookings_failed', error);
+    return [];
+  }
+};
+
 export const forgetDemoBookings = async (userId) => {
   try {
     const { getDefaultDemoBookingService } = await import('./demoBooking.js');
@@ -74,6 +91,9 @@ export const createAccountContext = ({
   registrationMode = registrationModeFromEnv(env),
   breachCheck = createBreachChecker({ env }),
   throttleRules = {},
+  documents = getLegalDocuments(),
+  erasureLog = createErasureLog(),
+  demoBookings = demoBookingsOf,
   now = () => Date.now(),
 }) => {
   const settings = createSettingsService({ store, now });
@@ -93,14 +113,30 @@ export const createAccountContext = ({
   const throttle = createLoginThrottle({ store, settings, now, rules: throttleRules });
   const box = createSecretBox(masterKey);
   const mfa = createMfaService({ store, box, webauthn: webauthnConfigFromEnv(env, delivery.appUrl), now });
+  // Журнал согласий и принятия документов (ст. 9 152-ФЗ): только добавление, хэши по цепочке.
+  const consents = createConsentRegistry({ store, documents, now });
   const accounts = createAccountService({
     store, settings, isKnownPlan, mfa, mailer, throttle, breachCheck, appUrl: delivery.appUrl, now,
+    consents, onErased: (userId, at) => erasureLog.append(userId, at),
   });
-  const invitations = createInvitationService({ store, accounts, delivery, mailer, now });
-  const registration = createRegistrationService({ store, accounts, delivery, mailer, mode: registrationMode, now });
+  const invitations = createInvitationService({ store, accounts, delivery, mailer, consents, now });
+  const registration = createRegistrationService({ store, accounts, delivery, mailer, mode: registrationMode, consents, documents, env, now });
   const emailChange = createEmailChangeService({ store, accounts, delivery, mailer, now });
   const admin = createAdminService({ store, accounts, invitations, onAccountDeleted, systemInfo, throttle, now });
-  return Object.freeze({ store, settings, accounts, invitations, registration, emailChange, delivery, mailer, throttle, mfa, admin });
+  const privacy = createPrivacyService({ store, accounts, consents, demoBookingsOf: demoBookings, now });
+  // Пропуск к ассистенту — подпись ключом из главного ключа сервера: переживает перезапуск, в нём нет id аккаунта.
+  const assistantPass = createAssistantPass({ key: deriveKey(masterKey, 'assistant-pass'), now });
+  return Object.freeze({
+    store, settings, accounts, invitations, registration, emailChange, delivery, mailer, throttle, mfa, admin,
+    documents, consents, privacy, assistantPass, erasureLog,
+  });
+};
+
+/** Обслуживание раз в час: сроки хранения (сессии, журналы, письма, обращения, журнал согласий удалённых аккаунтов). */
+export const runMaintenance = (context) => {
+  context.accounts.purgeExpiredSessions();
+  context.consents.purge();
+  context.privacy.purge();
 };
 
 /**
@@ -151,8 +187,10 @@ export const getAccountContext = async () => {
       if (store.migrationBackup) logger.event('account.migration_backup', { status: 'created' });
       const key = loadMfaKey({ keyFile: path.join(path.dirname(file), 'secrets', 'mfa.key') });
       if (key.source === 'file') logger.warn('account.mfa_key_file', { status: 'file' });
-      context = createAccountContext({ store, mfaKey: key.key });
-      context.accounts.purgeExpiredSessions();
+      context = createAccountContext({
+        store, mfaKey: key.key, erasureLog: createErasureLog({ file: path.join(path.dirname(file), 'erasures.jsonl') }),
+      });
+      runMaintenance(context);
       context.mailer.start();
     } catch (error) {
       logger.error('account.store_failed', error);
@@ -161,7 +199,7 @@ export const getAccountContext = async () => {
     await startupBootstrap({ store: context.store });
     const timer = setInterval(() => {
       try {
-        context.accounts.purgeExpiredSessions();
+        runMaintenance(context);
       } catch (error) {
         logger.error('account.maintenance_failed', error);
       }

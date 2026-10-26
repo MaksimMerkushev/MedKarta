@@ -20,10 +20,11 @@ import { AnimatePresence, MotionConfig, motion as Motion, useReducedMotion } fro
 import { ArrowLeft, KeyRound, LogIn, MailPlus, RotateCw } from 'lucide-react';
 
 import { passwordProblem } from '@shared/passwordPolicy.js';
-import { completeActivation, fetchActivationContext, fetchActivationMfaOptions, peekActivation, startActivation } from '../services/account';
+import { completeActivation, fetchActivationContext, fetchActivationMfaOptions, legalVersions, peekActivation, startActivation } from '../services/account';
 import { navigate } from '../ui/navigation';
 import AuthLayout from './AuthLayout';
 import AutoHeight from './AutoHeight';
+import LegalAcceptance from './LegalAcceptance';
 import { AuthSkeleton } from './LoginPage';
 import { AuthButton, FormError, PasswordField, PasswordRequirements, PasswordStrength, SuccessMark, TextAction } from './parts';
 import SecondFactorForm from './SecondFactor';
@@ -130,8 +131,31 @@ function PasswordStep({ context, onDone, onProblem }) {
   const [error, setError] = useState('');
   // Второй фактор: известен заранее из контекста ссылки или по ответу сервера mfa_required.
   const [factor, setFactor] = useState({ open: false, methods: context.mfa?.methods || [] });
+  // Соглашение — только при первой установке пароля пользователем (сервер сам решает, нужно ли: context.legal).
+  const [legal, setLegal] = useState(context.legal || null);
+  const [acceptTerms, setAcceptTerms] = useState(false);
+  const [legalError, setLegalError] = useState('');
   const invite = context.purpose === 'invite';
   const name = [context.firstName, context.lastName].filter(Boolean).join(' ');
+  const legalBody = () => (legal?.required ? { acceptTerms, documents: legalVersions(legal.documents) } : null);
+
+  /** Новая редакция вышла, пока страница была открыта: показать её и спросить снова. */
+  const legalFailure = async (failure) => {
+    if (failure?.code !== 'terms_required' && failure?.code !== 'documents_changed') return false;
+    if (failure.code === 'documents_changed') {
+      try {
+        const fresh = await fetchActivationContext();
+        setLegal(fresh.context?.legal || legal);
+      } catch {
+        // Контекст истёк — следующая отправка покажет причину.
+      }
+      setAcceptTerms(false);
+    }
+    setFactor((current) => ({ ...current, open: false }));
+    setLegalError(failure.message);
+    setPending(false);
+    return true;
+  };
 
   useEffect(() => {
     if (!factor.open) inputRef.current?.focus({ preventScroll: true });
@@ -153,15 +177,21 @@ function PasswordStep({ context, onDone, onProblem }) {
       return;
     }
     setError('');
+    if (legal?.required && !acceptTerms) {
+      setLegalError('Чтобы продолжить, примите пользовательское соглашение.');
+      return;
+    }
+    setLegalError('');
     if (context.mfa?.required) {
       setFactor((current) => ({ ...current, open: true }));
       return;
     }
     setPending(true);
     try {
-      const result = await completeActivation(password);
+      const result = await completeActivation(password, null, legalBody());
       onDone(result);
     } catch (failure) {
+      if (await legalFailure(failure)) return;
       if (failure?.code === 'weak_password' || failure?.code === 'busy') {
         setError(failure.message);
         setPending(false);
@@ -180,9 +210,10 @@ function PasswordStep({ context, onDone, onProblem }) {
 
   const submitFactor = async (secondFactor) => {
     try {
-      onDone(await completeActivation(password, secondFactor));
+      onDone(await completeActivation(password, secondFactor, legalBody()));
     } catch (failure) {
       if (FACTOR_RETRY.has(failure?.code)) throw failure;
+      if (await legalFailure(failure)) return;
       if (failure?.code === 'weak_password' || failure?.code === 'busy') {
         backToPassword(failure.message);
         return;
@@ -223,6 +254,20 @@ function PasswordStep({ context, onDone, onProblem }) {
       <PasswordRequirements id={requirementsId} password={password} email={context.email} />
       <PasswordStrength password={password} email={context.email} />
       <div className="mt-4"><FormError id={errorId} message={error} /></div>
+      {legal?.required && (
+        <div className="mt-4">
+          <LegalAcceptance
+            documents={legal.documents}
+            checked={acceptTerms}
+            onChange={(value) => {
+              setAcceptTerms(value);
+              if (value) setLegalError('');
+            }}
+            error={legalError}
+            action={context.mfa?.required ? 'Продолжить' : 'Сохранить пароль и войти'}
+          />
+        </div>
+      )}
       <Motion.div layout="position" className="mt-5">
         <AuthButton type="submit" icon={LogIn} loading={pending} loadingLabel="Сохраняем…" data-testid="activation-submit">
           {context.mfa?.required ? 'Продолжить' : 'Сохранить пароль и войти'}

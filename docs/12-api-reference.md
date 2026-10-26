@@ -25,13 +25,16 @@ OpenAPI-спецификация не приводится: запросы `/api
 
 | Метод | Путь | Назначение | Обработчик |
 |---|---|---|---|
-| POST | `/api/chat` | запрос к ассистенту (только после входа в кабинет) | [chat.js](../backend/api/chat.js), [chatAccess.js](../backend/api/chatAccess.js) |
+| POST | `/api/chat` | запрос к ассистенту (только с пропуском `mk_ai`, который выдаётся вошедшему; сессию не читает) | [chat.js](../backend/api/chat.js), [chatAccess.js](../backend/api/chatAccess.js) |
 | POST | `/api/route` | маршрут по дорогам через 2–6 точек | [route.js](../backend/api/route.js) |
 | POST | `/api/travel-times` | время в пути от точки до многих | [travelTimes.js](../backend/api/travelTimes.js) |
 | POST | `/api/events` | события аналитики | [events.js](../backend/api/events.js) |
 | GET, HEAD | `/api/config` | флаги демо-режима и публичные настройки | [config.js](../backend/api/config.js) |
 | GET, PATCH, DELETE | `/api/account` | кабинет: профиль, программа ДМС, удаление | [account.js](../backend/api/account.js) |
 | POST | `/api/account/favorites` | избранное | [account.js](../backend/api/account.js) |
+| POST | `/api/account/assistant-pass` | пропуск к ассистенту на час (cookie `mk_ai`, `Path=/api/chat`, без id аккаунта) | [account.js](../backend/api/account.js), [assistantPass.js](../backend/api/assistantPass.js) |
+| GET | `/api/legal`, `/api/legal/:document` | документы (политика, соглашение) и их редакции; `?version=` — прежняя | [privacy.js](../backend/api/privacy.js) |
+| GET, POST | `/api/privacy`, `/accept`, `/consents/:purpose`, `/export`, `/requests` | «Мои данные»: принятые редакции, согласия, выгрузка, обращения | [privacy.js](../backend/api/privacy.js) |
 | POST | `/api/auth/login`, `/api/auth/mfa/options`, `/api/auth/mfa/verify`, `/api/auth/logout` | вход: пароль, затем (если включён) второй фактор; выход | [account.js](../backend/api/account.js) |
 | GET, POST | `/api/auth/register`, `/register/peek`, `/start`, `/complete` | регистрация по email (если `REGISTRATION_MODE=open` и настроена почта) | [activation.js](../backend/api/activation.js) |
 | POST | `/api/auth/email-change/peek`, `/confirm` | подтверждение нового или текущего email по ссылке | [activation.js](../backend/api/activation.js) |
@@ -71,12 +74,16 @@ OpenAPI-спецификация не приводится: запросы `/api
 
 Запрос к ассистенту. Подробно о конвейере — [06-ai-assistant.md](06-ai-assistant.md).
 
-Нужна действующая сессия (cookie `mk_session`) без временного пароля; если
-в настройках админ-панели выключено «Ассистент только после входа» (по
-умолчанию — из `CHAT_REQUIRES_ACCOUNT`), — не нужна. Выключенный в
-настройках ассистент отвечает `503 assistant_disabled`, гость — `401
-login_required`, временный пароль — `403 password_change_required`. Из
-аккаунта в конвейер ничего не передаётся.
+Нужен действующий пропуск — cookie `mk_ai` (`Path=/api/chat`, час), который
+выдаёт `POST /api/account/assistant-pass` вошедшему пользователю без
+временного пароля; сессию `/api/chat` не читает, и в пропуске нет id
+аккаунта ([privacy/04-health-data.md](privacy/04-health-data.md)). Если в
+настройках админ-панели выключено «Ассистент только после входа» (по
+умолчанию — из `CHAT_REQUIRES_ACCOUNT`), пропуск не нужен. Выключенный в
+настройках ассистент отвечает `503 assistant_disabled`, без пропуска —
+`401 assistant_pass_required` (интерфейс берёт пропуск и повторяет запрос;
+гостю пропуск не выдаётся — `401`, временный пароль — `403
+password_change_required`). Из аккаунта в конвейер ничего не передаётся.
 
 **Тело** (до 32 КБ):
 
@@ -177,7 +184,7 @@ Content-Type: application/json
 | Код | Тело | Когда |
 |---|---|---|
 | 204 | — | `OPTIONS` |
-| 401 | `{"error":"Ассистент доступен после входа в личный кабинет.","code":"login_required"}` | нет входа или сессия истекла |
+| 401 | `{"error":"Ассистент доступен после входа в личный кабинет.","code":"assistant_pass_required"}` | нет пропуска `mk_ai`, он истёк или подделан |
 | 400 | `{"error":"Ожидается непустой массив messages."}` | пустой или не массив |
 | 400 | `{"error":"Слишком длинная история диалога."}` | больше 40 сообщений |
 | 400 | `{"error":"Последнее сообщение должно быть от пользователя."}` | |
@@ -337,12 +344,39 @@ Path=/`, без `Domain`) или `mk_sid` по HTTP (разработка). По
 | `POST /api/auth/login` | `{email, password}` | без второго фактора — `{user, favorites, security, features}` + cookie сессии; со вторым фактором — `{mfaRequired: true, methods, expiresAt}` + cookie `mk_mfa` (`HttpOnly; SameSite=Strict`, 5 минут) | 20 за 15 мин + счётчики в базе |
 | `POST /api/auth/mfa/options` | `{}` (cookie `mk_mfa`) | `{methods: ["webauthn", "totp", "recovery"], passkey, expiresAt}`; `passkey` — параметры для `navigator.credentials.get` (base64url) | 300 за 5 мин |
 | `POST /api/auth/mfa/verify` | `{method: "totp", code}`, `{method: "recovery", code}` или `{method: "webauthn", credential}` | `{user, favorites, security, recoveryCodesLeft, features}` + cookie сессии (уровень 2), `mk_mfa` стирается | 20 за 15 мин; 5 попыток на вход, 10 неверных кодов на аккаунт за 15 мин |
-| `POST /api/auth/logout` | `{}` | `{user: null, …}`, cookie стирается | 300 за 5 мин |
+| `POST /api/auth/logout` | `{}` | `{user: null, …}`, cookie сессии и `mk_ai` стираются | 300 за 5 мин |
+| `POST /api/account/assistant-pass` | `{}` | `{ok, expiresIn: 3600}` + cookie `mk_ai` (`HttpOnly; SameSite=Strict; Path=/api/chat`); гость — `401`; временный пароль — `403 password_change_required` | 300 за 5 мин |
 
-`features` — `{available, registration, registrationMode, passkeys,
-assistant, chatRequiresAccount, emailLinks}`: `registration` — открыта ли
-регистрация сейчас (режим `open` и настроенная почта), `passkeys` — включены
-ли ключи доступа на сервере, `emailLinks` — настроена ли почта.
+`GET /api/account` для вошедшего добавляет `legalPending` — документы,
+которые аккаунт «Пользователь» ещё не принял в действующей редакции
+(`[{purpose, document, version, title, draft}]`); вход и работу это не
+блокирует.
+
+`features` — `{available, registration, registrationMode, registrationClosed,
+passkeys, assistant, chatRequiresAccount, emailLinks}`: `registration` —
+открыта ли регистрация сейчас (режим `open`, настроенная почта и документы
+без меток `[ТРЕБУЕТСЯ ЗАПОЛНИТЬ ОПЕРАТОРОМ]`), `registrationClosed` — почему
+закрыта (`invite_only`, `mail_disabled`, `legal_documents_incomplete`,
+`legal_unavailable`), `passkeys` — включены ли ключи доступа на сервере,
+`emailLinks` — настроена ли почта.
+
+### Документы и «Мои данные»: /api/legal, /api/privacy
+
+| Метод и путь | Тело | Ответ |
+|---|---|---|
+| `GET /api/legal` | — | `{documents: [{key, title, slug, version, publishedAt, sha256, draft, status, history}], readiness}` (без входа) |
+| `GET /api/legal/:document[?version=]` | — | `{document: {…, text}, history}`; `:document` — `privacy`, `terms`, `health-consent` или ключ; нет такой редакции — `404` |
+| `GET /api/privacy` | — | `{pending, state, history, consents, requests, requestTypes, processing, canDeleteAccount}` |
+| `POST /api/privacy/accept` | `{documents: {terms, privacy_policy}}` — редакции, которые видел человек | `{recorded, pending, history}`; не та редакция — `409 documents_changed` |
+| `POST /api/privacy/consents/:purpose` | `{action: "grant" \| "withdraw", version}` | `{state, history}`; согласие на сведения о здоровье — `403`; принятие соглашения не отзывается — `400 not_consent` |
+| `GET /api/privacy/export` | — | JSON всех своих данных (`Content-Disposition: attachment`); нужно свежее подтверждение личности (`403 reauth_required`); переход с чужого сайта — `403` |
+| `GET /api/privacy/requests` | — | `{items}` — свои обращения |
+| `POST /api/privacy/requests` | `{type, message?}` | `201 {request}` со сроком `dueAt`; больше 5 открытых — `429` |
+
+Регистрация и первая установка пароля пользователем принимают
+`acceptTerms: true` и `documents: {terms, privacy_policy}` (редакции из
+контекста страницы): без отметки — `400 terms_required`, устаревшая
+редакция — `409 documents_changed`.
 
 Вход заблокированного аккаунта (пароль верный) — `403 account_blocked` с
 `blockedUntil` и причиной, архивного — `403 account_inactive`; при неверном
@@ -542,6 +576,10 @@ Set-Cookie: __Host-mk_sid=<token>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-A
 | `GET /api/admin/users/:id/logins` | `users.view` | `?page&type=failed` | `{items, total, page, pageSize}` |
 | `GET /api/admin/users/:id/blocks` | `users.view` | — | `{items}` |
 | `GET /api/admin/users/:id/audit` | `audit.view` | `?page` | `{items, total, …}` |
+| `GET /api/admin/users/:id/consents` | `privacy.requests` | — | `{history, pending}` — журнал принятия документов (только чтение) |
+| `GET /api/admin/privacy-requests` | `privacy.requests` | `?status&page` | `{items, total, open, page, pageSize}`; заявитель — маской email |
+| `GET /api/admin/privacy-requests/:id` | `privacy.requests` | — | `{request, subject, consents, deadline}` |
+| `POST /api/admin/privacy-requests/:id/take` \| `extend` \| `complete` \| `reject` | `privacy.requests` | `{}`, `{reason}` (продление, ≥ 10 символов, один раз) или `{response}` (≥ 10 символов) | `{request}`; закрытое — `409 bad_state`; заявителю — письмо без текста ответа |
 | `GET /api/admin/users/:id/avatar` | `users.view` | — | изображение |
 | `GET /api/admin/sessions` | `users.sessions` | `?userId&kind&page&pageSize` | `{items, total, …}` |
 | `DELETE /api/admin/sessions/:id` | `users.sessions` | `{}` | `{revoked: 1}` |

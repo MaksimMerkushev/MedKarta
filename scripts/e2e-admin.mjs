@@ -75,10 +75,12 @@ const env = {
 };
 
 let server = null;
+// Журнал сервера — чтобы проверить, что в него не попали жалобы на здоровье.
+let serverOutput = '';
 const startServer = async () => {
   server = spawn(process.execPath, ['backend/server.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
-  server.stdout.resume();
-  server.stderr.resume();
+  server.stdout.on('data', (chunk) => { serverOutput += chunk; });
+  server.stderr.on('data', (chunk) => { serverOutput += chunk; });
   for (let attempt = 0; attempt < 60; attempt += 1) {
     try {
       const response = await fetch(`${BASE}/api/config`);
@@ -142,7 +144,7 @@ try {
   browser = await chromium.launch();
   const admin = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   // Ключ доступа администратора — виртуальный (WebAuthn через протокол отладки Chromium).
-  const { attachAuthenticator } = await import('./e2e-lib.mjs');
+  const { acceptTermsIfShown, attachAuthenticator } = await import('./e2e-lib.mjs');
   const adminKey = await attachAuthenticator(admin);
   const pageErrors = [];
   admin.on('pageerror', (error) => pageErrors.push(String(error)));
@@ -167,6 +169,7 @@ try {
     await page.goto(link, { waitUntil: 'domcontentloaded' });
     await page.click('[data-testid=activation-accept]');
     await page.fill('[data-testid=activation-password-input]', password);
+    await acceptTermsIfShown(page);
     await page.click('[data-testid=activation-submit]');
     await page.waitForSelector('[data-testid=activation-success]');
     expect(!page.url().includes('token='), 'токен остался в адресе');
@@ -461,6 +464,50 @@ try {
     await again.goto(olgaLink, { waitUntil: 'domcontentloaded' });
     await again.waitForSelector('[data-testid=activation-problem][data-code=link_used]');
     await again.close();
+  });
+
+  await step('22. Обращение по персональным данным (отправлено через API кабинета; форма профиля — в e2e-register): в панели взято в работу и закрыто с ответом', async () => {
+    const created = await admin.evaluate(() => fetch('/api/privacy/requests', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'access', message: 'Проверка обращения из сквозного теста' }),
+    }).then((response) => response.status));
+    expect(created === 201, `обращение: ${created}`);
+    await goto(admin, '/admin/privacy');
+    await admin.waitForSelector('[data-testid=privacy-requests-table]');
+    await admin.locator('[data-testid=privacy-requests-table] tbody tr').first().click();
+    await admin.waitForSelector('[data-testid=privacy-request-detail]');
+    await admin.click('[data-testid=privacy-take]');
+    await admin.waitForSelector('[data-testid=privacy-request-detail] >> text=В работе');
+    await admin.click('[data-testid=privacy-complete]');
+    await admin.fill('[data-testid=privacy-action-text]', 'Сведения об обработке направлены: см. «Мои данные» в профиле.');
+    await admin.click('[data-testid=privacy-action-submit]');
+    await admin.waitForSelector('[data-testid=privacy-request-detail] >> text=Выполнено');
+    await shot(admin, '11-privacy-request');
+    await admin.keyboard.press('Escape');
+    const audit = await sqlite((db) => db.prepare("SELECT COUNT(*) AS count FROM audit_log WHERE action = 'privacy.request_complete'").get().count);
+    expect(audit === 1, 'закрытие обращения не записано в журнал действий');
+  });
+
+  await step('23. Ассистент: пропуск без id аккаунта (только для /api/chat); жалоба разобрана локально и не попала в журнал', async () => {
+    const result = await admin.evaluate(async () => {
+      const chat = () => fetch('/api/chat', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: [{ role: 'user', content: 'третий день болит горло, нужен врач' }], sessionId: 'e2e-session-0123456789' }),
+      }).then(async (response) => ({ status: response.status, body: await response.json() }));
+      const before = await chat();
+      const pass = await fetch('/api/account/assistant-pass', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then((response) => response.status);
+      const after = await chat();
+      return { before, pass, after };
+    });
+    expect(result.before.status === 401 && result.before.body.code === 'assistant_pass_required', `без пропуска: ${JSON.stringify(result.before)}`);
+    expect(result.pass === 200, `пропуск: ${result.pass}`);
+    expect(result.after.status === 200 && /ЛОР|оториноларинголог|терапевт/i.test(result.after.body.replyText || ''), `ответ: ${JSON.stringify(result.after.body).slice(0, 200)}`);
+    // Без фильтра по адресу: cookie пропуска — только для пути /api/chat.
+    const cookies = await admin.context().cookies();
+    const pass = cookies.find((cookie) => cookie.name === 'mk_ai');
+    const me = await admin.evaluate(() => fetch('/api/me').then((response) => response.json()));
+    expect(pass && pass.path === '/api/chat' && pass.httpOnly && pass.sameSite === 'Strict', `cookie пропуска: ${JSON.stringify(pass && { path: pass.path, httpOnly: pass.httpOnly, sameSite: pass.sameSite })}`);
+    expect(!pass.value.includes(me.user.id), 'в пропуске id аккаунта');
+    expect(!/горло|болит/.test(serverOutput), 'жалоба попала в журнал сервера');
   });
 
   await step('Ошибок JavaScript на страницах нет', async () => {

@@ -68,7 +68,13 @@ export const fetchActivationContext = () => request('/api/auth/activation');
  * {method: 'webauthn', credential}), если у аккаунта включена MFA: без него
  * сервер ответит 403 mfa_required и пароль не изменит.
  */
-export const completeActivation = (password, factor = null) => request('/api/auth/activation/complete', { method: 'POST', body: { password, ...(factor || {}) } });
+/**
+ * legal — отметка о принятии соглашения ({acceptTerms, documents}), если
+ * страница её показала (только первая установка пароля пользователем).
+ */
+export const completeActivation = (password, factor = null, legal = null) => request('/api/auth/activation/complete', {
+  method: 'POST', body: { password, ...(factor || {}), ...(legal || {}) },
+});
 export const fetchActivationMfaOptions = () => request('/api/auth/activation/mfa-options', { method: 'POST', body: {} });
 
 /* Второй шаг входа: способы, вызов для ключа доступа и проверка. */
@@ -83,7 +89,10 @@ export const requestRegistration = (email) => request('/api/auth/register', { me
 export const peekRegistration = (token) => request('/api/auth/register/peek', { method: 'POST', body: { token } });
 export const startRegistration = (token) => request('/api/auth/register/start', { method: 'POST', body: { token } });
 export const fetchRegistrationContext = () => request('/api/auth/register');
-export const completeRegistration = ({ password, firstName = '' }) => request('/api/auth/register/complete', { method: 'POST', body: { password, ...(firstName ? { firstName } : {}) } });
+/** acceptTerms и documents — отметка о соглашении и редакции, которые человек видел на странице. */
+export const completeRegistration = ({ password, firstName = '', acceptTerms = false, documents = {} }) => request('/api/auth/register/complete', {
+  method: 'POST', body: { password, ...(firstName ? { firstName } : {}), acceptTerms: acceptTerms === true, documents },
+});
 
 /* Подтверждение нового email по ссылке из письма. */
 export const peekEmailChange = (token) => request('/api/auth/email-change/peek', { method: 'POST', body: { token } });
@@ -106,3 +115,27 @@ export const regenerateRecoveryCodes = () => request('/api/me/mfa/recovery-codes
 export const requestEmailChange = (newEmail) => request('/api/me/email', { method: 'POST', body: { newEmail } });
 export const requestEmailVerification = () => request('/api/me/email/verify', { method: 'POST', body: {} });
 export const revokeAllSessions = () => request('/api/me/sessions/revoke-all', { method: 'POST', body: {} });
+
+/*
+ * Документы и персональные данные (152-ФЗ). Документы — публичные; остальное —
+ * только свои данные вошедшего пользователя (id — из сессии на сервере).
+ */
+export const fetchLegalDocuments = () => request('/api/legal');
+export const fetchLegalDocument = (slug, version = null) =>
+  request(`/api/legal/${encodeURIComponent(slug)}${version ? `?version=${encodeURIComponent(version)}` : ''}`);
+export const fetchPrivacy = () => request('/api/privacy');
+export const acceptDocuments = (documents) => request('/api/privacy/accept', { method: 'POST', body: { documents } });
+export const fetchPrivacyRequests = () => request('/api/privacy/requests');
+export const createPrivacyRequest = ({ type, message = '' }) => request('/api/privacy/requests', {
+  method: 'POST', body: { type, ...(message ? { message } : {}) },
+});
+/** Все свои данные одним JSON (нужно свежее подтверждение личности — иначе 403 reauth_required). */
+export const exportMyData = () => request('/api/privacy/export');
+
+/** Пропуск к ассистенту на час: cookie без id аккаунта (сервер не связывает запросы к ассистенту с аккаунтом). */
+export const requestAssistantPass = () => request('/api/account/assistant-pass', { method: 'POST', body: {} });
+
+/** Версии документов для отметки «принимаю» — из того, что показала страница. */
+export const legalVersions = (documents) => Object.fromEntries(
+  Object.entries(documents || {}).map(([key, value]) => [key, value?.version]).filter(([, version]) => typeof version === 'string'),
+);

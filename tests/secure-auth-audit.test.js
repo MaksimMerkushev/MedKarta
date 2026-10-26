@@ -656,8 +656,12 @@ describe('Аудит 3: настоящий перезапуск сервера �
     LOG_LEVEL: 'info',
   });
 
+  // Все запущенные процессы: если проверка упала до stopApp, after() всё равно их остановит (иначе прогон зависает).
+  const children = new Set();
   const startApp = async (env) => {
     child = spawn(process.execPath, ['backend/server.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    children.add(child);
+    child.once('exit', function forget() { children.delete(this); });
     child.stdout.on('data', (chunk) => { output += chunk; });
     child.stderr.on('data', (chunk) => { output += chunk; });
     await until(async () => {
@@ -701,6 +705,7 @@ describe('Аудит 3: настоящий перезапуск сервера �
   });
   after(async () => {
     await stopApp('SIGKILL');
+    for (const running of children) running.kill('SIGKILL');
     await silent?.close();
     await smtp?.close();
     fs.rmSync(work, { recursive: true, force: true });

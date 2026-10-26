@@ -680,10 +680,11 @@ export const createAdminService = ({
         fail('confirm_required', 400, 'Для удаления введите email пользователя.');
       }
       guarded(actor, 'user.delete', target, () => {
-        store.deleteUserAuthEvents(target.id);
-        store.deleteUser(target.id);
-        audit(actor, 'user.delete', { target, details: { role: target.role } });
+        accounts.__internal.eraseUser(target, { method: 'admin_deleted' }, () => {
+          audit(actor, 'user.delete', { target, details: { role: target.role } });
+        });
       });
+      accounts.__internal.recordErasure(target.id);
       await onAccountDeleted(target.id);
       return { deleted: true };
     },

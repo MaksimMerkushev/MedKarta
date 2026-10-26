@@ -282,14 +282,28 @@ sudo ufw enable                 # порт 3001 снаружи закрыт: Nod
 ### 5. Журналы и резервные копии
 
 - Журналы сервиса — `journald`; ограничьте размер: `SystemMaxUse=200M` в
-  `/etc/systemd/journald.conf`. Журналы nginx ротирует пакетный logrotate.
+  `/etc/systemd/journald.conf`. Журналы nginx ротирует пакетный logrotate:
+  в журнале доступа — полный IP посетителя, поэтому задайте короткий срок
+  (например, `rotate 14` при `daily` в `/etc/logrotate.d/nginx`) и впишите
+  его в политику (п. 4.10) — [privacy/05](privacy/05-retention-and-destruction.md).
 - Аналитика сама удаляет файлы старше `ANALYTICS_RETENTION_DAYS` и держит
   каталог в пределах `ANALYTICS_MAX_TOTAL_MB`.
-- Раз в сутки копируйте на другую машину: `.env`, `data/doctors.full.js`,
-  `data/graph/`, `data/collected/`, `var/analytics/` и базу кабинета.
-  Без копии `.env` и полной базы восстановление после потери VPS займёт дни.
+- Раз в сутки копируйте на другую машину (в РФ —
+  [privacy/10](privacy/10-processors-and-localization.md)): `data/doctors.full.js`,
+  `data/graph/`, `data/collected/`, `var/analytics/`, **зашифрованную** копию
+  базы кабинета и `var/accounts/erasures.jsonl`. Секреты из `.env`
+  (`MFA_SECRET_KEY`, `PRIVACY_TOKEN_SECRET`, пароль SMTP, ключ модели,
+  `BACKUP_ENCRYPTION_KEY`) храните **отдельно** от копий базы — в менеджере
+  секретов или другом хранилище: копия базы рядом с ключом перестаёт быть
+  защищённой. Без секретов и полной базы восстановление после потери VPS
+  займёт дни.
 - База аккаунтов — `var/accounts/medkarta.sqlite`. Копия без остановки
-  сервиса: `sudo -u medkarta npm run accounts -- backup --out /backup/accounts-$(date +%F).sqlite`.
+  сервиса, зашифрованная (ключ `BACKUP_ENCRYPTION_KEY`, 32 байта):
+  `sudo -u medkarta npm run accounts -- backup --encrypt --out /backup/accounts-$(date +%F).enc`.
+  После восстановления из копии — `npm run accounts -- reapply-erasures`
+  (повторить удаления аккаунтов, сделанные после копии).
+- Раз в сутки сохраняйте вне сервера вывод `npm run accounts -- consents-verify`
+  (отпечаток журнала согласий).
   Каталог `var/` уже открыт на запись в unit-файле (`ReadWritePaths`).
   Первый выпуск с админ-панелью (миграция схемы 3, главный администратор) —
   по порядку из [15-deployment.md](15-deployment.md#выпуск-с-аккаунтами-и-админ-панелью).

@@ -13,6 +13,7 @@ import {
 } from '../services/account';
 import { ForcedPasswordChange, PasswordChangeForm } from '../ui/auth';
 import { ReauthProvider } from '../ui/reauth';
+import PrivacySection from './PrivacySection';
 import SecuritySection from './SecuritySection';
 import {
   Avatar, Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, RoleBadge, Skeleton, Spinner, StatusBadge, TextInput, ThemeToggle, ToastProvider,
@@ -374,9 +375,13 @@ function ProfileContent() {
                   navigate('/profile', { replace: true });
                 }} />
                 {!user.isDemo && <LoginsCard />}
+                {!user.isDemo && <PrivacySection user={user} onDeleted={() => navigate('/', { replace: true })} />}
                 <p className="flex items-start gap-2 px-1 text-[12px] leading-5 text-slate-500 dark:text-slate-400">
                   <ShieldCheck size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
-                  В аккаунте хранятся имя, email, роль, программа ДМС, избранное и история входов. Запросы к ассистенту и ваше местоположение не сохраняются.
+                  <span>
+                    В аккаунте хранятся имя, email, роль, программа ДМС, избранное и история входов. Запросы к ассистенту и ваше местоположение не сохраняются.
+                    {' '}<a href="/legal/privacy" className="underline underline-offset-2 hover:text-slate-700 dark:hover:text-slate-200">Политика обработки персональных данных</a>
+                  </span>
                 </p>
               </div>
             </div>

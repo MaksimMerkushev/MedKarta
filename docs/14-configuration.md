@@ -48,7 +48,7 @@
 | `PRIVACY_OUTBOUND_MODE` | `structured` | `structured` или `hybrid` ([07-privacy.md](07-privacy.md)) | [gateway.js](../backend/privacy/gateway.js) |
 | `PRIVACY_TOKEN_SECRET` | случайный секрет процесса | ключ HMAC для Token Vault, не короче 16 символов | [tokenVault.js](../backend/storage/tokenVault.js) |
 | `PRIVACY_TOKEN_TTL_SECONDS` | `120` | время жизни соответствия метки | [tokenVault.js](../backend/storage/tokenVault.js) |
-| `TOKEN_VAULT_BACKEND` | `memory` | `upstash` (или `redis`) — Upstash Redis по REST | [tokenVault.js](../backend/storage/tokenVault.js) |
+| `TOKEN_VAULT_BACKEND` | `memory` | `upstash` (или `redis`) — Redis по REST. Адреса облачного Upstash (`*.upstash.io`) **не используются**: хранилище вне РФ (ч. 5 ст. 18 152-ФЗ) — сервер берёт память процесса и пишет в журнал `token_vault.foreign_storage_blocked` ([privacy/10](privacy/10-processors-and-localization.md)) | [tokenVault.js](../backend/storage/tokenVault.js) |
 | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | — | доступ к Upstash | [tokenVault.js](../backend/storage/tokenVault.js) |
 | `PRIVACY_CATALOG_FACILITIES` | включено | `off` — не загружать учреждения OSM в справочник ассистента | [catalog.js](../backend/privacy/catalog.js) |
 | `ALLOW_COARSE_ORIGIN` | выключено | `on` — принимать в `/api/chat` огрублённую точку (интерфейс её не шлёт) | [chat.js](../backend/api/chat.js) |
@@ -79,6 +79,8 @@
 |---|---|---|---|
 | `ACCOUNTS` | включено | `off` — выключить аккаунты и админ-панель | [accountContext.js](../backend/api/accountContext.js) |
 | `ACCOUNTS_DB_PATH` | `var/accounts/medkarta.sqlite` | файл базы | [accountContext.js](../backend/api/accountContext.js) |
+| `LEGAL_DRAFTS_ALLOWED` | выключено | `on` — открыть регистрацию, хотя в политике и соглашении остались метки `[ТРЕБУЕТСЯ ЗАПОЛНИТЬ ОПЕРАТОРОМ]`. **Только для тестового стенда и автотестов**: при `NODE_ENV=production` или `APP_ENV=production` не действует ([privacy/13](privacy/13-operator-checklist.md)) | [registration.js](../backend/accounts/registration.js) |
+| `BACKUP_ENCRYPTION_KEY` | — | 32 байта (base64 или hex): ключ для `npm run accounts -- backup --encrypt` и `decrypt-backup` (AES-256-GCM). Храните **отдельно** от копий и от `MFA_SECRET_KEY`; нужен только там, где делают и восстанавливают копии | [backupCrypto.js](../backend/accounts/backupCrypto.js) |
 | `REGISTRATION_MODE` | `invite_only` | `open` — регистрация по email (нужна настроенная почта), `invite_only` — аккаунты только по приглашению; другое значение — `invite_only` | [registration.js](../backend/accounts/registration.js) |
 | `MFA_SECRET_KEY` | файл `var/accounts/secrets/mfa.key` | 32 байта (base64 или hex, `openssl rand -base64 32`): шифрование секретов приложений-аутентификаторов и HMAC резервных кодов; из него же выводится ключ писем со ссылками в очереди (письма переживают перезапуск). Без переменной ключ создаётся в файле (права 600) рядом с базой. **Храните копию отдельно от базы**; смена ключа делает существующие коды недействительными, а неотправленные письма со ссылками — неотправляемыми (`key_changed`) | [secrets.js](../backend/accounts/secrets.js) |
 | `WEBAUTHN_RP_ID` | домен из `PUBLIC_BASE_URL` | домен ключей доступа (passkeys); ключ, созданный для домена, работает только на нём и его поддоменах | [mfa.js](../backend/accounts/mfa.js) |

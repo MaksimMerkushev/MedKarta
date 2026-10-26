@@ -34,14 +34,15 @@ import { cookie, isSecureRequest, sessionCookie } from '../backend/api/accountHt
 import { createMailer, MAIL_LIMITS } from '../backend/mail/outbox.js';
 import { renderMail } from '../backend/mail/templates.js';
 import { passwordChecks, passwordProblem, passwordStrength } from '../shared/passwordPolicy.js';
-import { browserFor, capture, encodeCbor, linkIn, softAuthenticator, startAuthServer, TEST_ORIGIN, tokenOfLink } from './helpers/authKit.js';
+import { browserFor, capture, encodeCbor, legalAcceptance, linkIn, softAuthenticator, startAuthServer, TEST_ORIGIN, tokenOfLink } from './helpers/authKit.js';
 
 const DatabaseSync = await loadSqlite();
 const skip = !DatabaseSync && 'нужен Node 22.13+ (node:sqlite)';
 const ROOT_EMAIL = 'root@medkarta.test';
 const ROOT_PASSWORD = 'Корневой пароль для тестов 2026';
 const USER_PASSWORD = 'Зелёный чай без сахара по утрам';
-const MAIL_ENV = { SMTP_FROM: 'МедКарта <noreply@medkarta.test>', PUBLIC_BASE_URL: TEST_ORIGIN };
+// LEGAL_DRAFTS_ALLOWED: документы-проекты с [ТРЕБУЕТСЯ ЗАПОЛНИТЬ ОПЕРАТОРОМ] не закрывают регистрацию в тестах.
+const MAIL_ENV = { SMTP_FROM: 'МедКарта <noreply@medkarta.test>', PUBLIC_BASE_URL: TEST_ORIGIN, LEGAL_DRAFTS_ALLOWED: 'on' };
 const MINUTE = 60 * 1000;
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -71,6 +72,12 @@ const settle = async (context) => {
 };
 
 const lastMailTo = (outbox, to) => [...outbox].reverse().find((mail) => mail.to === to) || null;
+
+/** Отметка «принимаю соглашение» с действующими редакциями — как её отправляет форма регистрации. */
+const accepted = (context) => ({
+  acceptTerms: true,
+  documents: { terms: context.documents.current('terms').version, privacy_policy: context.documents.current('privacy_policy').version },
+});
 
 /* ------------------------------------------------------------------------ */
 
@@ -246,7 +253,12 @@ describe('Регистрация по email', { skip }, () => {
     const weak = await tab.call('/api/auth/register/complete', { method: 'POST', body: { password: 'Короткий1' } });
     assert.equal(weak.status, 400);
     assert.equal(weak.body.code, 'weak_password');
-    const done = await tab.call('/api/auth/register/complete', { method: 'POST', body: { password: USER_PASSWORD, firstName: 'Ольга' } });
+    const unaccepted = await tab.call('/api/auth/register/complete', { method: 'POST', body: { password: USER_PASSWORD, firstName: 'Ольга' } });
+    assert.equal(unaccepted.status, 400, 'без отметки о соглашении аккаунт не создаётся');
+    assert.equal(unaccepted.body.code, 'terms_required');
+    assert.equal(context.store.getUserByEmail('olga.ivanova@medkarta.test'), null);
+    assert.deepEqual(start.body.context.documents.terms.version, context.documents.current('terms').version, 'форма показывает действующую редакцию');
+    const done = await tab.call('/api/auth/register/complete', { method: 'POST', body: { password: USER_PASSWORD, firstName: 'Ольга', ...accepted(context) } });
     assert.equal(done.status, 200, JSON.stringify(done.body));
     assert.equal(done.body.user.role, 'user');
     assert.equal(done.body.user.emailVerified, true);
@@ -323,8 +335,8 @@ describe('Регистрация по email', { skip }, () => {
     const twin = browserFor(base);
     for (const [name, value] of winner.jar) twin.jar.set(name, value);
     const results = await Promise.all([
-      winner.call('/api/auth/register/complete', { method: 'POST', body: { password: USER_PASSWORD } }),
-      twin.call('/api/auth/register/complete', { method: 'POST', body: { password: USER_PASSWORD } }),
+      winner.call('/api/auth/register/complete', { method: 'POST', body: { password: USER_PASSWORD, ...accepted(context) } }),
+      twin.call('/api/auth/register/complete', { method: 'POST', body: { password: USER_PASSWORD, ...accepted(context) } }),
     ]);
     assert.deepEqual(results.map((result) => result.status).sort(), [200, 410]);
     assert.equal(context.store.listUsers({ filters: { q: 'two.tabs' }, now: Date.now() }).total, 1);
@@ -345,7 +357,7 @@ describe('Регистрация по email', { skip }, () => {
     const token = tokenOfLink(linkIn(lastMailTo(outbox, 'race.email@medkarta.test').text));
     await tab.call('/api/auth/register/start', { method: 'POST', body: { token } });
     context.store.createUser({ id: randomBytes(16).toString('hex'), email: 'race.email@medkarta.test', firstName: 'Другой', now: Date.now() });
-    const done = await tab.call('/api/auth/register/complete', { method: 'POST', body: { password: USER_PASSWORD } });
+    const done = await tab.call('/api/auth/register/complete', { method: 'POST', body: { password: USER_PASSWORD, ...accepted(context) } });
     assert.equal(done.status, 409);
     assert.equal(done.body.code, 'email_taken');
   });
@@ -705,8 +717,10 @@ describe('Второй фактор, админ-панель и суперадм
       assert.equal(response.status, 201, JSON.stringify(response.body));
       const tab = browserFor(base);
       const token = tokenOfLink(response.body.link);
-      await tab.call('/api/auth/activation/start', { method: 'POST', body: { token } });
-      const done = await tab.call('/api/auth/activation/complete', { method: 'POST', body: { password: passwords[role] } });
+      const started = await tab.call('/api/auth/activation/start', { method: 'POST', body: { token } });
+      // Пользователь принимает соглашение при первой установке пароля; сотрудник — нет (роль не user).
+      assert.equal(Boolean(started.body.context.legal), role === 'user', role);
+      const done = await tab.call('/api/auth/activation/complete', { method: 'POST', body: { password: passwords[role], ...legalAcceptance(started.body.context) } });
       assert.equal(done.status, 200, JSON.stringify(done.body));
       const key = softAuthenticator();
       tab.password = passwords[role];
@@ -864,7 +878,7 @@ describe('Сессии, восстановление и смена email для 
     await settle(context);
     const token = tokenOfLink(linkIn(lastMailTo(outbox, 'anna@medkarta.test').text));
     await tab.call('/api/auth/register/start', { method: 'POST', body: { token } });
-    await tab.call('/api/auth/register/complete', { method: 'POST', body: { password: USER_PASSWORD } });
+    await tab.call('/api/auth/register/complete', { method: 'POST', body: { password: USER_PASSWORD, ...accepted(context) } });
   });
   after(() => server?.close());
 
@@ -1061,8 +1075,11 @@ describe('Миграция базы: схема 4 → 6', { skip }, () => {
 
       const { context } = makeContext({ file });
       const { store } = context;
-      assert.equal(store.health().schemaVersion, 6);
+      assert.equal(store.health().schemaVersion, 7);
       assert.ok(store.migrationBackup && fs.existsSync(store.migrationBackup), 'копия базы перед миграцией');
+      // Схема 7: журнал согласий и обращения субъектов — пустые; отметок задним числом миграция не создаёт.
+      assert.equal(store.countConsentRecords(), 0);
+      assert.equal(store.listPrivacyRequests({}).total, 0);
       assert.equal(fs.statSync(store.migrationBackup).mode & 0o777, 0o600);
       const owner = store.getUserByEmail('owner@medkarta.test');
       assert.equal(owner.role, 'superadmin');
@@ -1073,7 +1090,7 @@ describe('Миграция базы: схема 4 → 6', { skip }, () => {
       assert.ok(result.session, 'старый пароль работает (пароль владельца не менялся)');
       assert.match(store.getUserByEmail('owner@medkarta.test').passwordHash, /^scrypt2\$/, 'хэш пересчитан в новый формат');
       store.close();
-      // Повторный запуск: схема уже 6 — новой копии не делается.
+      // Повторный запуск: схема уже 7 — новой копии не делается.
       const again = makeContext({ file });
       assert.equal(again.context.store.migrationBackup, null);
       again.context.store.close();

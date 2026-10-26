@@ -144,10 +144,30 @@ export const createUpstashStore = ({ url, token, fetchImpl = fetch } = {}) => {
   });
 };
 
+/*
+ * Облачный Upstash (*.upstash.io) — базы за пределами России: запись туда
+ * соответствий токенов (а среди них бывают имена и телефоны из запросов
+ * пользователей) нарушала бы ч. 5 ст. 18 152-ФЗ. Такой адрес не
+ * используется: хранилище остаётся в памяти процесса, в журнал — ошибка.
+ * Совместимый REST-сервис на своём сервере в России (другой адрес) — можно.
+ */
+export const isForeignVaultUrl = (url) => {
+  try {
+    const host = new URL(String(url)).hostname.toLowerCase();
+    return host === 'upstash.io' || host.endsWith('.upstash.io');
+  } catch {
+    return false;
+  }
+};
+
 /** Выбор бэкенда по окружению. По умолчанию — память. */
-export const createStoreFromEnv = (env = process.env) => {
+export const createStoreFromEnv = (env = process.env, { onForeign = () => {} } = {}) => {
   const backend = (env.TOKEN_VAULT_BACKEND || 'memory').toLowerCase();
   if (backend === 'upstash' || backend === 'redis') {
+    if (isForeignVaultUrl(env.UPSTASH_REDIS_REST_URL)) {
+      onForeign();
+      return createMemoryStore();
+    }
     return createUpstashStore({
       url: env.UPSTASH_REDIS_REST_URL,
       token: env.UPSTASH_REDIS_REST_TOKEN,

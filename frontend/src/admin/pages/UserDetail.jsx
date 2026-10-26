@@ -579,7 +579,41 @@ function SecurityTab({ data, onChanged }) {
         )}
         {blocks.error && <ErrorState error={blocks.error} onRetry={blocks.reload} />}
       </Card>
+
+      <ConsentsCard user={user} />
     </div>
+  );
+}
+
+const CONSENT_ACTIONS = { granted: 'принято', withdrawn: 'отозвано', closed: 'закрыто' };
+const CONSENT_KINDS = { acceptance: 'Соглашение', acknowledgement: 'Политика', consent: 'Согласие' };
+
+/** Журнал принятия документов и согласий (только для права privacy.requests): чтение, без правки. */
+function ConsentsCard({ user }) {
+  const { can } = useAdmin();
+  const allowed = can('privacy.requests');
+  const consents = useApi(() => (allowed ? api.get(`/api/admin/users/${user.id}/consents`) : Promise.resolve(null)), [user.id, allowed]);
+  if (!allowed) return null;
+  return (
+    <Card title="Документы и согласия" description="Журнал только дополняется; изменить или удалить запись нельзя ни пользователю, ни сотрудникам." bodyClassName="p-0">
+      {consents.error && <ErrorState error={consents.error} onRetry={consents.reload} />}
+      {consents.data && consents.data.history.length === 0 && (
+        <EmptyState title="Записей нет" description={consents.data.pending.length > 0 ? 'Пользователь ещё не принял действующую редакцию — её предложат при входе.' : undefined} />
+      )}
+      {consents.data && consents.data.history.length > 0 && (
+        <ul className="divide-y divide-slate-100 dark:divide-slate-800" data-testid="user-consents">
+          {consents.data.history.map((item) => (
+            <li key={item.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-[13px]">
+              <span className="w-36 shrink-0 tabular-nums text-slate-500 dark:text-slate-400">{formatDateTime(item.at)}</span>
+              <Badge tone={item.action === 'granted' ? 'green' : 'slate'}>{CONSENT_KINDS[item.kind] || item.kind}</Badge>
+              <span className="text-slate-700 dark:text-slate-200">{item.version ? `редакция ${item.version}` : ''} — {CONSENT_ACTIONS[item.action] || item.action}</span>
+              <span className="text-slate-500 dark:text-slate-400">{item.method}</span>
+              {item.documentHash && <span className="font-mono text-[11px] text-slate-400" title={item.documentHash}>{item.documentHash.slice(0, 12)}…</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
   );
 }
 

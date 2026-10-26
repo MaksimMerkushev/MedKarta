@@ -59,6 +59,16 @@ const REGISTER_PATH = '/api/auth/register';
 const MAX_BODY_BYTES = 4 * 1024;
 const MFA_BODY_BYTES = 16 * 1024;
 
+/** Редакции документов, которые видел человек: {terms: '2026-10-26', privacy_policy: '…'} — только строки. */
+const plainVersions = (value) => {
+  const result = {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return result;
+  for (const key of ['terms', 'privacy_policy']) {
+    if (typeof value[key] === 'string' && value[key].length <= 20) result[key] = value[key];
+  }
+  return result;
+};
+
 const ROUTES = new Map([
   ['/api/auth/access-link', { POST: 'request' }],
   ['/api/auth/activation', { GET: 'context' }],
@@ -187,10 +197,13 @@ export const createActivationHandler = ({
         }
         case 'register': {
           if (!registration.enabled) {
+            const reason = registration.closedReason;
             respondJson(res, 403, {
-              error: registration.mode === 'open'
-                ? 'Регистрация временно недоступна: не настроена отправка писем. Попробуйте позже.'
-                : 'Регистрация в МедКарте — по приглашению. Если вам нужен доступ, обратитесь к администратору.',
+              error: reason === 'invite_only'
+                ? 'Регистрация в МедКарте — по приглашению. Если вам нужен доступ, обратитесь к администратору.'
+                : reason === 'mail_disabled'
+                  ? 'Регистрация временно недоступна: не настроена отправка писем. Попробуйте позже.'
+                  : 'Регистрация временно недоступна: готовятся документы об обработке персональных данных.',
               code: 'registration_closed',
             });
             return;
@@ -241,12 +254,14 @@ export const createActivationHandler = ({
           return;
         }
         case 'regComplete': {
-          const extra = Object.keys(body).filter((key) => !['password', 'firstName'].includes(key));
+          const extra = Object.keys(body).filter((key) => !['password', 'firstName', 'acceptTerms', 'documents'].includes(key));
           if (extra.length > 0) {
             respondJson(res, 400, { error: `Недопустимые поля: ${extra.slice(0, 5).join(', ')}.`, code: 'unexpected_field' });
             return;
           }
-          const result = await registration.complete(currentRegistration(), { password: body.password, firstName: body.firstName || '' }, client);
+          const result = await registration.complete(currentRegistration(), {
+            password: body.password, firstName: body.firstName || '', acceptTerms: body.acceptTerms === true, documents: plainVersions(body.documents),
+          }, client);
           const previous = tokenOf(req);
           if (previous) accounts.logout(previous);
           res.setHeader('Set-Cookie', [sessionCookie(req, result.session.token, result.session.expiresAt), registerCookie('', 0)]);
@@ -293,13 +308,15 @@ export const createActivationHandler = ({
           return;
         }
         case 'complete': {
-          const extra = Object.keys(body).filter((key) => !['password', 'method', 'code', 'credential'].includes(key));
+          const extra = Object.keys(body).filter((key) => !['password', 'method', 'code', 'credential', 'acceptTerms', 'documents'].includes(key));
           if (extra.length > 0) {
             respondJson(res, 400, { error: `Недопустимые поля: ${extra.slice(0, 5).join(', ')}.`, code: 'unexpected_field' });
             return;
           }
           const factor = body.method ? { method: body.method, code: body.code, credential: body.credential } : null;
-          const result = await invitations.complete(currentContext(), body.password, { ...clientContext(req), factor });
+          const result = await invitations.complete(currentContext(), body.password, {
+            ...clientContext(req), factor, legal: { acceptTerms: body.acceptTerms === true, documents: plainVersions(body.documents) },
+          });
           // В этом браузере мог быть вход в другой аккаунт — та сессия завершается.
           const previous = tokenOf(req);
           if (previous) accounts.logout(previous);

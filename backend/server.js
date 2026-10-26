@@ -20,6 +20,7 @@ import { getAccountContext } from './api/accountContext.js';
 import activationHandler, { ACTIVATION_PATHS } from './api/activation.js';
 import adminHandler, { ADMIN_PREFIX } from './api/admin.js';
 import meHandler, { ME_PREFIX } from './api/me.js';
+import privacyHandler, { LEGAL_PREFIX, PRIVACY_PREFIX } from './api/privacy.js';
 import chatHandler from './api/chat.js';
 import { withChatAccess } from './api/chatAccess.js';
 import configHandler from './api/config.js';
@@ -222,6 +223,9 @@ const apiPathOf = (url) => {
 const PREFIX_HANDLERS = [
   [ADMIN_PREFIX, adminHandler],
   [ME_PREFIX, meHandler],
+  // Документы (публично) и права субъекта ПДн (api/privacy.js).
+  [LEGAL_PREFIX, privacyHandler],
+  [PRIVACY_PREFIX, privacyHandler],
 ];
 const handlerFor = (pathname) => API_HANDLERS.get(pathname)
   || PREFIX_HANDLERS.find(([prefix]) => pathname === prefix || pathname.startsWith(`${prefix}/`))?.[1]

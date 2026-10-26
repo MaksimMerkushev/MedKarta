@@ -20,11 +20,12 @@ import { ArrowLeft, LogIn, MailCheck, Send, UserPlus } from 'lucide-react';
 
 import { passwordProblem } from '@shared/passwordPolicy.js';
 import {
-  completeRegistration, fetchRegistrationContext, peekRegistration, requestRegistration, startRegistration,
+  completeRegistration, fetchRegistrationContext, legalVersions, peekRegistration, requestRegistration, startRegistration,
 } from '../services/account';
 import { navigate, useLocation } from '../ui/navigation';
 import AuthLayout from './AuthLayout';
 import AutoHeight from './AutoHeight';
+import LegalAcceptance from './LegalAcceptance';
 import { AuthSkeleton } from './LoginPage';
 import { AuthButton, FormError, PasswordField, PasswordRequirements, PasswordStrength, SuccessMark, TextAction, TextField } from './parts';
 import { homeFor, useAuthEnvironment } from './environment';
@@ -138,7 +139,8 @@ function RequestForm({ initialEmail, onSent }) {
         </Motion.div>
       </div>
       <p className="mt-6 text-[13px] leading-5 text-slate-500 dark:text-slate-400">
-        МедКарта — справочный сервис: в аккаунте хранятся избранное, программа ДМС и демо-записи. Медицинские документы сюда не загружаются.
+        МедКарта — справочный сервис: в аккаунте хранятся избранное, программа ДМС и демо-записи. Медицинские документы сюда не загружаются, а запросы к ассистенту с аккаунтом не связываются.
+        {' '}<a href="/legal/privacy" target="_blank" rel="noopener" className="underline underline-offset-2 hover:text-slate-700 dark:hover:text-slate-200">Политика обработки персональных данных</a>
       </p>
     </form>
   );
@@ -191,14 +193,21 @@ function SentNotice({ email, onChangeEmail }) {
   );
 }
 
-function RegistrationClosed({ mode }) {
+const CLOSED_TEXT = {
+  mail_disabled: 'Сейчас не работает отправка писем, без неё подтвердить email нельзя. Попробуйте позже.',
+  legal_documents_incomplete: 'Готовятся документы об обработке персональных данных. Пока они не опубликованы, новые аккаунты не создаются. Карта, поиск и избранное в браузере работают и без аккаунта.',
+  legal_unavailable: 'Документы об обработке персональных данных временно недоступны. Попробуйте позже.',
+};
+
+function RegistrationClosed({ mode, reason }) {
+  const invite = mode !== 'open' || reason === 'invite_only';
   return (
-    <div data-testid="register-closed">
-      <Heading>{mode === 'open' ? 'Регистрация временно недоступна' : 'Регистрация по приглашению'}</Heading>
+    <div data-testid="register-closed" data-reason={reason || mode}>
+      <Heading>{invite ? 'Регистрация по приглашению' : 'Регистрация временно недоступна'}</Heading>
       <p className="mb-6 mt-3 text-[15px] leading-[22px] text-slate-600 dark:text-slate-300">
-        {mode === 'open'
-          ? 'Сейчас не работает отправка писем, без неё подтвердить email нельзя. Попробуйте позже.'
-          : 'Аккаунты в МедКарте выдаёт администратор: он пришлёт приглашение на вашу почту. Карта, поиск и избранное в браузере работают и без аккаунта.'}
+        {invite
+          ? 'Аккаунты в МедКарте выдаёт администратор: он пришлёт приглашение на вашу почту. Карта, поиск и избранное в браузере работают и без аккаунта.'
+          : CLOSED_TEXT[reason] || CLOSED_TEXT.mail_disabled}
       </p>
       <div className="space-y-3">
         <AuthButton icon={LogIn} onClick={() => navigate('/login')}>Ко входу</AuthButton>
@@ -233,7 +242,7 @@ function RequestPage() {
     );
   } else if (env.status === 'error' || !env.features.registration) {
     key = 'closed';
-    content = <RegistrationClosed mode={env.features.registrationMode} />;
+    content = <RegistrationClosed mode={env.features.registrationMode} reason={env.features.registrationClosed} />;
   } else if (sentTo) {
     key = 'sent';
     content = <SentNotice email={sentTo} onChangeEmail={() => { setDraft(sentTo); setSentTo(''); }} />;
@@ -279,6 +288,10 @@ function PasswordForm({ context, onDone, onProblem }) {
   const passwordRef = useRef(null);
   const [firstName, setFirstName] = useState('');
   const [password, setPassword] = useState('');
+  // Отметка о соглашении — по умолчанию снята (152-ФЗ: согласие не может быть «по умолчанию»).
+  const [acceptTerms, setAcceptTerms] = useState(false);
+  const [documents, setDocuments] = useState(context.documents || null);
+  const [legalError, setLegalError] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
 
@@ -295,15 +308,35 @@ function PasswordForm({ context, onDone, onProblem }) {
       passwordRef.current?.focus();
       return;
     }
+    if (!acceptTerms) {
+      setLegalError('Чтобы создать аккаунт, примите пользовательское соглашение.');
+      return;
+    }
     setPending(true);
     setError('');
+    setLegalError('');
     try {
-      onDone(await completeRegistration({ password, firstName: firstName.trim() }));
+      onDone(await completeRegistration({ password, firstName: firstName.trim(), acceptTerms, documents: legalVersions(documents) }));
     } catch (failure) {
       if (['weak_password', 'busy', 'bad_name', 'breached_password'].includes(failure?.code)) {
         setError(failure.message);
         setPending(false);
         (failure.code === 'bad_name' ? nameRef : passwordRef).current?.focus();
+        return;
+      }
+      if (failure?.code === 'terms_required' || failure?.code === 'documents_changed') {
+        // Пока форма была открыта, вышла новая редакция: показываем её и спрашиваем снова.
+        if (failure.code === 'documents_changed') {
+          try {
+            const fresh = await fetchRegistrationContext();
+            setDocuments(fresh.context?.documents || documents);
+          } catch {
+            // Контекст истёк — следующая отправка покажет причину.
+          }
+          setAcceptTerms(false);
+        }
+        setLegalError(failure.message);
+        setPending(false);
         return;
       }
       onProblem(failure);
@@ -349,6 +382,16 @@ function PasswordForm({ context, onDone, onProblem }) {
           <PasswordStrength password={password} email={context.email} />
         </div>
         <FormError id={errorId} message={error} />
+        <LegalAcceptance
+          documents={documents}
+          checked={acceptTerms}
+          onChange={(value) => {
+            setAcceptTerms(value);
+            if (value) setLegalError('');
+          }}
+          error={legalError}
+          action="Создать аккаунт и войти"
+        />
         <Motion.div layout="position">
           <AuthButton type="submit" icon={LogIn} loading={pending} loadingLabel="Создаём аккаунт…" data-testid="register-complete">Создать аккаунт и войти</AuthButton>
         </Motion.div>

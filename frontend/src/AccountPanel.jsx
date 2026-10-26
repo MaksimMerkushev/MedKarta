@@ -246,10 +246,22 @@ const UserView = ({ account, insurance, today, planId, onSelectPlan, favorites, 
 
       {error && <p className="rounded-xl bg-red-50 px-3 py-2 text-[12.5px] text-red-700 dark:bg-red-900/30 dark:text-red-200" role="alert">{error}</p>}
 
+      {account.legalPending?.length > 0 && (
+        <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-[13px] leading-5 text-blue-900 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-100" data-testid="legal-pending-banner">
+          <p className="font-semibold">Документы обновились</p>
+          <p className="mt-1">Ознакомьтесь с новой редакцией и примите её в профиле, в разделе «Мои данные». До этого всё работает как прежде.</p>
+          <Link to="/profile#privacy" className="mt-2 inline-block font-semibold text-blue-700 underline underline-offset-2 dark:text-blue-300">Открыть «Мои данные»</Link>
+        </div>
+      )}
+
       <div className="rounded-2xl bg-slate-50 p-4 text-[12px] leading-5 text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
         <p className={`flex gap-2 ${user.role === 'user' ? 'mb-3' : ''}`}>
           <Info size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
-          <span>В аккаунте хранятся email, имя, роль, программа ДМС, избранное и история входов. Запросы к ассистенту и ваше местоположение не сохраняются.</span>
+          <span>
+            В аккаунте хранятся email, имя, роль, программа ДМС, избранное и история входов. Запросы к ассистенту и ваше местоположение не сохраняются.
+            {' '}<a href="/legal/privacy" target="_blank" rel="noopener" className="underline underline-offset-2 hover:text-slate-700 dark:hover:text-slate-200">Политика обработки данных</a>
+            {user.role === 'user' && <>{' · '}<Link to="/profile#privacy" className="underline underline-offset-2 hover:text-slate-700 dark:hover:text-slate-200">Мои данные</Link></>}
+          </span>
         </p>
         {user.role === 'user' && (
           <div className="flex flex-wrap gap-2">

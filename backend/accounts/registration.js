@@ -25,7 +25,16 @@
  *   open        — регистрация открыта;
  *   invite_only — только по приглашению администратора (по умолчанию).
  * Без настроенной почты регистрация выключена в любом режиме: подтвердить
- * владение ящиком нечем.
+ * владение ящиком нечем. Пока в политике обработки ПДн или пользовательском
+ * соглашении остаются незаполненные сведения об операторе (метка
+ * «[ТРЕБУЕТСЯ ЗАПОЛНИТЬ ОПЕРАТОРОМ]»), регистрация тоже закрыта: принимать
+ * условия, в которых не указано, кто оператор, нельзя. Для разработки и
+ * автотестов (не в production) — LEGAL_DRAFTS_ALLOWED=on.
+ *
+ * Шаг 4 требует принять пользовательское соглашение (отметка без
+ * предустановки, проверка на сервере) в той редакции, что видел человек; это
+ * и ознакомление с политикой записываются в журнал согласий
+ * (accounts/consents.js) в той же транзакции, что и создание аккаунта.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -77,11 +86,35 @@ const stateOf = (record, stamp) => {
  * @param {'open'|'invite_only'} [deps.mode]
  * @param {() => number} [deps.now]
  */
-export const createRegistrationService = ({ store, accounts, delivery, mailer, mode = registrationModeFromEnv(), now = () => Date.now() }) => {
+/** Можно ли открыть регистрацию с документами-черновиками (только вне production, явно). */
+export const legalDraftsAllowed = (env = process.env) =>
+  String(env.LEGAL_DRAFTS_ALLOWED || '').toLowerCase() === 'on' && env.NODE_ENV !== 'production' && env.APP_ENV !== 'production';
+
+export const createRegistrationService = ({
+  store, accounts, delivery, mailer, mode = registrationModeFromEnv(), consents = null, documents = null, env = process.env, now = () => Date.now(),
+}) => {
   const config = accounts.settings;
   const { startSession, checkNewPassword } = accounts.__internal;
 
-  const enabled = () => mode === 'open' && Boolean(delivery.emailEnabled && mailer && delivery.appUrl);
+  /** Почему регистрация закрыта (null — открыта). */
+  const closedReason = () => {
+    if (mode !== 'open') return 'invite_only';
+    if (!(delivery.emailEnabled && mailer && delivery.appUrl)) return 'mail_disabled';
+    if (!consents || !documents) return 'legal_unavailable';
+    if (!documents.readiness().ready && !legalDraftsAllowed(env)) return 'legal_documents_incomplete';
+    return null;
+  };
+  const enabled = () => closedReason() === null;
+
+  /** Действующие редакции документов, которые человек принимает при регистрации. */
+  const legalView = () => {
+    const view = {};
+    for (const key of ['terms', 'privacy_policy']) {
+      const doc = documents?.current(key);
+      if (doc) view[key] = { version: doc.version, title: doc.title, draft: doc.draft };
+    }
+    return view;
+  };
 
   const busy = (error) => {
     if (error instanceof PasswordBusyError) fail('busy', 503, 'Сервер сейчас занят — повторите через минуту.');
@@ -113,6 +146,10 @@ export const createRegistrationService = ({ store, accounts, delivery, mailer, m
     },
     get enabled() {
       return enabled();
+    },
+    /** invite_only | mail_disabled | legal_documents_incomplete | legal_unavailable | null. */
+    get closedReason() {
+      return closedReason();
     },
 
     /**
@@ -181,13 +218,13 @@ export const createRegistrationService = ({ store, accounts, delivery, mailer, m
       const stamp = now();
       const state = stateOf(record, stamp);
       if (state === 'opened' && typeof contextToken === 'string' && TOKEN.test(contextToken) && hashToken(contextToken) === record.contextHash) {
-        return { contextToken, context: { email: record.email, expiresAt: iso(record.contextExpiresAt) } };
+        return { contextToken, context: { email: record.email, expiresAt: iso(record.contextExpiresAt), documents: legalView() } };
       }
       if (state !== 'active') linkFailure(state);
       const fresh = randomBytes(32).toString('base64url');
       const contextExpiresAt = stamp + REGISTRATION_LIMITS.CONTEXT_TTL_MS;
       if (!store.openRegistration({ id: record.id, contextHash: hashToken(fresh), contextExpiresAt, now: stamp })) linkFailure('used');
-      return { contextToken: fresh, context: { email: record.email, expiresAt: iso(contextExpiresAt) } };
+      return { contextToken: fresh, context: { email: record.email, expiresAt: iso(contextExpiresAt), documents: legalView() } };
     },
 
     /** Контекст по cookie — для перезагрузки страницы; null, если его нет. */
@@ -195,14 +232,15 @@ export const createRegistrationService = ({ store, accounts, delivery, mailer, m
       if (typeof contextToken !== 'string' || !TOKEN.test(contextToken)) return null;
       const record = store.getRegistrationByContext(hashToken(contextToken));
       if (!record || stateOf(record, now()) !== 'opened') return null;
-      return { email: record.email, expiresAt: iso(record.contextExpiresAt) };
+      return { email: record.email, expiresAt: iso(record.contextExpiresAt), documents: legalView() };
     },
 
     /**
      * Задать пароль: пользователь с ролью user создан, email подтверждён,
      * вход выполнен. Имя — по желанию (его можно указать позже в профиле).
      */
-    async complete(contextToken, { password, firstName = '' } = {}, { client = null, ipPrefix = null } = {}) {
+    async complete(contextToken, { password, firstName = '', acceptTerms = false, documents: accepted = {} } = {}, { client = null, ipPrefix = null } = {}) {
+      if (!enabled()) fail('registration_closed', 403, 'Регистрация сейчас закрыта.');
       const expired = () => fail('activation_expired', 410, 'Время на создание пароля истекло. Откройте ссылку из письма заново или зарегистрируйтесь ещё раз.');
       if (typeof contextToken !== 'string' || !TOKEN.test(contextToken)) expired();
       const contextHash = hashToken(contextToken);
@@ -211,6 +249,8 @@ export const createRegistrationService = ({ store, accounts, delivery, mailer, m
       const first = firstName ? cleanPersonName(firstName) : '';
       if (first === null) fail('bad_name', 400, 'Имя: буквы, пробел, дефис.');
       await checkNewPassword(password, record.email);
+      // Соглашение — до расчёта хэша: без него аккаунт не создаётся (и редакция та, что видел человек).
+      consents.checkSignup({ acceptTerms, documents: accepted });
       const passwordHash = await hashPassword(password).catch(busy);
       const stamp = now();
       const { user, session } = store.transaction(() => {
@@ -229,6 +269,7 @@ export const createRegistrationService = ({ store, accounts, delivery, mailer, m
         });
         if (!store.useRegistration(again.id, stamp, created.id)) expired();
         store.revokeRegistrations(again.email, 'superseded', stamp);
+        consents.recordSignup(created.id, { acceptTerms, documents: accepted }, { method: 'registration_form' });
         store.addAudit({ at: stamp, action: 'user.register', actorId: created.id, actorLabel: userLabel(created), targetId: created.id, targetLabel: userLabel(created), result: 'ok', details: { role: 'user' } });
         const fresh = startSession(created, { client, ipPrefix }, { aal: 1 });
         store.recordLogin(created.id, stamp);

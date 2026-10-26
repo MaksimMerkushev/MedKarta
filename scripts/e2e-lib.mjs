@@ -173,3 +173,16 @@ export const waitForMail = async (smtp, to, { after = 0, timeout = 15_000, subje
   }
   throw new Error(`письмо на ${to} не пришло за ${timeout / 1000} с`);
 };
+
+/**
+ * Форма первой установки пароля пользователем показывает отметку «Принимаю
+ * соглашение» (по умолчанию снята). Сотрудникам и при восстановлении пароля её
+ * нет. Отметить, если она есть, — как сделал бы человек.
+ */
+export const acceptTermsIfShown = async (page) => {
+  const box = page.locator('[data-testid=legal-accept-terms]');
+  if ((await box.count()) === 0) return false;
+  expect(!(await box.isChecked()), 'отметка о соглашении стоит заранее');
+  await box.check();
+  return true;
+};

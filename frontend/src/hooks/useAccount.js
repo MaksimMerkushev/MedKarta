@@ -34,7 +34,7 @@ export const useAccount = ({ onSignedIn, onSignedOut, onGuest } = {}) => {
         if (cancelled) return;
         const features = { ...NO_FEATURES, ...(payload?.features || {}) };
         if (payload?.user) {
-          setState({ status: 'user', user: payload.user, favorites: payload.favorites || [], features });
+          setState({ status: 'user', user: payload.user, favorites: payload.favorites || [], features, legalPending: payload.legalPending || [] });
           callbacksRef.current.onSignedIn?.(payload, 'restored');
         } else {
           setState({ status: 'guest', user: null, favorites: [], features });
@@ -56,8 +56,15 @@ export const useAccount = ({ onSignedIn, onSignedOut, onGuest } = {}) => {
       user: payload.user,
       favorites: payload.favorites || [],
       features: { ...current.features, ...(payload.features || {}) },
+      legalPending: [],
     }));
     callbacksRef.current.onSignedIn?.(payload, 'login');
+    // Обновились ли документы с прошлого входа — отдельным запросом (ответ входа их не содержит).
+    fetchAccount()
+      .then((fresh) => {
+        if (fresh?.user?.id === payload.user?.id) setState((current) => ({ ...current, legalPending: fresh.legalPending || [] }));
+      })
+      .catch(() => {});
     return payload;
   }, []);
 

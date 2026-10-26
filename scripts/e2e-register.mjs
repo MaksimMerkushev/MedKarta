@@ -27,7 +27,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { startSmtpServer } from '../tests/fixtures/smtpServer.js';
-import { createServer, createSteps, expect, linkOf, requireBrowser, shotsDir, totpDevice, waitForMail } from './e2e-lib.mjs';
+import { createServer, createSteps, expect, linkOf, requireBrowser, shotsDir, totpDevice, waitForMail, acceptTermsIfShown } from './e2e-lib.mjs';
 
 const chromium = await requireBrowser();
 const SHOTS = shotsDir();
@@ -61,6 +61,8 @@ const env = {
   APP_URL: '',
   PUBLIC_BASE_URL: BASE,
   REGISTRATION_MODE: 'open',
+  // Документы — проекты с метками оператора; на тестовом стенде регистрацию это не закрывает (в production — закрывает).
+  LEGAL_DRAFTS_ALLOWED: 'on',
   MFA_SECRET_KEY: randomBytes(32).toString('base64'),
 };
 const server = createServer({ env, base: BASE });
@@ -166,6 +168,15 @@ try {
     await page.waitForSelector('[data-testid=auth-error]');
     await page.fill('[data-testid=register-password-input]', PASSWORD);
     expect(Number(await page.getAttribute('[data-testid=password-strength]', 'data-score')) >= 2, 'индикатор надёжности не показал оценку');
+    // Соглашение — отдельная отметка, по умолчанию снята; политика — ссылка с пояснением, без отметки «согласен».
+    expect(!(await page.isChecked('[data-testid=legal-accept-terms]')), 'отметка о соглашении стоит заранее');
+    expect(/^\/legal\/terms\?version=/.test(await page.getAttribute('[data-testid=legal-terms-link]', 'href')), 'ссылка на соглашение — не на редакцию');
+    expect(/^\/legal\/privacy\?version=/.test(await page.getAttribute('[data-testid=legal-policy-link]', 'href')), 'ссылка на политику — не на редакцию');
+    expect((await page.locator('[data-testid=register-password] input[type=checkbox]').count()) === 1, 'на форме больше одной отметки (рассылки, «согласия на всё»)');
+    await page.click('[data-testid=register-complete]');
+    await page.waitForSelector('[data-testid=legal-error]');
+    expect(page.url().includes('/register/confirm'), 'без отметки форма ушла');
+    await page.check('[data-testid=legal-accept-terms]');
     await page.click('[data-testid=register-complete]');
     await page.waitForSelector('[data-testid=register-success]');
     await page.waitForURL((url) => url.pathname === '/', { timeout: 8000 });
@@ -186,6 +197,7 @@ try {
     await page.click('[data-testid=register-continue]');
     await page.waitForSelector('[data-testid=register-password-input]');
     await page.fill('[data-testid=register-password-input]', 'Ольга-и-белые-ночи-2026');
+    await page.check('[data-testid=legal-accept-terms]');
     await settle(page);
     await noOverflow(page, 'регистрация: пароль');
     await shot(page, 'register-375-4-password');
@@ -260,6 +272,7 @@ try {
     await page.click('[data-testid=activation-accept]');
     await page.fill('[data-testid=activation-password-input]', 'Осенний-дождь-над-Волгой');
     const changedAt = smtp.messages.length;
+    await acceptTermsIfShown(page);
     await page.click('[data-testid=activation-submit]');
     await page.waitForSelector('[data-testid=activation-success]');
     await waitForMail(smtp, 'ivan.novikov@medkarta.test', { after: changedAt, subject: /Пароль изменён/u });
@@ -364,6 +377,7 @@ try {
     await page.goto(link, { waitUntil: 'domcontentloaded' });
     await page.click('[data-testid=activation-accept]');
     await page.fill('[data-testid=activation-password-input]', NEW);
+    await acceptTermsIfShown(page);
     await page.click('[data-testid=activation-submit]');
     // После пароля — второй фактор; пароль ещё не изменён, сессии нет.
     await page.waitForSelector('[data-testid=activation-mfa]');
@@ -409,6 +423,68 @@ try {
     }
     for (const token of tokens) expect(!server.state.output.includes(token), 'токен найден в журнале сервера');
     expect(!/#token=/.test(server.state.output), 'ссылка с токеном в журнале сервера');
+  });
+
+  console.log('Персональные данные (152-ФЗ):');
+  await step('Документы: политика и соглашение открываются со ссылок, проект помечен; на телефоне без прокрутки вбок', async () => {
+    const page = await newPage({ width: 375 });
+    await page.goto(`${BASE}/register`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('[data-testid=footer-privacy]');
+    await page.click('[data-testid=footer-privacy]');
+    await page.waitForSelector('[data-testid=legal-document]');
+    expect(page.url().endsWith('/legal/privacy'), `адрес: ${page.url()}`);
+    await page.waitForSelector('[data-testid=legal-document-draft]');
+    const text = await page.textContent('[data-testid=legal-document]');
+    expect(/Политика обработки персональных данных/.test(text) && /\[ТРЕБУЕТСЯ ЗАПОЛНИТЬ ОПЕРАТОРОМ\]/.test(text), 'текст политики не показан');
+    const sizes = await page.evaluate(() => {
+      const scroller = document.querySelector('[data-testid=legal-page]');
+      return { doc: document.documentElement.scrollWidth - window.innerWidth, page: scroller.scrollWidth - scroller.clientWidth };
+    });
+    expect(sizes.doc <= 0 && sizes.page <= 0, `документ: горизонтальная прокрутка ${JSON.stringify(sizes)}`);
+    await settle(page);
+    await shot(page, 'legal-privacy-375');
+    await page.goto(`${BASE}/legal/terms?version=1999-01-01`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('[data-testid=legal-error-page]');
+    await page.context().close();
+  });
+
+  await step('«Мои данные»: принятые редакции, обращение со сроком, выгрузка после подтверждения личности', async () => {
+    const page = await newPage();
+    const email = 'anna.data@medkarta.test';
+    const password = 'Тихая-набережная-Кабана-2026';
+    const { link } = await requestRegistration(page, email);
+    tokens.push(tokenOf(link));
+    await page.goto(link, { waitUntil: 'domcontentloaded' });
+    await page.click('[data-testid=register-continue]');
+    await page.fill('[data-testid=register-password-input]', password);
+    await page.check('[data-testid=legal-accept-terms]');
+    await page.click('[data-testid=register-complete]');
+    await page.waitForSelector('[data-testid=register-success]');
+    await page.goto(`${BASE}/profile#privacy`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('[data-testid=privacy-section]');
+    expect((await page.locator('[data-testid=privacy-history] li').count()) === 2, 'в истории не две записи (соглашение и политика)');
+    await page.waitForSelector('[data-testid=privacy-no-consents]');
+    await page.selectOption('[data-testid=privacy-request-type]', 'access');
+    await page.fill('[data-testid=privacy-request-message]', 'Прошу сообщить, какие данные хранятся. Текст для проверки.');
+    const before = smtp.messages.length;
+    await page.click('[data-testid=privacy-request-submit]');
+    await page.waitForSelector('[data-testid=privacy-requests] li');
+    const mail = await waitForMail(smtp, email, { after: before, subject: /Обращение по персональным данным получено/u });
+    expect(!/Прошу сообщить/.test(mail.text), 'текст обращения попал в письмо');
+    await sqlite((db) => db.prepare('UPDATE sessions SET reauth_at = 1').run());
+    const download = page.waitForEvent('download');
+    await page.click('[data-testid=privacy-export]');
+    await page.waitForSelector('[data-testid=reauth-dialog]');
+    await page.fill('[data-testid=reauth-password]', password);
+    await page.click('[data-testid=reauth-submit]');
+    const file = await download;
+    const data = JSON.parse(fs.readFileSync(await file.path(), 'utf8'));
+    expect(data.account?.email === email && data.documentsAndConsents?.length === 2 && data.privacyRequests?.length === 1, 'выгрузка неполная');
+    expect(!/passwordHash|scrypt2\$|tokenHash|secretEnc/.test(JSON.stringify(data)), 'в выгрузке секреты');
+    await settle(page);
+    await noOverflow(page, 'профиль: мои данные');
+    await shot(page, 'profile-privacy-1440');
+    await page.context().close();
   });
 
   await step('Ошибок JavaScript на страницах нет', async () => {

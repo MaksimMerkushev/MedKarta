@@ -253,15 +253,46 @@ cd /srv/medkarta/app && sudo -u medkarta git pull && sudo -u medkarta npm ci \
 (то же и завершить все сессии) или `restore-admin --email …` на сервере
 ([accounts.md](accounts.md#потеря-доступа)).
 
+### Персональные данные: документы, журнал согласий, обращения (схема 7)
+
+Политика и соглашение на сайте (`/legal/*`), отметка о соглашении при
+регистрации и первой установке пароля, журнал согласий, «Мои данные» в
+профиле, «Обращения по ПДн» в админ-панели, пропуск к ассистенту без id
+аккаунта, сведения о здоровье — только локально. Подробности и что остаётся
+за оператором — [privacy/README.md](privacy/README.md). Порядок:
+
+1. Копия базы (`backup --encrypt --out /backup/accounts-before-v7.enc`, ключ
+   `BACKUP_ENCRYPTION_KEY`); сервер сам сделает `medkarta.sqlite.before-v7-….bak`.
+2. `git pull`, `npm ci` (новых зависимостей нет), `npm test`, `npm run lint`,
+   `npm run build`.
+3. **Не задавать** `LEGAL_DRAFTS_ALLOWED` на боевом сервере. Пока в
+   `legal/*.md` есть метки `[ТРЕБУЕТСЯ ЗАПОЛНИТЬ ОПЕРАТОРОМ]`, открытая
+   регистрация закрыта (`npm run accounts -- legal-status`); вход,
+   приглашения и всё остальное работают.
+4. Перезапуск. Миграция 6 → 7 добавляет две таблицы; аккаунты, пароли,
+   факторы и сессии сохраняются. Пользователям, зарегистрированным раньше,
+   при входе предлагается принять документы (не блокирует работу).
+5. Если на сервере задан `TOKEN_VAULT_BACKEND=upstash` с `*.upstash.io` —
+   убрать: такой адрес теперь игнорируется (`token_vault.foreign_storage_blocked`).
+6. `npm run accounts -- status` — схема 7; `consents-verify` — цепочки целы.
+7. Сотрудникам с правом `privacy.requests` — порядок ответа на обращения
+   ([privacy/06-subject-requests.md](privacy/06-subject-requests.md)).
+
+Откат — прежний код и копия базы шага 1 (схема 6 не откроет базу схемы 7).
+Метки удаления (`erasures.jsonl`) после отката оставить: они нужны для
+повторного удаления.
+
 ### Резервные копии
 
-Раз в сутки на другую машину: `.env`, `data/doctors.full.js`, `data/graph/`,
-`data/collected/`, `var/analytics/`, базы `var/accounts/medkarta.sqlite` и
-`var/demo/booking.sqlite`. Горячая копия базы аккаунтов (целостный снимок
-через `VACUUM INTO`, права 600):
+Раз в сутки на другую машину (в РФ): `data/doctors.full.js`, `data/graph/`,
+`data/collected/`, `var/analytics/`, `var/demo/booking.sqlite`,
+`var/accounts/erasures.jsonl` и **зашифрованная** копия базы аккаунтов
+(целостный снимок через `VACUUM INTO`, AES-256-GCM). Секреты из `.env` —
+отдельно от копий базы ([deployment.md](deployment.md)):
 
 ```bash
-sudo -u medkarta npm run accounts -- backup --out /backup/accounts-$(date +%F).sqlite
+sudo -u medkarta BACKUP_ENCRYPTION_KEY=… npm run accounts -- backup --encrypt --out /backup/accounts-$(date +%F).enc
+# восстановление: decrypt-backup → замена базы → reapply-erasures
 ```
 
 ### Перед выкладкой

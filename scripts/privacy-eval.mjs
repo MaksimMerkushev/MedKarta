@@ -66,9 +66,12 @@ const main = async () => {
   line('Примеров всего', o.samples);
   line('С персональными данными', o.piiSamples);
   line('  утечка (что-то ушло модели)', `${o.leakedSamples} (${percent(o.leakRate)})`);
-  line('  ушло модели обезличенным', percent(o.piiSentRate));
+  line('  ушло модели обезличенным (без сведений о здоровье)', percent(o.piiSentRate));
   line('  ответили локально, без модели', percent(o.piiLocalRate));
-  line('Обычных запросов', o.benignSamples);
+  line('Со сведениями о здоровье (только локально)', o.healthSamples);
+  line('  ушло модели (должно быть 0)', o.healthSent);
+  line('Обычных запросов (без сведений о здоровье)', o.benignSamples);
+  line('  ещё с медицинской лексикой — локально', o.benignHealthLocal);
   line('  дошли до модели', percent(o.benignSentRate));
   line('  дошли без изменений', percent(o.benignVerbatimRate));
   line('  испорчены метками персональных данных', percent(o.benignTokenizedRate));

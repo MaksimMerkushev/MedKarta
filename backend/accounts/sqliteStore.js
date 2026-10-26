@@ -30,7 +30,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 
 /** Строка для поиска без учёта регистра: LIKE в SQLite не знает кириллицы. */
 export const searchTextOf = ({ firstName = '', lastName = '', email = '', id = '' }) =>
@@ -390,6 +390,67 @@ const MIGRATIONS = [
   ALTER TABLE mfa_factors ADD COLUMN user_verified INTEGER;
   ALTER TABLE mail_outbox ADD COLUMN expires_at INTEGER;
   `,
+  /*
+   * Схема 7 — учёт по 152-ФЗ.
+   *   consent_log — журнал принятия документов и согласий: только добавление
+   *   (UPDATE запрещён триггером), у каждой записи — хэш, сцепленный с
+   *   предыдущей записью того же человека (подмена или удаление записи из
+   *   середины видны при проверке). Внешнего ключа на users нет: после
+   *   удаления аккаунта записи остаются доказательством того, на каком
+   *   основании шла обработка, и удаляются только через 3 года после
+   *   последней записи (триггер не даёт удалить раньше и пока аккаунт есть).
+   *   В записи нет email, IP и User-Agent — только id аккаунта, цель,
+   *   редакция документа и её SHA-256, способ и время.
+   *   privacy_requests — обращения субъектов ПДн со сроками ответа.
+   */
+  `
+  CREATE TABLE consent_log (
+    seq           INTEGER PRIMARY KEY AUTOINCREMENT,
+    id            TEXT NOT NULL UNIQUE,
+    user_id       TEXT NOT NULL,
+    purpose       TEXT NOT NULL,
+    kind          TEXT NOT NULL CHECK (kind IN ('acceptance', 'acknowledgement', 'consent')),
+    action        TEXT NOT NULL CHECK (action IN ('granted', 'withdrawn', 'closed')),
+    document      TEXT,
+    version       TEXT,
+    document_hash TEXT,
+    method        TEXT NOT NULL,
+    at            INTEGER NOT NULL,
+    prev_hash     TEXT NOT NULL,
+    hash          TEXT NOT NULL UNIQUE
+  );
+  CREATE INDEX consent_log_user ON consent_log(user_id, seq);
+  CREATE TRIGGER consent_log_append_only BEFORE UPDATE ON consent_log
+  BEGIN
+    SELECT RAISE(ABORT, 'consent_log is append-only');
+  END;
+  CREATE TRIGGER consent_log_retention BEFORE DELETE ON consent_log
+  WHEN EXISTS (SELECT 1 FROM users WHERE id = OLD.user_id)
+    OR (SELECT MAX(at) FROM consent_log WHERE user_id = OLD.user_id) > CAST(strftime('%s', 'now') AS INTEGER) * 1000 - 94608000000
+  BEGIN
+    SELECT RAISE(ABORT, 'consent_log retention: account exists or less than 3 years passed');
+  END;
+
+  CREATE TABLE privacy_requests (
+    id               TEXT PRIMARY KEY,
+    user_id          TEXT REFERENCES users(id) ON DELETE SET NULL,
+    subject_label    TEXT NOT NULL,
+    type             TEXT NOT NULL CHECK (type IN ('access', 'rectify', 'restrict', 'erase', 'withdraw', 'other')),
+    status           TEXT NOT NULL CHECK (status IN ('received', 'in_progress', 'completed', 'rejected')),
+    message          TEXT,
+    created_at       INTEGER NOT NULL,
+    due_at           INTEGER NOT NULL,
+    extended_at      INTEGER,
+    extension_reason TEXT,
+    closed_at        INTEGER,
+    response         TEXT,
+    handled_by       TEXT,
+    handled_label    TEXT,
+    updated_at       INTEGER NOT NULL
+  );
+  CREATE INDEX privacy_requests_user ON privacy_requests(user_id, created_at);
+  CREATE INDEX privacy_requests_status ON privacy_requests(status, due_at);
+  `,
 ];
 
 /** Миграции по порядку — для тестов совместимости со старыми базами. */
@@ -497,6 +558,44 @@ const toRegistration = (row) => (row
     deliveryStatus: row.delivery_status,
     ipPrefix: row.ip_prefix ?? null,
     userId: row.user_id ?? null,
+  }
+  : null);
+
+const toConsentRecord = (row) => (row
+  ? {
+    seq: row.seq,
+    id: row.id,
+    userId: row.user_id,
+    purpose: row.purpose,
+    kind: row.kind,
+    action: row.action,
+    document: row.document ?? null,
+    version: row.version ?? null,
+    documentHash: row.document_hash ?? null,
+    method: row.method,
+    at: row.at,
+    prevHash: row.prev_hash,
+    hash: row.hash,
+  }
+  : null);
+
+const toPrivacyRequest = (row) => (row
+  ? {
+    id: row.id,
+    userId: row.user_id ?? null,
+    subjectLabel: row.subject_label,
+    type: row.type,
+    status: row.status,
+    message: row.message ?? null,
+    createdAt: row.created_at,
+    dueAt: row.due_at,
+    extendedAt: row.extended_at ?? null,
+    extensionReason: row.extension_reason ?? null,
+    closedAt: row.closed_at ?? null,
+    response: row.response ?? null,
+    handledBy: row.handled_by ?? null,
+    handledLabel: row.handled_label ?? null,
+    updatedAt: row.updated_at,
   }
   : null);
 
@@ -1347,6 +1446,103 @@ export const createSqliteAccountStore = ({ DatabaseSync, file }) => {
 
     /** Копия базы, сделанная перед миграцией при этом запуске (или null). */
     migrationBackup,
+
+    /* --------------------------- согласия и документы --------------------------- */
+
+    /** Последняя запись журнала согласий человека (для сцепления хэшей). */
+    lastConsentRecord: (userId) => toConsentRecord(db.prepare('SELECT * FROM consent_log WHERE user_id = ? ORDER BY seq DESC LIMIT 1').get(userId)),
+    insertConsentRecord({ id, userId, purpose, kind, action, document = null, version = null, documentHash = null, method, at, prevHash, hash }) {
+      db.prepare(`INSERT INTO consent_log (id, user_id, purpose, kind, action, document, version, document_hash, method, at, prev_hash, hash)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, userId, purpose, kind, action, document, version, documentHash, method, at, prevHash, hash);
+      return toConsentRecord(db.prepare('SELECT * FROM consent_log WHERE id = ?').get(id));
+    },
+    listConsentRecords: (userId) => db.prepare('SELECT * FROM consent_log WHERE user_id = ? ORDER BY seq ASC').all(userId).map(toConsentRecord),
+    /** Все записи по порядку — для проверки цепочек (CLI, тесты). */
+    allConsentRecords: () => db.prepare('SELECT * FROM consent_log ORDER BY seq ASC').all().map(toConsentRecord),
+    countConsentRecords: () => db.prepare('SELECT COUNT(*) AS count FROM consent_log').get().count,
+    /**
+     * Записи удалённых аккаунтов, срок хранения которых (3 года после
+     * последней записи) истёк. Удаление раньше срока база не допустит.
+     */
+    purgeConsentRecords(before) {
+      const users = db.prepare(`SELECT user_id FROM consent_log c WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = c.user_id)
+        GROUP BY user_id HAVING MAX(at) < ?`).all(before).map((row) => row.user_id);
+      let removed = 0;
+      for (const userId of users) {
+        try {
+          removed += db.prepare('DELETE FROM consent_log WHERE user_id = ?').run(userId).changes;
+        } catch {
+          // Триггер срока хранения считает по настоящему времени — не удаляем, если он против.
+        }
+      }
+      return removed;
+    },
+
+    /* ------------------------- обращения субъектов ПДн ------------------------- */
+
+    insertPrivacyRequest({ id, userId, subjectLabel, type, message = null, createdAt, dueAt }) {
+      db.prepare(`INSERT INTO privacy_requests (id, user_id, subject_label, type, status, message, created_at, due_at, updated_at)
+        VALUES (?, ?, ?, ?, 'received', ?, ?, ?, ?)`).run(id, userId, subjectLabel, type, message, createdAt, dueAt, createdAt);
+      return toPrivacyRequest(db.prepare('SELECT * FROM privacy_requests WHERE id = ?').get(id));
+    },
+    getPrivacyRequest: (id) => (typeof id === 'string' ? toPrivacyRequest(db.prepare('SELECT * FROM privacy_requests WHERE id = ?').get(id)) : null),
+    listUserPrivacyRequests: (userId, limit = 50) => db.prepare('SELECT * FROM privacy_requests WHERE user_id = ? ORDER BY created_at DESC LIMIT ?')
+      .all(userId, limit).map(toPrivacyRequest),
+    countOpenPrivacyRequests: (userId) => db.prepare("SELECT COUNT(*) AS count FROM privacy_requests WHERE user_id = ? AND status IN ('received', 'in_progress')")
+      .get(userId).count,
+    listPrivacyRequests({ status = null, limit = 50, offset = 0 } = {}) {
+      const where = status ? 'WHERE status = ?' : '';
+      const params = status ? [status] : [];
+      const rows = db.prepare(`SELECT * FROM privacy_requests ${where} ORDER BY CASE WHEN status IN ('received', 'in_progress') THEN 0 ELSE 1 END, due_at ASC, created_at DESC
+        LIMIT ? OFFSET ?`).all(...params, limit, offset).map(toPrivacyRequest);
+      const total = db.prepare(`SELECT COUNT(*) AS count FROM privacy_requests ${where}`).get(...params).count;
+      const open = db.prepare("SELECT COUNT(*) AS count FROM privacy_requests WHERE status IN ('received', 'in_progress')").get().count;
+      return { rows, total, open };
+    },
+    /** Изменить обращение, только если его статус — один из expected (защита от гонки двух сотрудников). */
+    updatePrivacyRequest(id, fields, { expected, now }) {
+      const columns = {
+        status: 'status', dueAt: 'due_at', extendedAt: 'extended_at', extensionReason: 'extension_reason', closedAt: 'closed_at',
+        response: 'response', handledBy: 'handled_by', handledLabel: 'handled_label', message: 'message',
+      };
+      const sets = [];
+      const params = [];
+      for (const [key, column] of Object.entries(columns)) {
+        if (key in fields) {
+          sets.push(`${column} = ?`);
+          params.push(fields[key]);
+        }
+      }
+      sets.push('updated_at = ?');
+      params.push(now);
+      const placeholders = expected.map(() => '?').join(', ');
+      return db.prepare(`UPDATE privacy_requests SET ${sets.join(', ')} WHERE id = ? AND status IN (${placeholders})`)
+        .run(...params, id, ...expected).changes > 0;
+    },
+    /** Текст обращений удалённого человека не хранится: остаются вид, сроки и ответ. */
+    /**
+     * Удаление аккаунта: в записях журнала действий, где аккаунт сам был
+     * автором (регистрация, удаление себя), имя и замаскированный email
+     * заменяются меткой. Записи о действиях сотрудников над аккаунтом
+     * сохраняют метку до срока хранения журнала — это подотчётность персонала.
+     */
+    pseudonymizeAuditActor(userId, label) {
+      const rows = db.prepare('SELECT id, action, actor_id, target_id, target_label FROM audit_log WHERE actor_id = ?').all(userId);
+      const update = db.prepare('UPDATE audit_log SET actor_label = ?, target_label = ?, search_text = ? WHERE id = ?');
+      for (const row of rows) {
+        const targetLabel = row.target_id === userId ? label : row.target_label;
+        const search = `${row.action} ${label} ${targetLabel || ''} ${row.actor_id || ''} ${row.target_id || ''}`.toLowerCase();
+        update.run(label, targetLabel, search, row.id);
+      }
+      return rows.length;
+    },
+    clearPrivacyRequestMessages: (userId) => db.prepare('UPDATE privacy_requests SET message = NULL WHERE user_id = ?').run(userId).changes,
+    purgePrivacyRequests: (before) => db.prepare("DELETE FROM privacy_requests WHERE status IN ('completed', 'rejected') AND closed_at < ?").run(before).changes,
+
+    /** Письма на адрес удалённого аккаунта: неотправленные и записи для лимитов. */
+    deleteMailForAddress: (toHash) => db.prepare('DELETE FROM mail_outbox WHERE to_hash = ?').run(toHash).changes,
+    /** Заявки на регистрацию с этим адресом (после удаления аккаунта они не нужны). */
+    deleteRegistrationsForEmail: (email) => db.prepare('DELETE FROM registrations WHERE email = ?').run(email).changes,
 
     close: () => db.close(),
   });

@@ -28,7 +28,7 @@ import { buildMessage, MailError, sendMail, smtpConfigFromEnv } from '../backend
 import { createRateLimiter } from '../backend/http/rateLimit.js';
 import { passwordChecks, passwordProblem } from '../shared/passwordPolicy.js';
 import { startSmtpServer } from './fixtures/smtpServer.js';
-import { browserFor as baseBrowser, capture, linkIn, softAuthenticator, startAuthServer, tokenOfLink } from './helpers/authKit.js';
+import { browserFor as baseBrowser, capture, legalAcceptance, linkIn, softAuthenticator, startAuthServer, tokenOfLink } from './helpers/authKit.js';
 
 const DatabaseSync = await loadSqlite();
 const ROOT_PASSWORD = 'Корневой-пароль-2026';
@@ -52,10 +52,16 @@ const startServer = (context, options = {}) => startAuthServer(context, options)
 /** «Браузер» с шагами активации по ссылке. */
 const browserFor = (base) => {
   const browser = baseBrowser(base);
+  // Страница показывает соглашение, если его нужно принять, — и отправляет отметку с редакцией.
+  let legal = {};
   return Object.assign(browser, {
     peek: (token) => browser.call('/api/auth/activation/peek', { method: 'POST', body: { token } }),
-    start: (token) => browser.call('/api/auth/activation/start', { method: 'POST', body: { token } }),
-    complete: (password) => browser.call('/api/auth/activation/complete', { method: 'POST', body: { password } }),
+    start: async (token) => {
+      const started = await browser.call('/api/auth/activation/start', { method: 'POST', body: { token } });
+      legal = started.body?.context?.legal ? legalAcceptance(started.body.context) : {};
+      return started;
+    },
+    complete: (password) => browser.call('/api/auth/activation/complete', { method: 'POST', body: { password, ...legal } }),
   });
 };
 
@@ -541,7 +547,7 @@ describe('Приглашения: сценарии через HTTP', { skip: !Da
     const actor = { ...store.getUserByEmail('root@medkarta.test'), permissions: PERMISSION_KEYS };
     await local.admin.createUser(actor, { email: 'keep@medkarta.test', firstName: 'Ольга', lastName: 'Сохранова' });
     const opened = local.invitations.start(tokenOfLink(linkOf(letters[0])));
-    const done = await local.invitations.complete(opened.contextToken, 'Пароль-до-перезапуска');
+    const done = await local.invitations.complete(opened.contextToken, 'Пароль-до-перезапуска', { legal: legalAcceptance(opened.context) });
     store.close();
     store = createSqliteAccountStore({ DatabaseSync, file });
     local = makeContext({ store, delivery: capturingDelivery([]), mfaKey });
