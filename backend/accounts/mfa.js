@@ -102,6 +102,8 @@ export const createMfaService = ({ store, box, webauthn = null, now = () => Date
     createdAt: iso(factor.confirmedAt || factor.createdAt),
     lastUsedAt: iso(factor.lastUsedAt),
     synced: factor.type === 'webauthn' ? Boolean(factor.backedUp) : null,
+    // Ключ доступа проверяет человека (PIN, отпечаток, лицо); null — неизвестно (ключ добавлен до схемы 6).
+    userVerified: factor.type === 'webauthn' ? factor.userVerified : null,
   });
 
   const recoveryState = (userId) => {
@@ -185,8 +187,13 @@ export const createMfaService = ({ store, box, webauthn = null, now = () => Date
 
     /* --------------------------- ключи доступа --------------------------- */
 
-    /** Параметры для navigator.credentials.create(). */
-    beginPasskey(user) {
+    /**
+     * Параметры для navigator.credentials.create(). requireUv — сотрудник:
+     * ключ обязан проверить человека (PIN, отпечаток, лицо), а не только
+     * присутствие. Touch ID, Face ID, Windows Hello, Android и ключи FIDO2
+     * с PIN это умеют; старые ключи U2F без PIN — нет.
+     */
+    beginPasskey(user, { requireUv = false } = {}) {
       if (!webauthn) fail('passkeys_unavailable', 'Ключи доступа не настроены на сервере.');
       ensureRoom(user.id);
       const challenge = randomBytes(32).toString('base64url');
@@ -201,13 +208,13 @@ export const createMfaService = ({ store, box, webauthn = null, now = () => Date
         pubKeyCredParams: [ALGORITHMS.ES256, ALGORITHMS.EdDSA, ALGORITHMS.RS256].map((alg) => ({ type: 'public-key', alg })),
         timeout: REGISTER_CHALLENGE_MS,
         attestation: 'none',
-        authenticatorSelection: { residentKey: 'preferred', userVerification: 'preferred' },
+        authenticatorSelection: { residentKey: 'preferred', userVerification: requireUv ? 'required' : 'preferred' },
         excludeCredentials: existing.map((factor) => ({ type: 'public-key', id: factor.credentialId, transports: factor.transports })),
       };
     },
 
     /** Проверить ответ браузера и сохранить ключ. */
-    finishPasskey(user, { credential, label } = {}) {
+    finishPasskey(user, { credential, label, requireUv = false } = {}) {
       if (!webauthn) fail('passkeys_unavailable', 'Ключи доступа не настроены на сервере.');
       const idHash = challengeKey(user.id);
       const record = store.getChallenge(idHash);
@@ -221,6 +228,9 @@ export const createMfaService = ({ store, box, webauthn = null, now = () => Date
         if (error instanceof WebAuthnError) fail('bad_passkey', 'Ключ не прошёл проверку. Попробуйте ещё раз.');
         throw error;
       }
+      if (requireUv && !verified.userVerified) {
+        fail('uv_required', 'Ключ не проверил вас: для сотрудника нужен ключ с PIN-кодом, отпечатком или распознаванием лица. Задайте PIN на аппаратном ключе или используйте Touch ID, Face ID, Windows Hello или телефон.');
+      }
       if (store.getFactorByCredentialId(verified.credentialId)) fail('passkey_exists', 'Этот ключ уже добавлен.');
       ensureRoom(user.id);
       const first = store.countActiveFactors(user.id) === 0;
@@ -229,7 +239,8 @@ export const createMfaService = ({ store, box, webauthn = null, now = () => Date
         store.insertFactor({
           id, userId: user.id, type: 'webauthn', label: cleanLabel(label, FACTOR_LABELS.webauthn), status: 'active',
           credentialId: verified.credentialId, publicKey: verified.publicKey, algorithm: verified.algorithm,
-          signCount: verified.signCount, transports: verified.transports.join(','), backedUp: verified.backedUp, now: now(), confirmedAt: now(),
+          signCount: verified.signCount, transports: verified.transports.join(','), backedUp: verified.backedUp,
+          userVerified: verified.userVerified, now: now(), confirmedAt: now(),
         });
         store.deleteChallenge(idHash);
         const recoveryCodes = first || recoveryState(user.id).unused === 0 ? issueRecoveryCodes(user.id) : null;
@@ -237,22 +248,34 @@ export const createMfaService = ({ store, box, webauthn = null, now = () => Date
       });
     },
 
-    /** Параметры для navigator.credentials.get() — ключи этого пользователя. */
-    assertionOptions(userId, challenge) {
+    /**
+     * Параметры для navigator.credentials.get() — ключи этого пользователя.
+     * requireUv (сотрудник): «required», если все его ключи умеют проверять
+     * человека; иначе «preferred», чтобы старый ключ без PIN не оставил без
+     * входа, — но ключ, который хоть раз проверил человека, обязан делать
+     * это всегда (проверяется в verifyPasskey).
+     */
+    assertionOptions(userId, challenge, { requireUv = false } = {}) {
       if (!webauthn) return null;
       const keys = store.listFactors(userId).filter((factor) => factor.type === 'webauthn');
       if (keys.length === 0) return null;
+      const allVerify = keys.every((factor) => factor.userVerified === true);
       return {
         challenge,
         rpId: webauthn.rpId,
         timeout: 5 * MINUTE,
-        userVerification: 'preferred',
+        userVerification: requireUv && allVerify ? 'required' : 'preferred',
         allowCredentials: keys.map((factor) => ({ type: 'public-key', id: factor.credentialId, transports: factor.transports })),
       };
     },
 
-    /** Проверить подпись ключом доступа при входе. */
-    verifyPasskey(userId, credential, challenge) {
+    /**
+     * Проверить подпись ключом доступа. requireUv (сотрудник): если ключ
+     * умеет проверять человека (так было при регистрации или раньше при
+     * входе), ответ без проверки отвергается — нельзя «понизить» ключ,
+     * просто не введя PIN.
+     */
+    verifyPasskey(userId, credential, challenge, { requireUv = false } = {}) {
       if (!webauthn || !challenge || !credential || typeof credential.id !== 'string') return { ok: false };
       const factor = store.getFactorByCredentialId(credential.id);
       if (!factor || factor.userId !== userId || factor.status !== 'active' || factor.type !== 'webauthn') return { ok: false };
@@ -260,8 +283,10 @@ export const createMfaService = ({ store, box, webauthn = null, now = () => Date
         const result = verifyAssertion(credential, {
           challenge, rpId: webauthn.rpId, origins: webauthn.origins, publicKey: factor.publicKey, algorithm: factor.algorithm, signCount: factor.signCount,
         });
+        if (requireUv && factor.userVerified === true && !result.userVerified) return { ok: false, reason: 'uv_required' };
         if (!store.acceptWebauthnCounter(factor.id, result.signCount, now())) return { ok: false, reason: 'counter_replay' };
-        return { ok: true, factorId: factor.id };
+        if (result.userVerified && factor.userVerified !== true) store.markFactorUserVerified(factor.id);
+        return { ok: true, factorId: factor.id, userVerified: result.userVerified };
       } catch (error) {
         if (error instanceof WebAuthnError) return { ok: false, reason: error.code };
         throw error;

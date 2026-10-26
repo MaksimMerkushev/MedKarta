@@ -231,6 +231,8 @@ export const createAdminService = ({
       assignableRoles: manage && has(actor, 'roles.assign') ? ROLES.filter((role) => canAssign(actor, role)) : [],
       block: manage && has(actor, 'users.block'),
       unlockLogin: manage && has(actor, 'users.block'),
+      // Сброс второго фактора из панели — только «Пользователям»; сотрудникам — на сервере.
+      mfaReset: manage && has(actor, 'users.password') && !(accounts.isStaff && accounts.isStaff(target)),
       password: manage && has(actor, 'users.password'),
       invite: manage && has(actor, 'users.password') && target.status === 'active',
       sessions: (manage || actor.id === target.id) && has(actor, 'users.sessions'),
@@ -551,7 +553,42 @@ export const createAdminService = ({
       if (!['auto', 'manual'].includes(delivery)) fail('bad_request', 400, 'Способ доставки: auto или manual.');
       const target = manageable(actor, id, 'user.invite');
       const issued = await requireInvitations().issue({ user: target, actor, source: 'admin', delivery, base });
+      // Ссылку для смены пароля администратор передаёт сам — владелец узнаёт об этом письмом (если почта есть).
+      if (issued.link && issued.invitation.purpose === 'reset') accounts.__internal?.notify?.(target, 'reset_link_issued', {});
       return { ...this.getUser(actor, id), invitation: issued.invitation, link: issued.link };
+    },
+
+    /**
+     * Процедура восстановления, если пользователь потерял все факторы входа
+     * и резервные коды: факторы и коды удаляются, все сессии и доверенные
+     * устройства завершаются, владельцу — письмо. Только для аккаунтов
+     * «Пользователь» ниже по роли (сотрудникам — лишь командой mfa-reset на
+     * сервере), только с правом users.password и свежим подтверждением
+     * личности администратора, с вводом email и причиной в журнал. Личность
+     * владельца администратор подтверждает вне системы — порядок в
+     * docs/admin-security-runbook.md. Пароль при этом не меняется.
+     */
+    resetUserMfa(actor, id, body = {}) {
+      requirePermission(actor, 'users.password', { action: 'user.mfa_reset' });
+      const { confirmEmail, reason } = onlyFields(body, ['confirmEmail', 'reason']);
+      const target = manageable(actor, id, 'user.mfa_reset');
+      if (accounts.isStaff?.(target)) {
+        denyChange(actor, 'user.mfa_reset', target, 'Второй фактор сотрудника сбрасывается только на сервере: npm run accounts -- mfa-reset.', 'staff_mfa_reset');
+      }
+      if (typeof confirmEmail !== 'string' || confirmEmail.trim().toLowerCase() !== target.email) fail('confirm_mismatch', 400, 'Введите email пользователя для подтверждения.');
+      const why = typeof reason === 'string' ? reason.trim() : '';
+      if (why.length < 5 || why.length > 300) fail('bad_reason', 400, 'Укажите причину: как подтверждена личность владельца (5–300 символов).');
+      if (!accounts.mfa || !accounts.mfa.hasMfa(target.id)) fail('mfa_not_enabled', 409, 'У пользователя двухфакторная защита не включена.');
+      const removed = store.transaction(() => {
+        const count = accounts.mfa.resetAll(target.id);
+        store.deleteUserSessions(target.id);
+        store.deleteUserDevices(target.id);
+        audit(actor, 'user.mfa_reset', { target, details: { factors: count, reason: why, via: 'admin' } });
+        store.addAuthEvent({ at: now(), type: 'mfa_reset', userId: target.id, reason: 'admin' });
+        return count;
+      });
+      accounts.__internal?.notify?.(target, 'mfa_reset', {});
+      return { ...this.getUser(actor, id), removed };
     },
 
     userInvitations(actor, id) {

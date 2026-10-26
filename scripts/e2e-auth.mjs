@@ -131,7 +131,7 @@ const expect = (condition, message) => {
 /* ---------------------- API администратора (без браузера) ---------------------- */
 
 let adminCookie = '';
-const adminApi = async (method, url, body) => {
+const adminApi = async (method, url, body, { retried = false } = {}) => {
   const response = await fetch(`${BASE}${url}`, {
     method,
     headers: { 'Content-Type': 'application/json', Origin: BASE, Cookie: adminCookie },
@@ -140,7 +140,17 @@ const adminApi = async (method, url, body) => {
   for (const line of response.headers.getSetCookie?.() || []) {
     if (line.startsWith('mk_sid=')) adminCookie = line.split(';')[0];
   }
-  return { status: response.status, body: await response.json().catch(() => null) };
+  const payload = await response.json().catch(() => null);
+  // Критическое действие (новая ссылка, создание сотрудника…): вход подтверждением личности
+  // не считается — как окно в интерфейсе, подтверждаем паролем и резервным кодом (код приложения
+  // сценарий профиля удаляет) и повторяем. Первый код тратится в сценарии «резервный код».
+  if (response.status === 403 && payload?.code === 'reauth_required' && !retried && rootRecoveryCodes.length > 1) {
+    reauthCodeIndex += 1;
+    const confirmed = await adminApi('POST', '/api/me/reauth', { password: ROOT_PASSWORD, method: 'recovery', code: rootRecoveryCodes[reauthCodeIndex] }, { retried: true });
+    expect(confirmed.status === 200, `подтверждение личности: ${confirmed.status}`);
+    return adminApi(method, url, body, { retried: true });
+  }
+  return { status: response.status, body: payload };
 };
 let clientNumber = 0;
 const nextClientIp = () => {
@@ -206,6 +216,7 @@ const signIn = async (page, email, password) => {
  */
 let rootTotp = null;
 let rootRecoveryCodes = [];
+let reauthCodeIndex = 0;
 let rootPasskeys = [];
 let passkeyCopies = 0;
 const withPasskey = async (page) => {
@@ -232,6 +243,10 @@ try {
   expect(login.status === 200, `вход администратора: ${login.status}`);
   // Сотруднику без второго фактора админ-панель закрыта — включаем приложение-аутентификатор через API.
   expect((await adminApi('GET', '/api/admin/users')).body?.code === 'mfa_setup_required', 'админ-панель открылась без второго фактора');
+  // Первый фактор — после явного подтверждения личности (вход его не заменяет); факторов ещё нет — достаточно пароля.
+  expect((await adminApi('POST', '/api/me/mfa/totp', {})).body?.code === 'reauth_required', 'первый фактор добавлен без подтверждения личности');
+  const reauth = await adminApi('POST', '/api/me/reauth', { password: ROOT_PASSWORD });
+  expect(reauth.status === 200, `подтверждение личности: ${reauth.status}`);
   const setup = await adminApi('POST', '/api/me/mfa/totp', {});
   expect(setup.status === 200 && setup.body?.secret, `настройка TOTP: ${setup.status}`);
   rootTotp = totpDevice(setup.body.secret);
@@ -311,7 +326,13 @@ try {
     await page.waitForURL((url) => url.pathname === '/profile', { timeout: 8000 });
     await page.waitForSelector('[data-testid=mfa-add-passkey]');
     await page.click('[data-testid=mfa-add-passkey]');
-    await page.waitForSelector('[data-testid=mfa-factor][data-type=webauthn]');
+    // Новый способ входа — только после подтверждения личности: пароль и код из приложения (вход его не заменяет).
+    await page.waitForSelector('[data-testid=reauth-dialog]');
+    await page.fill('[data-testid=reauth-password]', ROOT_PASSWORD);
+    await page.click('[data-testid=reauth-submit]');
+    await page.waitForSelector('[data-testid=reauth-dialog] [data-testid=mfa-code]');
+    await page.fill('[data-testid=reauth-dialog] [data-testid=mfa-code]', await rootTotp.next());
+    await page.waitForSelector('[data-testid=mfa-factor][data-type=webauthn]', { timeout: 15000 });
     expect(await key.count() === 1, 'ключ не создан');
     expect(!(await page.$('[data-testid=recovery-codes]')), 'резервные коды выданы повторно без запроса');
     rootPasskeys = await key.exportCredentials();

@@ -30,7 +30,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 /** Строка для поиска без учёта регистра: LIKE в SQLite не знает кириллицы. */
 export const searchTextOf = ({ firstName = '', lastName = '', email = '', id = '' }) =>
@@ -377,6 +377,19 @@ const MIGRATIONS = [
     CREATE INDEX mail_outbox_source ON mail_outbox(source_key, created_at);
     `);
   },
+  /*
+   * Схема 6.
+   *   mfa_factors.user_verified — проверил ли ключ доступа человека при
+   *   регистрации (PIN, отпечаток, лицо). NULL — ключ добавлен до схемы 6:
+   *   для него проверка не требуется задним числом (иначе сотрудник с
+   *   таким ключом остался бы без входа), но первая же проверка запоминается.
+   *   mail_outbox.expires_at — срок ссылки в письме: после него письмо не
+   *   отправляется (мёртвая ссылка в ящике хуже, чем никакой).
+   */
+  `
+  ALTER TABLE mfa_factors ADD COLUMN user_verified INTEGER;
+  ALTER TABLE mail_outbox ADD COLUMN expires_at INTEGER;
+  `,
 ];
 
 /** Миграции по порядку — для тестов совместимости со старыми базами. */
@@ -502,6 +515,7 @@ const toFactor = (row) => (row
     signCount: row.sign_count || 0,
     transports: row.transports ? row.transports.split(',').filter(Boolean) : [],
     backedUp: row.backed_up === null || row.backed_up === undefined ? null : Boolean(row.backed_up),
+    userVerified: row.user_verified === null || row.user_verified === undefined ? null : Boolean(row.user_verified),
     createdAt: row.created_at,
     confirmedAt: row.confirmed_at ?? null,
     lastUsedAt: row.last_used_at ?? null,
@@ -565,6 +579,7 @@ const toMail = (row) => (row
     refId: row.ref_id ?? null,
     createdAt: row.created_at,
     sentAt: row.sent_at ?? null,
+    expiresAt: row.expires_at ?? null,
   }
   : null);
 
@@ -1187,11 +1202,12 @@ export const createSqliteAccountStore = ({ DatabaseSync, file }) => {
 
     insertFactor({
       id, userId, type, label, status, secretEnc = null, credentialId = null, publicKey = null, algorithm = null, signCount = 0,
-      transports = null, backedUp = null, now, confirmedAt = null, expiresAt = null,
+      transports = null, backedUp = null, userVerified = null, now, confirmedAt = null, expiresAt = null,
     }) {
       db.prepare(`INSERT INTO mfa_factors (id, user_id, type, label, status, secret_enc, credential_id, public_key, algorithm, sign_count,
-        transports, backed_up, created_at, confirmed_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(id, userId, type, label, status, secretEnc, credentialId, publicKey, algorithm, signCount, transports, backedUp === null ? null : Number(backedUp), now, confirmedAt, expiresAt);
+        transports, backed_up, user_verified, created_at, confirmed_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(id, userId, type, label, status, secretEnc, credentialId, publicKey, algorithm, signCount, transports,
+          backedUp === null ? null : Number(backedUp), userVerified === null ? null : Number(userVerified), now, confirmedAt, expiresAt);
       return toFactor(db.prepare('SELECT * FROM mfa_factors WHERE id = ?').get(id));
     },
     getFactor: (id) => (typeof id === 'string' ? toFactor(db.prepare('SELECT * FROM mfa_factors WHERE id = ?').get(id)) : null),
@@ -1211,6 +1227,8 @@ export const createSqliteAccountStore = ({ DatabaseSync, file }) => {
       WHERE id = ? AND status = 'active' AND (last_step IS NULL OR last_step < ?)`).run(step, now, id, step).changes > 0,
     acceptWebauthnCounter: (id, signCount, now) => db.prepare(`UPDATE mfa_factors SET sign_count = ?, last_used_at = ?
       WHERE id = ? AND status = 'active' AND (? = 0 OR sign_count < ?)`).run(signCount, now, id, signCount, signCount).changes > 0,
+    /** Ключ доступа впервые проверил человека (PIN, биометрия): дальше для сотрудника проверка обязательна. */
+    markFactorUserVerified: (id) => db.prepare("UPDATE mfa_factors SET user_verified = 1 WHERE id = ? AND type = 'webauthn' AND status = 'active'").run(id).changes > 0,
     renameFactor: (id, label) => db.prepare("UPDATE mfa_factors SET label = ? WHERE id = ? AND status = 'active'").run(label, id).changes > 0,
     revokeFactor: (id, now) => db.prepare("UPDATE mfa_factors SET status = 'revoked', revoked_at = ?, secret_enc = NULL WHERE id = ? AND status <> 'revoked'")
       .run(now, id).changes > 0,
@@ -1292,9 +1310,9 @@ export const createSqliteAccountStore = ({ DatabaseSync, file }) => {
 
     /* ------------------------------ почтовая очередь ------------------------------ */
 
-    enqueueMail({ id, kind, toHash, toAddress, payload, keyId = null, nextAttemptAt, sourceKey = null, refType = null, refId = null, now }) {
-      db.prepare(`INSERT INTO mail_outbox (id, kind, to_hash, to_address, payload, key_id, status, attempts, next_attempt_at, source_key, ref_type, ref_id, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?)`).run(id, kind, toHash, toAddress, payload, keyId, nextAttemptAt, sourceKey, refType, refId, now);
+    enqueueMail({ id, kind, toHash, toAddress, payload, keyId = null, nextAttemptAt, sourceKey = null, refType = null, refId = null, expiresAt = null, now }) {
+      db.prepare(`INSERT INTO mail_outbox (id, kind, to_hash, to_address, payload, key_id, status, attempts, next_attempt_at, source_key, ref_type, ref_id, expires_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, ?)`).run(id, kind, toHash, toAddress, payload, keyId, nextAttemptAt, sourceKey, refType, refId, expiresAt, now);
     },
     getMail: (id) => toMail(db.prepare('SELECT * FROM mail_outbox WHERE id = ?').get(id)),
     /** Забрать до limit писем, которым пора уходить: статус sending ставится атомарно, второй обработчик их не получит. */

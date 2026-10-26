@@ -12,7 +12,12 @@
  *   POST /api/auth/activation/start     — подтвердить ссылку: токен гаснет, ставится
  *                                         cookie контекста на 30 минут.
  *   GET  /api/auth/activation           — контекст по cookie (после перезагрузки).
+ *   POST /api/auth/activation/mfa-options — второй фактор для смены пароля
+ *                                         (если у аккаунта включена MFA): способы, вызов для ключа.
  *   POST /api/auth/activation/complete  — задать пароль: аккаунт активирован, вход.
+ *                                         С включённой MFA — только вместе со вторым
+ *                                         фактором ({password, method, code|credential}):
+ *                                         иначе 403 mfa_required, пароль не меняется.
  *
  *   POST /api/auth/register             — регистрация: письмо на адрес. Ответ одинаков
  *                                         для любого адреса (202); 403 — регистрация закрыта.
@@ -52,12 +57,14 @@ export const REGISTER_COOKIE = 'mk_register';
 const registerCookieName = (req) => (isSecureRequest(req) ? `__Secure-${REGISTER_COOKIE}` : REGISTER_COOKIE);
 const REGISTER_PATH = '/api/auth/register';
 const MAX_BODY_BYTES = 4 * 1024;
+const MFA_BODY_BYTES = 16 * 1024;
 
 const ROUTES = new Map([
   ['/api/auth/access-link', { POST: 'request' }],
   ['/api/auth/activation', { GET: 'context' }],
   ['/api/auth/activation/peek', { POST: 'peek' }],
   ['/api/auth/activation/start', { POST: 'start' }],
+  ['/api/auth/activation/mfa-options', { POST: 'mfaOptions' }],
   ['/api/auth/activation/complete', { POST: 'complete' }],
   ['/api/auth/register', { GET: 'regContext', POST: 'register' }],
   ['/api/auth/register/peek', { POST: 'regPeek' }],
@@ -151,7 +158,8 @@ export const createActivationHandler = ({
     const sourceAllowed = (prefix) => !throttle || throttle.consume(`${prefix}:${client.ipKey}`, { limit: 10, windowMs: HOUR_MS }).allowed;
 
     try {
-      const body = req.method === 'GET' ? {} : await readJsonObject(req, MAX_BODY_BYTES);
+      // Ответ ключа доступа — до нескольких КБ.
+      const body = req.method === 'GET' ? {} : await readJsonObject(req, operation === 'complete' ? MFA_BODY_BYTES : MAX_BODY_BYTES);
       switch (operation) {
         case 'request': {
           // Почта не настроена — это свойство сервера, а не адреса: ответ одинаков для всех.
@@ -280,8 +288,18 @@ export const createActivationHandler = ({
           respondJson(res, 200, { context: found });
           return;
         }
+        case 'mfaOptions': {
+          respondJson(res, 200, invitations.secondFactorOptions(currentContext()));
+          return;
+        }
         case 'complete': {
-          const result = await invitations.complete(currentContext(), body.password, clientContext(req));
+          const extra = Object.keys(body).filter((key) => !['password', 'method', 'code', 'credential'].includes(key));
+          if (extra.length > 0) {
+            respondJson(res, 400, { error: `Недопустимые поля: ${extra.slice(0, 5).join(', ')}.`, code: 'unexpected_field' });
+            return;
+          }
+          const factor = body.method ? { method: body.method, code: body.code, credential: body.credential } : null;
+          const result = await invitations.complete(currentContext(), body.password, { ...clientContext(req), factor });
           // В этом браузере мог быть вход в другой аккаунт — та сессия завершается.
           const previous = tokenOf(req);
           if (previous) accounts.logout(previous);

@@ -162,8 +162,10 @@ function TotpSetupModal({ setup, onClose, onDone }) {
 
 /* ---------------------------------- факторы ---------------------------------- */
 
-function FactorRow({ factor, canRemove, onRename, onRemove }) {
+function FactorRow({ factor, canRemove, onRename, onRemove, staff = false }) {
   const Icon = factor.type === 'webauthn' ? Fingerprint : Smartphone;
+  // Сотруднику ключ обязан проверять человека: ключ, добавленный до этого правила, — до первого входа с PIN или биометрией.
+  const unverified = staff && factor.type === 'webauthn' && factor.userVerified !== true;
   return (
     <li className="flex items-center gap-3 px-5 py-3" data-testid="mfa-factor" data-type={factor.type}>
       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"><Icon size={17} aria-hidden="true" /></span>
@@ -173,6 +175,11 @@ function FactorRow({ factor, canRemove, onRename, onRemove }) {
           {factor.label && factor.label !== factor.typeLabel ? `${factor.typeLabel} · ` : ''}добавлен {formatDateTime(factor.createdAt)}{factor.lastUsedAt ? ` · использован ${formatDateTime(factor.lastUsedAt)}` : ''}
           {factor.synced ? ' · синхронизируется между устройствами' : ''}
         </p>
+        {unverified && (
+          <p className="mt-0.5 text-[12px] leading-[18px] text-amber-700 dark:text-amber-400" data-testid="mfa-factor-unverified">
+            Ключ ещё не проверял вас PIN-кодом или биометрией. Войдите с ним, подтвердив отпечатком, лицом или PIN, — или замените на новый.
+          </p>
+        )}
       </div>
       <Button size="sm" variant="ghost" icon={Pencil} onClick={() => onRename(factor)} aria-label={`Переименовать «${factor.label || factor.typeLabel}»`}><span className="hidden sm:inline">Имя</span></Button>
       <Button size="sm" variant="dangerGhost" icon={Trash2} onClick={() => onRemove(factor)} disabled={!canRemove} title={canRemove ? undefined : 'Для сотрудника двухфакторная защита обязательна: сначала добавьте другой способ'} data-testid="mfa-factor-remove">
@@ -304,7 +311,7 @@ function TwoFactorCard({ data, reload, onFactorAdded = null }) {
       {data.factors.length > 0 && (
         <ul className="mt-2 divide-y divide-slate-100 border-y border-slate-100 dark:divide-slate-800 dark:border-slate-800" data-testid="mfa-factors">
           {data.factors.map((factor) => (
-            <FactorRow key={factor.id} factor={factor} canRemove={canRemoveAny} onRename={setRenaming} onRemove={setRemoving} />
+            <FactorRow key={factor.id} factor={factor} staff={staff} canRemove={canRemoveAny} onRename={setRenaming} onRemove={setRemoving} />
           ))}
         </ul>
       )}

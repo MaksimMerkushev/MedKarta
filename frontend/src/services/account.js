@@ -63,7 +63,13 @@ export const requestAccessLink = (email) => request('/api/auth/access-link', { m
 export const peekActivation = (token) => request('/api/auth/activation/peek', { method: 'POST', body: { token } });
 export const startActivation = (token) => request('/api/auth/activation/start', { method: 'POST', body: { token } });
 export const fetchActivationContext = () => request('/api/auth/activation');
-export const completeActivation = (password) => request('/api/auth/activation/complete', { method: 'POST', body: { password } });
+/**
+ * Задать пароль по ссылке. factor — второй фактор ({method, code} или
+ * {method: 'webauthn', credential}), если у аккаунта включена MFA: без него
+ * сервер ответит 403 mfa_required и пароль не изменит.
+ */
+export const completeActivation = (password, factor = null) => request('/api/auth/activation/complete', { method: 'POST', body: { password, ...(factor || {}) } });
+export const fetchActivationMfaOptions = () => request('/api/auth/activation/mfa-options', { method: 'POST', body: {} });
 
 /* Второй шаг входа: способы, вызов для ключа доступа и проверка. */
 export const fetchMfaLoginOptions = () => request('/api/auth/mfa/options', { method: 'POST', body: {} });

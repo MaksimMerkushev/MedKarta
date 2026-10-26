@@ -16,7 +16,9 @@
  *       В production — только с --allow-production.
  *   npm run accounts -- access-link --email адрес [--base …]
  *       одноразовая ссылка для входа: приглашение (аккаунт не активирован)
- *       или смена пароля. Прежняя ссылка того же вида отзывается.
+ *       или смена пароля. Прежняя ссылка того же вида отзывается. Если у
+ *       аккаунта включена MFA, пароль по ссылке меняется только вместе со
+ *       вторым фактором владельца; утрачены все факторы — сначала mfa-reset.
  *   npm run accounts -- reset-password --email адрес
  *       то же, что access-link, плюс завершает все сессии пользователя.
  *   npm run accounts -- restore-admin --email адрес
@@ -187,6 +189,9 @@ switch (command) {
     }
     try {
       printLink(user, await context.invitations.issue({ user, actor: null, source: 'cli', base: linkBase() }));
+      if (context.mfa?.hasMfa(user.id)) {
+        console.log('У аккаунта включена двухфакторная защита: по ссылке пароль сменится только вместе со вторым фактором владельца. Утрачены все факторы — сначала mfa-reset --email ….');
+      }
     } catch (error) {
       die(error.message);
     }

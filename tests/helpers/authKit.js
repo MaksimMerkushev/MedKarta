@@ -57,9 +57,10 @@ const b64 = (buffer) => Buffer.from(buffer).toString('base64url');
 /**
  * Программный ключ доступа. register(options) — ответ на credentials.create,
  * assert(options) — на credentials.get. tamper — испортить подпись,
- * origin/rpId — подставить чужие (проверки фишинга).
+ * origin/rpId — подставить чужие (проверки фишинга). uv: false — ключ без
+ * проверки человека (как старый U2F без PIN): флаг UV не ставится.
  */
-export const softAuthenticator = ({ origin = TEST_ORIGIN, rpId = new URL(origin).hostname } = {}) => {
+export const softAuthenticator = ({ origin = TEST_ORIGIN, rpId = new URL(origin).hostname, uv = true } = {}) => {
   const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
   const jwk = publicKey.export({ format: 'jwk' });
   const credentialId = randomBytes(32);
@@ -70,7 +71,7 @@ export const softAuthenticator = ({ origin = TEST_ORIGIN, rpId = new URL(origin)
     credentialId: b64(credentialId),
     register(options, { overrideOrigin = origin, overrideRpId = rpId } = {}) {
       const clientDataJSON = Buffer.from(JSON.stringify({ type: 'webauthn.create', challenge: options.challenge, origin: overrideOrigin, crossOrigin: false }));
-      const flags = 0x01 | 0x04 | 0x40;
+      const flags = 0x01 | (uv ? 0x04 : 0) | 0x40;
       const signCount = Buffer.alloc(4);
       const idLength = Buffer.alloc(2);
       idLength.writeUInt16BE(credentialId.length);
@@ -83,12 +84,12 @@ export const softAuthenticator = ({ origin = TEST_ORIGIN, rpId = new URL(origin)
         response: { clientDataJSON: b64(clientDataJSON), attestationObject: b64(attestationObject), transports: ['internal'] },
       };
     },
-    assert(options, { overrideOrigin = origin, overrideRpId = rpId, tamper = false, replayCounter = false } = {}) {
+    assert(options, { overrideOrigin = origin, overrideRpId = rpId, tamper = false, replayCounter = false, skipUv = !uv } = {}) {
       if (!replayCounter) counter += 1;
       const clientDataJSON = Buffer.from(JSON.stringify({ type: 'webauthn.get', challenge: options.challenge, origin: overrideOrigin, crossOrigin: false }));
       const signCount = Buffer.alloc(4);
       signCount.writeUInt32BE(counter);
-      const authData = Buffer.concat([sha256(overrideRpId), Buffer.from([0x01 | 0x04]), signCount]);
+      const authData = Buffer.concat([sha256(overrideRpId), Buffer.from([0x01 | (skipUv ? 0 : 0x04)]), signCount]);
       let signature = sign('sha256', Buffer.concat([authData, sha256(clientDataJSON)]), privateKey);
       if (tamper) signature = Buffer.concat([signature.subarray(0, -1), Buffer.from([signature[signature.length - 1] ^ 1])]);
       return {
@@ -164,7 +165,25 @@ export const browserFor = (base) => {
     jar,
     cookies,
     call,
-    login: (email, password) => call('/api/auth/login', { method: 'POST', body: { email, password } }),
+    // Пароль последнего входа — для подтверждения личности в тестах (reauth).
+    password: null,
+    login: (email, password) => {
+      browser.password = password;
+      return call('/api/auth/login', { method: 'POST', body: { email, password } });
+    },
+    /** Подтвердить личность: пароль и — если у аккаунта есть факторы — ключ доступа authenticator. */
+    async reauth(authenticator = null, password = browser.password) {
+      const options = await call('/api/me/reauth/options', { method: 'POST', body: {} });
+      assert.equal(options.status, 200, JSON.stringify(options.body));
+      const body = { password };
+      if (options.body.methods.length > 0) {
+        assert.ok(authenticator && options.body.passkey, 'для подтверждения нужен ключ доступа');
+        Object.assign(body, { method: 'webauthn', credential: authenticator.assert(options.body.passkey) });
+      }
+      const done = await call('/api/me/reauth', { method: 'POST', body });
+      assert.equal(done.status, 200, JSON.stringify(done.body));
+      return done;
+    },
     logout: () => call('/api/auth/logout', { method: 'POST', body: {} }),
     /** Второй шаг входа ключом доступа. */
     async passkeyStep(authenticator, overrides = {}) {
@@ -176,13 +195,22 @@ export const browserFor = (base) => {
     /** Вход сотрудника: пароль и (если нужно) ключ доступа. */
     async signIn(email, password, authenticator = null) {
       const first = await browser.login(email, password);
+      browser.password = password;
       if (first.status !== 200 || !first.body?.mfaRequired) return first;
       assert.ok(authenticator, 'нужен ключ доступа');
       return browser.passkeyStep(authenticator);
     },
-    /** Добавить ключ доступа к своему аккаунту (сессия должна быть свежей). */
-    async enrollPasskey(authenticator, label = 'Тестовый ключ') {
-      const started = await call('/api/me/mfa/passkey', { method: 'POST', body: {} });
+    /**
+     * Добавить ключ доступа к своему аккаунту. Нужна свежая проверка
+     * личности: если её нет — сначала reauth (паролем последнего входа и,
+     * если факторы уже есть, ключом confirmWith).
+     */
+    async enrollPasskey(authenticator, label = 'Тестовый ключ', { confirmWith = null } = {}) {
+      let started = await call('/api/me/mfa/passkey', { method: 'POST', body: {} });
+      if (started.status === 403 && started.body?.code === 'reauth_required') {
+        await browser.reauth(confirmWith);
+        started = await call('/api/me/mfa/passkey', { method: 'POST', body: {} });
+      }
       assert.equal(started.status, 200, JSON.stringify(started.body));
       const finished = await call('/api/me/mfa/passkey/finish', { method: 'POST', body: { credential: authenticator.register(started.body.publicKey), label } });
       assert.equal(finished.status, 200, JSON.stringify(finished.body));

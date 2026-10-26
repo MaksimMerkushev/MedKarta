@@ -22,7 +22,9 @@ import {
 } from 'lucide-react';
 
 import AuthFlow from './auth/AuthFlow';
+import { useReauth } from './ui/hooks';
 import { Avatar as PhotoAvatar } from './ui/kit';
+import { ReauthProvider } from './ui/reauth';
 import { Link } from './ui/router';
 
 const INSURED_LABEL = { adult: 'для взрослых', child: 'детская', family: 'семейная' };
@@ -126,6 +128,7 @@ const UserView = ({ account, insurance, today, planId, onSelectPlan, favorites, 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState('');
   const [pending, setPending] = useState(null);
+  const { withReauth } = useReauth();
   const { user } = account;
 
   const plans = insurance?.plans || [];
@@ -253,7 +256,7 @@ const UserView = ({ account, insurance, today, planId, onSelectPlan, favorites, 
             {confirmDelete ? (
               <button
                 type="button"
-                onClick={() => run('delete', () => account.removeAccount())}
+                onClick={() => run('delete', () => withReauth(() => account.removeAccount()))}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-red-600 px-3 py-2 text-[13px] font-semibold text-white hover:bg-red-700"
               >
                 <Trash2 size={15} aria-hidden="true" />
@@ -286,7 +289,9 @@ export default function AccountPanel({ account, insurance, today, planId, onSele
   const { user, status } = account;
 
   // Кабинет открывается из кнопки в левой панели: фон проявляется, окно поднимается (на телефоне — выезжает снизу).
+  // Окно подтверждения личности (удаление аккаунта) — снаружи окна кабинета: у того transform, и fixed внутри него не на весь экран.
   return (
+    <ReauthProvider>
     <MotionConfig reducedMotion="user">
     <Motion.div
       className={`fixed inset-0 z-[1200] flex bg-slate-900/40 backdrop-blur-[2px] ${isMobile ? 'items-end' : 'items-center justify-center p-4'}`}
@@ -394,5 +399,6 @@ export default function AccountPanel({ account, insurance, today, planId, onSele
       </Motion.div>
     </Motion.div>
     </MotionConfig>
+    </ReauthProvider>
   );
 }

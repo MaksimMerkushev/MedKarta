@@ -77,6 +77,7 @@ const REVOKE_REASONS = Object.freeze({
   password_changed: 'пароль изменён',
   role_changed: 'изменена роль',
   sessions_revoked: 'администратор завершил все сессии',
+  mfa_failed: 'слишком много неверных кодов второго фактора',
   issuer: 'у выдавшего больше нет прав на этот аккаунт',
 });
 
@@ -188,13 +189,30 @@ export const createInvitationService = ({ store, accounts, delivery, mailer = nu
     return allowed && canManage(issuer, user);
   };
 
+  /** Способы второго фактора владельца, если MFA включена: пароль по ссылке — только вместе с ним. */
+  const mfaOf = (user) => {
+    if (!mfaEnabled(user) || !accounts.mfa) return null;
+    return { required: true, methods: accounts.mfa.status(user.id).methods };
+  };
+
   const contextView = (record, user) => ({
     purpose: record.purpose,
     email: user.email,
     firstName: user.firstName || '',
     lastName: user.lastName || '',
     expiresAt: iso(record.contextExpiresAt),
+    mfa: mfaOf(user),
   });
+
+  /** Открытый контекст ссылки по токену контекста или ошибка «время истекло». */
+  const openedContext = (contextToken) => {
+    const expired = () => fail('activation_expired', 410, 'Время на создание пароля истекло. Откройте ссылку заново или попросите новую.');
+    if (typeof contextToken !== 'string' || !TOKEN.test(contextToken)) expired();
+    const contextHash = hashToken(contextToken);
+    const record = store.getAccessTokenByContext(contextHash);
+    if (!record || stateOf(record, now()) !== 'opened') expired();
+    return { record, contextHash, expired };
+  };
 
   const service = {
     /** Можно ли отправлять письма — для интерфейса (не зависит от адреса). */
@@ -349,18 +367,39 @@ export const createInvitationService = ({ store, accounts, delivery, mailer = nu
       }
     },
 
+    /** Второй фактор для смены пароля по ссылке: способы и вызов для ключа доступа. */
+    secondFactorOptions(contextToken) {
+      const { record, contextHash } = openedContext(contextToken);
+      const user = ownerOf(record);
+      if (!mfaOf(user)) return { methods: [], passkey: null };
+      return accounts.linkSecondFactorOptions(user, contextHash);
+    },
+
     /**
      * Задать пароль в контексте активации. Аккаунт активирован, все прочие
      * ссылки отозваны, прежние сессии завершены; выдаётся новая сессия.
+     * factor — второй фактор ({method, code} или {method: 'webauthn',
+     * credential}): обязателен, если у аккаунта включена MFA. Он проверяется
+     * до того, как пароль изменится: ссылка из письма (то есть доступ к
+     * ящику) без второго фактора не меняет пароль и не даёт сессии.
      */
-    async complete(contextToken, password, { client = null, ipPrefix = null } = {}) {
-      const expired = () => fail('activation_expired', 410, 'Время на создание пароля истекло. Откройте ссылку заново или попросите новую.');
-      if (typeof contextToken !== 'string' || !TOKEN.test(contextToken)) expired();
-      const contextHash = hashToken(contextToken);
-      const record = store.getAccessTokenByContext(contextHash);
-      if (!record || stateOf(record, now()) !== 'opened') expired();
+    async complete(contextToken, password, { client = null, ipPrefix = null, factor = null } = {}) {
+      const { record, contextHash, expired } = openedContext(contextToken);
       const user = ownerOf(record);
       await checkNewPassword(password, user.email);
+      const mfaRequired = mfaOf(user);
+      let secondFactor = null;
+      if (mfaRequired) {
+        if (!factor || typeof factor.method !== 'string') {
+          fail('mfa_required', 403, 'Для этого аккаунта включена двухфакторная защита: подтвердите смену пароля ключом доступа, кодом из приложения или резервным кодом.', { methods: mfaRequired.methods });
+        }
+        secondFactor = accounts.verifyLinkSecondFactor(user, factor, contextHash, { client, ipPrefix });
+        if (!secondFactor.ok) {
+          // Попытки исчерпаны: ссылка гаснет, нужна новая.
+          store.revokeAccessToken(record.id, 'mfa_failed', now());
+          fail('link_revoked', 410, 'Слишком много неверных кодов — ссылка больше не действует. Запросите новую.');
+        }
+      }
       const passwordHash = await hashPassword(password).catch(busy);
       const stamp = now();
       const session = store.transaction(() => {
@@ -374,7 +413,8 @@ export const createInvitationService = ({ store, accounts, delivery, mailer = nu
         store.activateUser(user.id, passwordHash, stamp, { emailVerified: record.delivery === 'email' });
         store.revokeUserAccessTokens(user.id, 'superseded', stamp);
         store.deleteUserSessions(user.id);
-        const fresh = startSession(user, { client, ipPrefix });
+        // Второй фактор подтверждён — сессия того же уровня, что и после обычного входа с MFA.
+        const fresh = startSession(user, { client, ipPrefix }, secondFactor ? { aal: 2, mfaAt: stamp } : {});
         store.recordLogin(user.id, stamp);
         audit({
           action: record.purpose === 'invite' ? 'user.activate' : 'user.password_set',

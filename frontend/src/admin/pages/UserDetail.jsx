@@ -9,7 +9,7 @@
  */
 import { useState } from 'react';
 import {
-  Archive, ArrowLeft, Ban, Copy, KeyRound, Link2, Lock, LogOut, Mail, MailCheck, Monitor, RotateCcw, Save, Send, ShieldAlert, ShieldCheck, Timer, Trash2, Unlock, UserCog,
+  Archive, ArrowLeft, Ban, Copy, KeyRound, Link2, Lock, LogOut, Mail, MailCheck, Monitor, RotateCcw, Save, Send, ShieldAlert, ShieldCheck, ShieldOff, Timer, Trash2, Unlock, UserCog,
 } from 'lucide-react';
 
 import { api, useApi } from '../api';
@@ -238,6 +238,40 @@ function AccessLinksCard({ data, onChanged }) {
   );
 }
 
+/**
+ * Сброс второго фактора «Пользователя», потерявшего все способы входа:
+ * email владельца для подтверждения и причина (как проверена личность) —
+ * в журнал. Сервер дополнительно требует свежего подтверждения личности
+ * администратора.
+ */
+function MfaResetDialog({ user, onConfirm, onClose }) {
+  const [reason, setReason] = useState('');
+  return (
+    <ConfirmDialog
+      title="Сбросить двухфакторную защиту?"
+      message={`${user.displayName} (${user.email}). Ключи доступа, приложения-аутентификаторы и резервные коды будут удалены, все сессии завершены; пароль не меняется. Владельцу придёт письмо. Делайте это, только если личность владельца подтверждена вне МедКарты.`}
+      confirmLabel="Сбросить защиту"
+      confirmText={user.email}
+      confirmHint="Введите email пользователя для подтверждения"
+      onClose={onClose}
+      onConfirm={() => {
+        const why = reason.trim();
+        if (why.length < 5) throw new Error('Укажите, как подтверждена личность владельца (не короче 5 символов).');
+        return onConfirm(why);
+      }}
+    >
+      <TextInput
+        label="Как подтверждена личность владельца"
+        hint="Попадёт в журнал действий. Например: «паспорт в регистратуре, 12.10» или «видеозвонок, сверка данных»."
+        value={reason}
+        maxLength={300}
+        onChange={(event) => setReason(event.target.value)}
+        data-testid="mfa-reset-reason"
+      />
+    </ConfirmDialog>
+  );
+}
+
 function ManageTab({ data, onChanged }) {
   const toast = useToast();
   const { user, can } = data;
@@ -343,6 +377,24 @@ function ManageTab({ data, onChanged }) {
         </Card>
 
         {!user.pending && <AccessLinksCard data={data} onChanged={onChanged} />}
+
+        {user.mfa?.enabled && (
+          <Card title="Двухфакторная защита" description="Если владелец потерял все ключи, телефон с приложением и резервные коды.">
+            <p className="text-[13px] leading-5 text-slate-600 dark:text-slate-300">
+              Ссылка для смены пароля такому аккаунту не поможет: без второго фактора она пароль не меняет. Сброс удаляет все способы второго фактора и завершает сессии — после этого владелец входит паролем и сразу включает защиту снова.
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Button variant="dangerGhost" icon={ShieldOff} disabled={!can.mfaReset} onClick={() => setDialog('mfa-reset')} data-testid="mfa-reset">Сбросить двухфакторную защиту</Button>
+              {!can.mfaReset && (
+                <Reason>
+                  {user.mfa.required
+                    ? 'Второй фактор сотрудника сбрасывается только на сервере: npm run accounts -- mfa-reset.'
+                    : 'Нужно право «Сброс пароля» и роль выше, чем у пользователя.'}
+                </Reason>
+              )}
+            </div>
+          </Card>
+        )}
       </div>
 
       <Card title="Опасная зона">
@@ -388,6 +440,13 @@ function ManageTab({ data, onChanged }) {
           tone="primary"
           onClose={() => setDialog(null)}
           onConfirm={() => act(() => api.post(`/api/admin/users/${user.id}/unlock-login`, {}), 'Ограничения входа сняты.')}
+        />
+      )}
+      {dialog === 'mfa-reset' && (
+        <MfaResetDialog
+          user={user}
+          onClose={() => setDialog(null)}
+          onConfirm={(reason) => act(() => api.post(`/api/admin/users/${user.id}/mfa-reset`, { confirmEmail: user.email, reason }), 'Двухфакторная защита сброшена. Владельцу отправлено письмо.')}
         />
       )}
       {dialog === 'archive' && (

@@ -5,9 +5,12 @@
  * временного пароля уже выполнена, разрешение admin.access, второй фактор
  * (MFA обязательна сотрудникам: нет факторов — 403 mfa_setup_required,
  * сессия без второго фактора — 403 mfa_required); конкретное разрешение и
- * ранг проверяет adminService. Критические действия (роли, удаление, архив,
- * матрица прав, настройки, экспорт, массовые операции) — только со свежим
- * подтверждением личности (403 reauth_required). Изменяющие запросы — только
+ * ранг проверяет adminService. Критические действия (ссылка для смены
+ * пароля, смена email, сброс второго фактора, снятие ограничений входа,
+ * роли и создание сотрудника, удаление, архив и восстановление,
+ * разблокировка, матрица прав, настройки, экспорт, массовые операции) —
+ * только со свежим явным подтверждением личности (403 reauth_required).
+ * Изменяющие запросы — только
  * JSON со своего Origin (как у кабинета). id пользователя — только 32 hex-символа.
  *
  *   GET    /api/admin/me                           кто вошёл и что ему можно
@@ -31,6 +34,7 @@
  *   POST   /api/admin/users/:id/password-require   потребовать смену пароля
  *   POST   /api/admin/users/:id/sessions/revoke    завершить все сессии
  *   POST   /api/admin/users/:id/unlock-login       снять временные ограничения входа
+ *   POST   /api/admin/users/:id/mfa-reset          сбросить второй фактор «Пользователя» (утрата всех факторов)
  *   GET    /api/admin/users/:id/sessions|logins|blocks|audit|avatar
  *   GET    /api/admin/sessions                     активные сессии
  *   DELETE /api/admin/sessions/:id                 отозвать сессию
@@ -75,6 +79,7 @@ const route = createRouter([
   ['POST', '/api/admin/users/:id/password-require', 'requirePasswordChange'],
   ['POST', '/api/admin/users/:id/sessions/revoke', 'revokeUserSessions'],
   ['POST', '/api/admin/users/:id/unlock-login', 'unlockLogin'],
+  ['POST', '/api/admin/users/:id/mfa-reset', 'mfaReset'],
   ['GET', '/api/admin/users/:id/sessions', 'userSessions'],
   ['GET', '/api/admin/users/:id/logins', 'userLogins'],
   ['GET', '/api/admin/users/:id/blocks', 'userBlocks'],
@@ -92,15 +97,47 @@ const route = createRouter([
 ]);
 
 // Операции с телом запроса: остальные тело не читают.
-const WITH_BODY = new Set(['createUser', 'bulk', 'updateUser', 'deleteUser', 'setRole', 'block', 'updateRole', 'updateSettings', 'issueAccessLink']);
+const WITH_BODY = new Set(['createUser', 'bulk', 'updateUser', 'deleteUser', 'setRole', 'block', 'updateRole', 'updateSettings', 'issueAccessLink', 'mfaReset']);
 
 /*
- * Критические действия: нужна свежая проверка личности (пароль и второй
- * фактор не старше auth.reauthMinutes). Украденная сессия администратора
- * сама по себе не позволит раздать роли, удалить пользователей или
- * выгрузить базу.
+ * Критические действия: нужно свежее явное подтверждение личности (пароль
+ * и второй фактор не старше auth.reauthMinutes; вход его не заменяет).
+ * Украденная сессия администратора — даже только что подтверждённая вторым
+ * фактором — сама по себе не позволит ни захватить подчинённый аккаунт
+ * (ссылка для смены пароля, смена email, сброс второго фактора, снятие
+ * защиты от подбора), ни раздать роли и завести сотрудника, ни удалить
+ * пользователей, ни выгрузить базу.
  */
-const CRITICAL = new Set(['setRole', 'deleteUser', 'archive', 'bulk', 'exportUsers', 'updateRole', 'resetRole', 'updateSettings']);
+const CRITICAL = new Set([
+  'setRole', 'deleteUser', 'archive', 'restore', 'unblock', 'bulk', 'exportUsers', 'updateRole', 'resetRole', 'updateSettings',
+  'issueAccessLink', 'unlockLogin', 'mfaReset',
+]);
+
+/**
+ * Критично ли действие с учётом тела: смена email и создание сотрудника —
+ * да, правка имени и создание обычного пользователя — нет. currentEmail —
+ * нынешний email цели (для updateUser).
+ */
+export const isCriticalAdminOperation = (operation, body = {}, { currentEmail = null } = {}) => {
+  if (CRITICAL.has(operation)) return true;
+  if (operation === 'updateUser') {
+    if (body === null || typeof body !== 'object' || !('email' in body)) return false;
+    return String(body.email ?? '').trim().toLowerCase() !== String(currentEmail ?? '').toLowerCase();
+  }
+  if (operation === 'createUser') return body !== null && typeof body === 'object' && body.role !== undefined && body.role !== 'user';
+  return false;
+};
+
+/*
+ * Разрешение, без которого сервис критическое действие всё равно отклонит
+ * (первая проверка в adminService, до любых изменений): тогда подтверждение
+ * личности не спрашивается — отказ и запись в журнал происходят сразу.
+ */
+const CRITICAL_PERMISSION = Object.freeze({
+  setRole: 'roles.assign', deleteUser: 'users.delete', archive: 'users.archive', restore: 'users.archive', unblock: 'users.block',
+  bulk: 'users.block', exportUsers: 'users.export', updateRole: 'roles.manage', resetRole: 'roles.manage', updateSettings: 'settings.edit',
+  issueAccessLink: 'users.password', unlockLogin: 'users.block', mfaReset: 'users.password', updateUser: 'users.edit', createUser: 'users.create',
+});
 
 const collectSystemInfo = async () => (await import('./systemInfo.js')).collectSystemInfo();
 
@@ -157,12 +194,13 @@ export const createAdminHandler = ({ getContext = getAccountContext, limit = def
       respondJson(res, 403, { error: 'Подтвердите вход вторым фактором.', code: 'mfa_required' });
       return;
     }
-    if (CRITICAL.has(operation) && !requireFresh(res, auth, context.accounts)) return;
-
     const { admin } = context;
     const query = queryOf(url);
     try {
       const body = WITH_BODY.has(operation) ? await readJsonObject(req, MAX_BODY_BYTES) : {};
+      const currentEmail = operation === 'updateUser' && typeof params.id === 'string' ? context.store.getUserById(params.id)?.email ?? null : null;
+      const permitted = !CRITICAL_PERMISSION[operation] || actor.permissions.includes(CRITICAL_PERMISSION[operation]);
+      if (permitted && isCriticalAdminOperation(operation, body, { currentEmail }) && !requireFresh(res, auth, context.accounts)) return;
       let result;
       switch (operation) {
         case 'me': result = admin.me(actor); break;
@@ -196,6 +234,7 @@ export const createAdminHandler = ({ getContext = getAccountContext, limit = def
         case 'requirePasswordChange': result = admin.requirePasswordChange(actor, params.id); break;
         case 'revokeUserSessions': result = admin.revokeUserSessions(actor, params.id); break;
         case 'unlockLogin': result = admin.unlockLogin(actor, params.id); break;
+        case 'mfaReset': result = admin.resetUserMfa(actor, params.id, body); break;
         case 'userSessions': result = admin.userSessions(actor, params.id); break;
         case 'userLogins': result = admin.userLogins(actor, params.id, query); break;
         case 'userBlocks': result = admin.userBlocks(actor, params.id); break;

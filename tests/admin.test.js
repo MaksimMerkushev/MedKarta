@@ -84,8 +84,9 @@ describe('Админ-панель: сценарии', { skip: !DatabaseSync && '
     assert.equal(created.status, 201, JSON.stringify(created.body));
     const { tab } = await acceptLink(base, created.body.link, password);
     if (role !== 'user') {
-      // Сотрудник сразу добавляет ключ доступа (первые 15 минут после входа — без повторного пароля).
+      // Сотрудник сразу добавляет ключ доступа — после подтверждения личности паролем.
       keys.set(email, softAuthenticator());
+      tab.password = password;
       await tab.enrollPasskey(keys.get(email));
     }
     return { tab, id: created.body.user.id, password };

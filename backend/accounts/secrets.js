@@ -14,10 +14,13 @@
  *      резервная копия должна включать файл, иначе TOTP-факторы станут
  *      неработающими (останутся passkeys и резервные коды — их тоже нет,
  *      значит только процедура восстановления через CLI).
+ * Из того же ключа выводится ключ писем в очереди (createMailBox): письма
+ * со ссылками в базе зашифрованы и переживают перезапуск.
+ *
  * Ключ никогда не пишется в журнал и не отдаётся в API.
  */
 
-import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -95,8 +98,26 @@ export const createSecretBox = (key) => {
   });
 };
 
-/** Ключ процесса для писем со ссылками в очереди: живёт только в памяти. */
-export const createEphemeralBox = () => {
-  const box = createSecretBox(randomBytes(KEY_BYTES));
-  return { box, keyId: randomBytes(8).toString('hex') };
+/**
+ * Отдельный ключ для другой задачи из того же главного ключа (HMAC-SHA-256
+ * с меткой назначения): ключ писем не совпадает с ключом секретов MFA, и
+ * один нельзя получить из другого.
+ */
+export const deriveKey = (key, purpose) => createHmac('sha256', key).update(`medkarta:${purpose}:key:v1`).digest();
+
+/** Открытый идентификатор ключа (по нему видно, тем ли ключом зашифровано письмо); сам ключ из него не получить. */
+export const keyIdOf = (key) => createHash('sha256').update(key).update('medkarta:key-id:v1').digest('hex').slice(0, 16);
+
+/**
+ * Ключ писем со ссылками в очереди. Из главного ключа (MFA_SECRET_KEY или
+ * файл mfa.key): письмо, не ушедшее до перезапуска, отправляется после него.
+ * Без главного ключа — ключ процесса в памяти (после перезапуска такие
+ * письма помечаются неотправленными; так работают только тесты).
+ */
+export const createMailBox = (masterKey = null) => {
+  const key = masterKey ? deriveKey(masterKey, 'mail') : randomBytes(KEY_BYTES);
+  return { box: createSecretBox(key), keyId: keyIdOf(key), persistent: Boolean(masterKey) };
 };
+
+/** Ключ процесса для писем со ссылками в очереди: живёт только в памяти. */
+export const createEphemeralBox = () => createMailBox(null);

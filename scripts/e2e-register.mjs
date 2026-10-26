@@ -13,6 +13,8 @@
  *   — восстановление пароля по ссылке из письма и письмо «Пароль изменён»;
  *   — смена email с подтверждением нового адреса (и подтверждением личности);
  *   — пользователь включает приложение-аутентификатор (QR-код) и входит с кодом;
+ *   — восстановление пароля при включённой MFA: без второго фактора пароль
+ *     не меняется, с кодом из приложения — вход;
  *   — ни токены, ни ссылки из писем не попадают в журналы сервера.
  *
  *   node scripts/e2e-register.mjs [--shots каталог]
@@ -306,12 +308,18 @@ try {
   });
 
   console.log('Двухфакторная защита пользователя:');
-  await step('Телефон: приложение-аутентификатор по QR-коду, резервные коды, вход с кодом', async () => {
+  // Приложение-аутентификатор Ольги — нужен и в сценарии восстановления пароля.
+  let olgaDevice = null;
+  await step('Телефон: приложение-аутентификатор по QR-коду (после подтверждения личности), резервные коды, вход с кодом', async () => {
     const page = await newPage({ width: 375 });
     await page.goto(`${BASE}/login?next=${encodeURIComponent('/profile#security')}`, { waitUntil: 'domcontentloaded' });
     await signIn(page, 'olga.mobile@medkarta.test', 'Ольга-и-белые-ночи-2026');
     await page.waitForURL((url) => url.pathname === '/profile', { timeout: 8000 });
     await page.click('[data-testid=mfa-add-totp]');
+    // Вход подтверждением личности не считается: новый способ входа — только после пароля.
+    await page.waitForSelector('[data-testid=reauth-dialog]');
+    await page.fill('[data-testid=reauth-password]', 'Ольга-и-белые-ночи-2026');
+    await page.click('[data-testid=reauth-submit]');
     await page.waitForSelector('[data-testid=totp-qr]');
     await page.click('text=Показать ключ');
     const secret = (await page.textContent('[data-testid=totp-secret]')).replace(/\s/g, '');
@@ -319,6 +327,7 @@ try {
     await settle(page);
     await shot(page, 'totp-setup-375');
     const device = totpDevice(secret);
+    olgaDevice = device;
     await page.fill('[data-testid=totp-confirm-code]', await device.next());
     await page.click('[data-testid=totp-confirm]');
     await page.waitForSelector('[data-testid=recovery-codes]');
@@ -335,6 +344,60 @@ try {
     await page.fill('[data-testid=mfa-code]', await device.next());
     await page.waitForURL((url) => url.pathname === '/', { timeout: 40_000 });
     expect((await accountOf(page))?.email === 'olga.mobile@medkarta.test', 'вход с кодом не выполнен');
+    await page.context().close();
+  });
+
+  await step('Забыли пароль при включённой MFA: ссылка из письма без второго фактора пароль не меняет; с кодом — вход', async () => {
+    const OLD = 'Ольга-и-белые-ночи-2026';
+    const NEW = 'Ольга-сменила-пароль-по-ссылке';
+    const page = await newPage({ width: 375 });
+    await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
+    await page.fill('[data-testid=login-email]', 'olga.mobile@medkarta.test');
+    await page.click('[data-testid=login-continue]');
+    await page.click('[data-testid=auth-no-password]');
+    const before = smtp.messages.length;
+    await page.click('[data-testid=access-submit]');
+    await page.waitForSelector('[data-testid=auth-step-sent]');
+    const mail = await waitForMail(smtp, 'olga.mobile@medkarta.test', { after: before, subject: /Восстановление пароля/u });
+    const link = linkOf(mail.text);
+    tokens.push(tokenOf(link));
+    await page.goto(link, { waitUntil: 'domcontentloaded' });
+    await page.click('[data-testid=activation-accept]');
+    await page.fill('[data-testid=activation-password-input]', NEW);
+    await page.click('[data-testid=activation-submit]');
+    // После пароля — второй фактор; пароль ещё не изменён, сессии нет.
+    await page.waitForSelector('[data-testid=activation-mfa]');
+    expect(await accountOf(page) === null, 'сессия выдана до второго фактора');
+    const bare = await page.evaluate((password) => fetch('/api/auth/activation/complete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }),
+    }).then(async (response) => ({ status: response.status, code: (await response.json()).code })), NEW);
+    expect(bare.status === 403 && bare.code === 'mfa_required', `пароль без второго фактора: ${JSON.stringify(bare)}`);
+    await settle(page);
+    await noOverflow(page, 'смена пароля: второй фактор');
+    await shot(page, 'reset-mfa-375');
+    const check = await newPage();
+    await check.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
+    await signIn(check, 'olga.mobile@medkarta.test', NEW);
+    await check.waitForSelector('[data-testid=auth-error]');
+    await check.context().close();
+    // Неверный код — понятная ошибка, пароль не меняется.
+    await page.fill('[data-testid=mfa-code]', olgaDevice.wrong());
+    await page.waitForSelector('[data-testid=activation-mfa] [data-testid=auth-error]');
+    await settle(page);
+    await noOverflow(page, 'смена пароля: неверный код');
+    await shot(page, 'reset-mfa-error-375');
+    // Верный код — пароль изменён, вход выполнен.
+    const changedAt = smtp.messages.length;
+    await page.fill('[data-testid=mfa-code]', await olgaDevice.next());
+    await page.waitForSelector('[data-testid=activation-success]', { timeout: 40_000 });
+    await page.waitForURL((url) => url.pathname === '/', { timeout: 8000 });
+    expect((await accountOf(page))?.email === 'olga.mobile@medkarta.test', 'вход после смены пароля не выполнен');
+    await waitForMail(smtp, 'olga.mobile@medkarta.test', { after: changedAt, subject: /Пароль изменён/u });
+    const old = await newPage();
+    await old.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
+    await signIn(old, 'olga.mobile@medkarta.test', OLD);
+    await old.waitForSelector('[data-testid=auth-error]');
+    await old.context().close();
     await page.context().close();
   });
 

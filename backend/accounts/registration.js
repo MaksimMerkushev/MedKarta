@@ -230,7 +230,7 @@ export const createRegistrationService = ({ store, accounts, delivery, mailer, m
         if (!store.useRegistration(again.id, stamp, created.id)) expired();
         store.revokeRegistrations(again.email, 'superseded', stamp);
         store.addAudit({ at: stamp, action: 'user.register', actorId: created.id, actorLabel: userLabel(created), targetId: created.id, targetLabel: userLabel(created), result: 'ok', details: { role: 'user' } });
-        const fresh = startSession(created, { client, ipPrefix }, { aal: 1, reauthAt: stamp });
+        const fresh = startSession(created, { client, ipPrefix }, { aal: 1 });
         store.recordLogin(created.id, stamp);
         store.addAuthEvent({ at: stamp, type: 'account_registered', userId: created.id, sessionId: fresh.publicId, client, ipPrefix });
         return { user: created, session: fresh };

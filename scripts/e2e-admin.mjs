@@ -11,7 +11,8 @@
  * invite_only), повторное использование ссылки. Обязательная двухфакторная
  * защита сотрудника: настройка ключа доступа (виртуальный ключ WebAuthn в
  * Chromium) при первом входе в панель, резервные коды, подтверждение
- * личности перед сменой роли. Экраны входа и приглашения подробно —
+ * личности перед сменой роли и сбросом второго фактора пользователя,
+ * потерявшего телефон. Экраны входа и приглашения подробно —
  * scripts/e2e-auth.mjs, регистрация и письма — scripts/e2e-register.mjs.
  *
  * Нужны собранный фронтенд (npm run build) и Playwright с Chromium
@@ -201,6 +202,11 @@ try {
     expect(denied.status === 403 && denied.code === 'mfa_setup_required', `API без MFA: ${JSON.stringify(denied)}`);
     await shot(admin, '01b-mfa-setup');
     await admin.click('[data-testid=mfa-add-passkey]');
+    // Первый фактор — тоже после явного подтверждения личности: вход его не заменяет
+    // (иначе укравший сессию привязал бы свой ключ). Факторов ещё нет — достаточно пароля.
+    await admin.waitForSelector('[data-testid=reauth-dialog]');
+    await admin.fill('[data-testid=reauth-password]', ROOT_PASSWORD);
+    await admin.click('[data-testid=reauth-submit]');
     await admin.waitForSelector('[data-testid=recovery-codes]');
     const codes = await admin.$$eval('[data-testid=recovery-codes] li', (items) => items.map((item) => item.textContent.trim()));
     expect(codes.length === 10 && codes.every((code) => /^[a-z2-9]{5}-[a-z2-9]{5}$/.test(code)), `резервные коды: ${codes.length}`);
@@ -381,6 +387,48 @@ try {
     await admin.waitForSelector('[data-testid=sessions-table] >> text=olga.petrova@medkarta.test', { state: 'detached' });
     const status = await olga.evaluate(() => fetch('/api/me').then((response) => response.status));
     expect(status === 401, `завершённая сессия ответила ${status}`);
+  });
+
+  await step('18а. Пользователь потерял телефон с приложением: сброс второго фактора — с email, причиной и подтверждением личности администратора', async () => {
+    // Ольга входит и включает приложение-аутентификатор (API своей страницы; экран настройки — в e2e-register).
+    const { totpDevice } = await import('./e2e-lib.mjs');
+    const password = 'Ольга-пароль-2026';
+    const started = await olga.evaluate(async (secret) => {
+      const post = (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+        .then(async (response) => ({ status: response.status, body: await response.json() }));
+      await post('/api/auth/login', { email: 'olga.petrova@medkarta.test', password: secret });
+      await post('/api/me/reauth', { password: secret });
+      return post('/api/me/mfa/totp', {});
+    }, password);
+    expect(started.status === 200 && started.body.secret, `настройка TOTP: ${started.status}`);
+    const code = await totpDevice(started.body.secret).next();
+    const confirmed = await olga.evaluate(({ factorId, value }) => fetch('/api/me/mfa/totp/confirm', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ factorId, code: value }),
+    }).then((response) => response.status), { factorId: started.body.factorId, value: code });
+    expect(confirmed === 200, `подтверждение TOTP: ${confirmed}`);
+
+    await openUser('olga.petrova@medkarta.test');
+    await tab(admin, 'Управление');
+    await admin.waitForSelector('[data-testid=mfa-reset]');
+    // Подтверждение личности администратора «устарело»: сброс попросит пароль и ключ доступа.
+    await sqlite((db) => db.prepare('UPDATE sessions SET reauth_at = 1 WHERE user_id = (SELECT id FROM users WHERE email = ?)').run(ROOT_EMAIL));
+    await admin.click('[data-testid=mfa-reset]');
+    expect(await admin.isDisabled('[data-testid=confirm-action]'), 'сброс доступен без ввода email');
+    await admin.fill('[data-testid=confirm-input]', 'olga.petrova@medkarta.test');
+    await admin.fill('[data-testid=mfa-reset-reason]', 'Позвонила в поддержку, данные сверены по видеосвязи');
+    await shot(admin, '04b-mfa-reset');
+    await admin.click('[data-testid=confirm-action]');
+    await admin.waitForSelector('[data-testid=reauth-dialog]');
+    await admin.fill('[data-testid=reauth-password]', ROOT_PASSWORD);
+    await admin.click('[data-testid=reauth-submit]');
+    await admin.waitForSelector('[data-testid=mfa-passkey]');
+    await admin.click('[data-testid=mfa-passkey]');
+    await admin.waitForSelector('[data-testid=reauth-dialog]', { state: 'detached' });
+    await admin.waitForSelector('[data-testid=mfa-reset]', { state: 'detached' });
+    const status = await olga.evaluate(() => fetch('/api/me').then((response) => response.status));
+    expect(status === 401, `сессия владельца после сброса ответила ${status}`);
+    await tab(admin, 'Профиль');
+    await admin.waitForSelector('text=Не включена');
   });
 
   await step('19. Перезапустить сервер — данные и сессия со вторым фактором на месте', async () => {

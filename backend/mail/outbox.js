@@ -15,10 +15,18 @@
  *     (delivery_status): «отправлено» пишется только после ответа 250 от
  *     SMTP-сервера;
  *   - письма со ссылками-ключами (регистрация, приглашение, смена пароля и
- *     email) в базе только зашифрованы ключом процесса, который живёт в
- *     памяти: сам токен в базе не лежит даже в очереди. Если процесс
- *     перезапустился до отправки, такое письмо помечается failed (ссылку
- *     запросят заново), а уведомления без ключей — уходят после перезапуска;
+ *     email) в базе только зашифрованы (AES-256-GCM, привязка к id письма)
+ *     ключом, выведенным из главного ключа сервера (MFA_SECRET_KEY или файл
+ *     mfa.key, — не из базы): сам токен в базе не лежит даже в очереди, а
+ *     копия базы без ключа токенов не раскрывает. Поэтому письмо, не
+ *     ушедшее до перезапуска, уходит после него. Предсказуемо и остальное:
+ *     письмо, зашифрованное другим ключом (ключ сменили), и письмо со
+ *     ссылкой, срок которой истёк, не отправляются — помечаются failed с
+ *     причиной, и статус переносится в саму ссылку (её запросят заново);
+ *     письмо со ссылкой, которую тем временем заменили, отозвали или уже
+ *     использовали, тоже не уходит (link_inactive);
+ *   - «застрявшие» при падении процесса письма (sending) при запуске
+ *     возвращаются в очередь;
  *   - после отправки адрес и текст письма из очереди стираются: остаются вид
  *     письма, SHA-256 адреса и время — для лимитов и диагностики, 30 дней.
  *
@@ -36,7 +44,7 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 
-import { createEphemeralBox } from '../accounts/secrets.js';
+import { createMailBox } from '../accounts/secrets.js';
 import { logger } from '../observability/safeLogger.js';
 import { MailError } from './smtp.js';
 import { ACCOUNT_NOTICE_KINDS, MAIL_KINDS, renderMail, SECRET_KINDS } from './templates.js';
@@ -65,10 +73,13 @@ export const addressHash = (address) => createHash('sha256').update(String(addre
  * @param {object} deps.store хранилище (sqliteStore.js)
  * @param {object} deps.delivery доставка (accounts/delivery.js): deliver, emailEnabled
  * @param {(ref: {type: string, id: string}, status: 'sent'|'failed') => void} [deps.onStatus] статус доставки — в ссылку
+ * @param {Buffer|null} [deps.masterKey] главный ключ сервера (secrets.loadMfaKey): из него — ключ писем со ссылками
+ * @param {(ref: {type: string, id: string}) => boolean} [deps.refActive] ссылка из письма ещё действует (не использована, не отозвана)
  * @param {() => number} [deps.now]
  */
-export const createMailer = ({ store, delivery, onStatus = () => {}, now = () => Date.now() }) => {
-  const { box, keyId } = createEphemeralBox();
+export const createMailer = ({ store, delivery, onStatus = () => {}, masterKey = null, refActive = () => true, now = () => Date.now() }) => {
+  const { box, keyId, persistent } = createMailBox(masterKey);
+  if (!persistent) logger.warn('mail.ephemeral_key', { status: 'memory' });
   let timer = null;
   let running = null;
 
@@ -100,7 +111,7 @@ export const createMailer = ({ store, delivery, onStatus = () => {}, now = () =>
    *
    * @returns {string} id письма
    */
-  const enqueue = ({ kind, to, params = {}, sourceKey = null, ref = null, delayMs = 0 }) => {
+  const enqueue = ({ kind, to, params = {}, sourceKey = null, ref = null, delayMs = 0, expiresAt = null }) => {
     if (!delivery.emailEnabled) throw new MailError('mail_disabled', 'Почта не настроена');
     const content = renderMail(kind, params);
     const secret = SECRET_KINDS.has(kind);
@@ -117,6 +128,8 @@ export const createMailer = ({ store, delivery, onStatus = () => {}, now = () =>
       sourceKey,
       refType: ref?.type || null,
       refId: ref?.id || null,
+      // Срок ссылки: после него письмо не отправляется.
+      expiresAt: Number.isFinite(expiresAt) ? expiresAt : (secret && Number.isFinite(params.expiresAt) ? params.expiresAt : null),
       now: now(),
     });
     return id;
@@ -155,10 +168,26 @@ export const createMailer = ({ store, delivery, onStatus = () => {}, now = () =>
 
   /** Одна попытка отправить взятое из очереди письмо. */
   const attempt = async (mail, { retry = true } = {}) => {
+    // Ссылка в письме уже не действует: мёртвую ссылку не отправляем.
+    if (mail.expiresAt && mail.expiresAt <= now()) {
+      finish(mail, 'failed', 'expired');
+      return false;
+    }
+    // Зашифровано другим ключом (главный ключ сервера сменили) — не расшифровать.
+    if (mail.keyId && mail.keyId !== keyId) {
+      finish(mail, 'failed', 'key_changed');
+      return false;
+    }
+    // Пока письмо ждало (например, перезапуска), ссылку заменили новой, отозвали или уже использовали.
+    if (mail.refType && mail.refId && SECRET_KINDS.has(mail.kind) && !refActive({ type: mail.refType, id: mail.refId })) {
+      store.markMailFailed(mail.id, 'link_inactive');
+      logger.event('mail.failed', { status: 'failed', action: mail.kind, error_code: 'link_inactive' });
+      return false;
+    }
     const content = contentOf(mail);
     if (!content || !mail.toAddress) {
-      // Ключ процесса сменился (перезапуск) или письмо испорчено: ссылку запросят заново.
-      finish(mail, 'failed', 'restart');
+      // Письмо испорчено (или зашифровано ключом процесса, который уже завершился): ссылку запросят заново.
+      finish(mail, 'failed', 'unreadable');
       return false;
     }
     try {

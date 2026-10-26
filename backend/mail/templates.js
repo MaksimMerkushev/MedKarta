@@ -204,6 +204,23 @@ const TEMPLATES = {
     note: [NOT_YOU_SECURITY],
   }),
 
+  mfa_reset: ({ name, at }) => compose({
+    subject: 'Двухфакторная защита сброшена — МедКарта',
+    greeting: greetingOf(name),
+    paragraphs: [
+      `${formatMoscow(at)} администратор МедКарты по вашему обращению сбросил двухфакторную защиту аккаунта: ключи доступа, приложения-аутентификаторы и резервные коды удалены, все сеансы завершены.`,
+      'Войдите по email и паролю и сразу включите защиту снова в разделе «Безопасность аккаунта» профиля.',
+    ],
+    note: ['Если вы не обращались в поддержку — немедленно свяжитесь с ней и смените пароль: кто-то мог выдать себя за вас.'],
+  }),
+
+  reset_link_issued: ({ name, at }) => compose({
+    subject: 'Администратор выдал ссылку для смены пароля — МедКарта',
+    greeting: greetingOf(name),
+    paragraphs: [`${formatMoscow(at)} администратор МедКарты выдал ссылку для смены пароля вашего аккаунта и передаёт её лично. Прежний пароль действует, пока по ссылке не задан новый.`],
+    note: ['Если вы не просили помочь со входом — свяжитесь с поддержкой.'],
+  }),
+
   recovery_codes: ({ name, at }) => compose({
     subject: 'Новые резервные коды — МедКарта',
     greeting: greetingOf(name),
@@ -244,6 +261,7 @@ export const SECRET_KINDS = Object.freeze(new Set(['register_confirm', 'invite',
 /** Уведомления о действиях с аккаунтом (их вызывает сам владелец): свой лимит, не общий с информационными. */
 export const ACCOUNT_NOTICE_KINDS = Object.freeze(new Set([
   'password_changed', 'email_changed', 'email_change_requested', 'mfa_enabled', 'mfa_disabled', 'recovery_codes', 'recovery_code_used',
+  'mfa_reset', 'reset_link_issued',
 ]));
 
 /** Письмо по виду: {subject, text, html}. */

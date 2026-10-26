@@ -107,7 +107,7 @@ http(s); телефон — цифры и разделители; координ
 
 Режимы доступа и приоритет правил — [10-medical-search-and-data.md](10-medical-search-and-data.md).
 
-## SQLite: аккаунты (схема 5)
+## SQLite: аккаунты (схема 6)
 
 [backend/accounts/sqliteStore.js](../backend/accounts/sqliteStore.js); файл
 `ACCOUNTS_DB_PATH` (по умолчанию `var/accounts/medkarta.sqlite`). Прагмы:
@@ -167,6 +167,7 @@ CREATE TABLE mfa_factors (                      -- схема 5: факторы 
   secret_enc TEXT,                              -- TOTP: AES-256-GCM ключом MFA_SECRET_KEY
   last_step INTEGER,                            -- TOTP: последний принятый шаг (код не принимается дважды)
   credential_id TEXT UNIQUE, public_key, algorithm, sign_count, transports, backed_up, -- ключ доступа
+  user_verified INTEGER,                        -- схема 6: ключ проверил человека (PIN, биометрия); NULL — добавлен раньше
   created_at, confirmed_at, last_used_at, revoked_at, expires_at
 );
 CREATE TABLE mfa_recovery_codes (user_id → users, code_hash, created_at, used_at,  -- HMAC-SHA-256
@@ -179,8 +180,11 @@ CREATE TABLE trusted_devices (token_hash, user_id → users, created_at, last_us
   PRIMARY KEY (token_hash, user_id)) WITHOUT ROWID;  -- cookie mk_device, 180 дней
 CREATE TABLE mail_outbox (id PRIMARY KEY, kind, to_hash, to_address, payload, key_id,
   status CHECK (status IN ('pending', 'sending', 'sent', 'failed')), attempts, next_attempt_at,
-  last_error, source_key, ref_type, ref_id, created_at, sent_at);
-  -- payload писем со ссылками зашифрован ключом процесса; после отправки to_address и payload стираются
+  last_error, source_key, ref_type, ref_id, created_at, sent_at,
+  expires_at);                                  -- схема 6: срок ссылки в письме — после него письмо не уходит
+  -- payload писем со ссылками зашифрован (AES-256-GCM) ключом писем: HMAC-SHA-256(MFA_SECRET_KEY, назначение),
+  -- key_id — его открытый идентификатор; письмо переживает перезапуск. last_error: expired, link_inactive,
+  -- key_changed, unreadable или код SMTP. После отправки to_address и payload стираются
 CREATE TABLE access_tokens (                    -- схема 4: приглашения и ссылки для смены пароля
   id               TEXT PRIMARY KEY,            -- 24 hex, публичный id для отзыва (не токен)
   token_hash       TEXT NOT NULL UNIQUE,        -- SHA-256 от токена ссылки; сам токен не хранится

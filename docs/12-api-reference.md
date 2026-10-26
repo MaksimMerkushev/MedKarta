@@ -422,9 +422,10 @@ Set-Cookie: __Host-mk_sid=<token>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-A
 |---|---|---|---|
 | `POST /api/auth/access-link` | `{email}` | `202 {ok, message}` — **одинаково** для любого адреса; письмо (приглашение или смена пароля) уходит после ответа и только владельцу действующего аккаунта (сотруднику без второго фактора — не уходит). Почта не настроена — `409 mail_disabled` для всех | 5 за 15 мин; 10 писем в час с адреса; 3 в час на email |
 | `POST /api/auth/activation/peek` | `{token}` | `{link: {purpose: "invite"\|"reset", firstName, email (маской), expiresAt, invitedBy}}` — ничего не меняет | 30 за 15 мин |
-| `POST /api/auth/activation/start` | `{token}` | `{context: {purpose, email, firstName, lastName, expiresAt}}` + cookie `mk_activation` (`HttpOnly; SameSite=Strict; Path=/api/auth/activation`, 30 мин; по HTTPS — `__Secure-mk_activation`). Токен больше не действует; тот же браузер с действующей cookie получает контекст снова | 30 за 15 мин |
+| `POST /api/auth/activation/start` | `{token}` | `{context: {purpose, email, firstName, lastName, expiresAt, mfa}}` (`mfa` — `{required: true, methods}`, если у аккаунта включена двухфакторная защита, иначе `null`) + cookie `mk_activation` (`HttpOnly; SameSite=Strict; Path=/api/auth/activation`, 30 мин; по HTTPS — `__Secure-mk_activation`). Токен больше не действует; тот же браузер с действующей cookie получает контекст снова | 30 за 15 мин |
 | `GET /api/auth/activation` | — | `{context}` по cookie или `404 no_context` | 30 за 15 мин |
-| `POST /api/auth/activation/complete` | `{password}` | `{user, favorites, purpose}` + cookie сессии; cookie контекста стирается, прежняя сессия этого браузера завершается | 30 за 15 мин |
+| `POST /api/auth/activation/mfa-options` | `{}` | `{methods, passkey}` — второй фактор для смены пароля по этой ссылке (вызов для ключа доступа привязан к ссылке); MFA не включена — `{methods: [], passkey: null}` | 30 за 15 мин |
+| `POST /api/auth/activation/complete` | `{password}`; если включена MFA — ещё `{method: "totp"\|"recovery", code}` или `{method: "webauthn", credential}` | `{user, favorites, purpose}` + cookie сессии (уровень 2, если был второй фактор); cookie контекста стирается, прежняя сессия этого браузера завершается. С MFA без второго фактора — `403 mfa_required` с `methods`: пароль не меняется, сессии нет, ссылка не тратится | 30 за 15 мин |
 
 Ошибки: `404 invalid_link` — токена нет или он искажён; `410 link_expired`,
 `410 link_revoked`, `410 link_used`; `410 activation_expired` — 30 минут на
@@ -432,7 +433,11 @@ Set-Cookie: __Host-mk_sid=<token>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-A
 подменена; `403 account_blocked` / `account_inactive` — аккаунт заблокирован
 или в архиве (ошибку видит только тот, у кого есть сама ссылка);
 `400 weak_password` — пароль не прошёл правила
-([passwordPolicy.js](../shared/passwordPolicy.js)); `429 rate_limited`.
+([passwordPolicy.js](../shared/passwordPolicy.js)); `403 mfa_required` — у
+аккаунта включена MFA, нужен второй фактор; `400 bad_mfa_code` — неверный
+второй фактор (`attemptsLeft`), пароль не изменён; `410 link_revoked` —
+5 неверных попыток по этой ссылке, она погашена; `429 too_many_attempts` —
+лимит неверных кодов аккаунта (общий со входом); `429 rate_limited`.
 
 ---
 
@@ -441,9 +446,11 @@ Set-Cookie: __Host-mk_sid=<token>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-A
 Только с сессией (иначе `401 unauthenticated`). Лимит — 300 запросов за 5
 минут с адреса; запросы, проверяющие пароль или код (смена пароля,
 подтверждение личности, подтверждение TOTP, смена email), — 10 за 15 минут.
-Маршруты с пометкой **свежесть** требуют подтверждения личности не старше
-`auth.reauthMinutes` (10 минут): иначе `403 reauth_required` с `mfa: true|false`
-— интерфейс вызывает `POST /api/me/reauth` и повторяет запрос.
+Маршруты с пометкой **свежесть** требуют явного подтверждения личности
+(`POST /api/me/reauth`) не старше `auth.reauthMinutes` (10 минут); вход — ни
+по паролю, ни со вторым фактором — его не заменяет. Иначе
+`403 reauth_required` с `mfa: true|false` — интерфейс вызывает
+`POST /api/me/reauth` и повторяет запрос.
 
 | Метод и путь | Тело | Ответ |
 |---|---|---|
@@ -454,13 +461,13 @@ Set-Cookie: __Host-mk_sid=<token>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-A
 | `DELETE /api/me/sessions/:id` | `{}` | `{revoked, current}`; своя текущая — выход |
 | `POST /api/me/sessions/revoke-others` | `{}` | `{revoked}` |
 | `POST /api/me/sessions/revoke-all` | `{}` | `{revoked}`; все сессии, включая текущую («Выйти везде»), cookie стирается |
-| `GET /api/me/security` | — | `{enabled, factors: [{id, type, typeLabel, label, createdAt, lastUsedAt, synced}], recoveryCodes: {total, unused}, methods, passkeysAvailable, mfaRequired, sessionLevel, fresh, canAddFactor, email, emailVerified, emailChange}` — без секретов |
+| `GET /api/me/security` | — | `{enabled, factors: [{id, type, typeLabel, label, createdAt, lastUsedAt, synced, userVerified}], recoveryCodes: {total, unused}, methods, passkeysAvailable, mfaRequired, sessionLevel, fresh, canAddFactor, email, emailVerified, emailChange}` — без секретов |
 | `POST /api/me/reauth/options` | `{}` | `{methods, passkey}` — вызов для ключа доступа |
 | `POST /api/me/reauth` | `{password}` и, если MFA включена, `{method, code}` или `{method: "webauthn", credential}` | `{ok, security, sessionLevel}` + новая cookie сессии с отметкой подтверждения; неверно — `400 bad_password` / `bad_mfa_code` |
-| `POST /api/me/mfa/totp` | `{}` | `{factorId, secret, uri, expiresAt}` — секрет показывается один раз, живёт 10 минут до подтверждения. **Свежесть** (первый фактор — без неё в первые 15 минут после входа) |
-| `POST /api/me/mfa/totp/confirm` | `{factorId, code, label?}` | `{factor, recoveryCodes, security}`; `recoveryCodes` — при первом факторе, один раз; сессия повышается до уровня 2 |
-| `POST /api/me/mfa/passkey` | `{}` | `{publicKey}` — параметры для `navigator.credentials.create` (base64url). **Свежесть** (как у TOTP) |
-| `POST /api/me/mfa/passkey/finish` | `{credential, label?}` | `{factor, recoveryCodes, security}` |
+| `POST /api/me/mfa/totp` | `{}` | `{factorId, secret, uri, expiresAt}` — секрет показывается один раз, живёт 10 минут до подтверждения. **Свежесть** (и для первого фактора) |
+| `POST /api/me/mfa/totp/confirm` | `{factorId, code, label?}` | `{factor, recoveryCodes, security}`; `recoveryCodes` — при первом факторе, один раз; сессия повышается до уровня 2, остальные сессии аккаунта завершаются. **Свежесть** |
+| `POST /api/me/mfa/passkey` | `{}` | `{publicKey}` — параметры для `navigator.credentials.create` (base64url); сотруднику — `authenticatorSelection.userVerification: "required"`, пользователю — `"preferred"`. **Свежесть** |
+| `POST /api/me/mfa/passkey/finish` | `{credential, label?}` | `{factor, recoveryCodes, security}`; сотруднику ключ без проверки человека (флаг UV) — `400 uv_required`. **Свежесть** |
 | `PATCH /api/me/mfa/factors/:id` | `{label}` | `{factor}` |
 | `DELETE /api/me/mfa/factors/:id` | `{}` | `{removed, remaining}`; сотруднику последний фактор не удалить — `400 last_factor`. **Свежесть** |
 | `POST /api/me/mfa/recovery-codes` | `{}` | `{recoveryCodes}` — новые 10 кодов, старые гаснут. **Свежесть** |
@@ -497,9 +504,14 @@ Set-Cookie: __Host-mk_sid=<token>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-A
 [accounts.md](accounts.md#роли-и-разрешения)). Без сессии — `401`, без
 `admin.access` или нужного разрешения — `403 forbidden`. **Второй фактор
 обязателен:** у сотрудника нет ни одного — `403 mfa_setup_required`, сессия
-без второго фактора — `403 mfa_required`. Критичные маршруты (смена роли,
-правка ролей и настроек, удаление, архив, массовые действия, экспорт) —
-только со свежим подтверждением личности, иначе `403 reauth_required`.
+без второго фактора — `403 mfa_required`. Критичные маршруты — ссылка для
+смены пароля (`POST …/invitations`), смена email (`PATCH` с другим
+`email`), сброс второго фактора, снятие ограничений входа, создание
+сотрудника (`POST /api/admin/users` с ролью выше `user`), смена роли, правка
+ролей и настроек, удаление, архив и восстановление, разблокировка, массовые
+действия, экспорт — только со свежим явным подтверждением личности (вход его
+не заменяет), иначе `403 reauth_required`; без нужного разрешения — сразу
+`403 forbidden`.
 Лимит — 600 запросов за 5 минут с адреса. Тела — только перечисленные поля:
 лишнее поле — `400 unexpected_field` (например, `role` в `PATCH`).
 
@@ -513,6 +525,7 @@ Set-Cookie: __Host-mk_sid=<token>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-A
 | `POST /api/admin/users/bulk` | `users.block` | `{action: "block"\|"unblock", ids, reason, until}` до 100 id | `{succeeded, failed, results: [{id, ok, error}]}` |
 | `GET /api/admin/users/:id` | `users.view` | — | `{user, can, permissions}`: что текущий сотрудник может сделать с этим аккаунтом; в `user` — `emailVerified`, `signupSource`, `mfa: {enabled, factors, required}`, `loginLimits: {accountLockedUntil, mfaLockedUntil, lockedPlaces, recentFailures, active}` |
 | `POST /api/admin/users/:id/unlock-login` | `users.block` | `{}` | `{user, can, …}`; счётчики неудачных попыток аккаунта сброшены, запись в журнал |
+| `POST /api/admin/users/:id/mfa-reset` | `users.password` | `{confirmEmail, reason}` (`reason` — 5–300 символов: как подтверждена личность) | `{user, can, …, removed}`; факторы и резервные коды удалены, сессии и доверенные устройства завершены, владельцу — письмо, в журнал — с причиной. Только «Пользователь» ниже по роли: сотруднику — `403 staff_mfa_reset` (только `npm run accounts -- mfa-reset`); email не совпал — `400 confirm_mismatch`; MFA не включена — `409 mfa_not_enabled` |
 | `PATCH /api/admin/users/:id` | `users.edit`; смена email — ещё и `users.password` | `{firstName, lastName, email, version}` | `{user, can, …}`; устаревшая `version` — `409 conflict`; смена email отзывает ссылки |
 | `DELETE /api/admin/users/:id` | `users.delete` | `{confirmEmail}` | `{deleted: true}` |
 | `POST /api/admin/users/:id/role` | `roles.assign` | `{role, version}` | `{user, can, …}`; ссылки пользователя отзываются; `superadmin` не назначается никому — `403` |
@@ -520,7 +533,7 @@ Set-Cookie: __Host-mk_sid=<token>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-A
 | `POST /api/admin/users/:id/unblock` | `users.block` | `{}` | `{user, can, …}` |
 | `POST /api/admin/users/:id/archive`, `/restore` | `users.archive` | `{}` | `{user, can, …}` |
 | `GET /api/admin/users/:id/invitations` | `users.view` | — | `{items: [{id, purpose, state, stateLabel, delivery, deliveryStatus, createdAt, expiresAt, openedAt, usedAt, revokedAt, revokedReason, createdBy}], delivery}` — без токенов и хэшей |
-| `POST /api/admin/users/:id/invitations` | `users.password` | `{delivery: "auto"\|"manual"}` | `{user, can, …, invitation, link}` — приглашение (не активирован) или ссылка для смены пароля; прежняя того же вида отозвана; заблокированному или архивному — `409` |
+| `POST /api/admin/users/:id/invitations` | `users.password` | `{delivery: "auto"\|"manual"}` | `{user, can, …, invitation, link}` — приглашение (не активирован) или ссылка для смены пароля; прежняя того же вида отозвана; заблокированному или архивному — `409`. Ссылка вручную — владельцу письмо «Администратор выдал ссылку»; при включённой у владельца MFA пароль по ней меняется только с его вторым фактором |
 | `DELETE /api/admin/users/:id/invitations/:invitation` | `users.password` | `{}` | `{invitation}`; уже использованная или отозванная — `409 bad_state` |
 | `GET /api/admin/notifications` | `users.view` | `?since=ISO` | `{now, items: [{id, at, userId, user}]}` — активации после `since` (не раньше суток) |
 | `POST /api/admin/users/:id/password-require` | `users.password` | `{}` | `{user, can, …}` |

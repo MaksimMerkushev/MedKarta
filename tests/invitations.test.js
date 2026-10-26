@@ -65,6 +65,7 @@ const activateStaff = async (base, token, password) => {
   assert.equal((await tab.start(token)).status, 200);
   assert.equal((await tab.complete(password)).status, 200);
   const key = softAuthenticator();
+  tab.password = password;
   await tab.enrollPasskey(key);
   return { tab, key };
 };
@@ -259,6 +260,8 @@ describe('Приглашения: сценарии через HTTP', { skip: !Da
       // (основную сессию root не трогаем: истёкшая сессия удаляется при первом же запросе).
       const admin = browserFor(base);
       assert.equal((await admin.signIn('root@medkarta.test', ROOT_PASSWORD, rootKey)).status, 200);
+      // Новая ссылка — критическое действие: вход его не заменяет, нужно подтвердить личность.
+      await admin.reauth(rootKey);
       const list = await admin.call(`/api/admin/users/${id}/invitations`);
       assert.equal(list.body.items[0].state, 'expired');
       const before = outbox.length;

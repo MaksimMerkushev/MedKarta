@@ -46,8 +46,6 @@ export const ACCOUNT_LIMITS = Object.freeze({
   // Второй шаг входа: 5 минут и 5 попыток на один вход паролем.
   MFA_CHALLENGE_TTL_MS: 5 * 60 * 1000,
   MFA_MAX_ATTEMPTS: 5,
-  // Настройка первого фактора без повторного ввода пароля — только в первые 15 минут сессии.
-  FRESH_SESSION_MS: 15 * 60 * 1000,
   // Доверенное устройство (cookie mk_device) помнится полгода.
   DEVICE_TTL_MS: 180 * DAY_MS,
 });
@@ -405,7 +403,8 @@ export const createAccountService = ({
     const stamp = now();
     const deviceHash = deviceHashOf(context.deviceToken);
     const knownDevice = isTrustedDevice(user, deviceHash);
-    const session = startSession(user, context, { aal, mfaAt: aal >= 2 ? stamp : null, reauthAt: stamp, deviceHash });
+    // Вход не считается подтверждением личности: для важных действий — отдельный шаг (reauthenticate).
+    const session = startSession(user, context, { aal, mfaAt: aal >= 2 ? stamp : null, reauthAt: null, deviceHash });
     store.recordLogin(user.id, stamp);
     markActivity(user.id, stamp);
     if (deviceHash) store.addTrustedDevice({ tokenHash: deviceHash, userId: user.id, now: stamp, expiresAt: stamp + ACCOUNT_LIMITS.DEVICE_TTL_MS });
@@ -441,6 +440,17 @@ export const createAccountService = ({
     return { record, user };
   };
 
+  /** Вызов второго фактора для ссылки из письма: живёт, пока открыт контекст ссылки (30 минут). */
+  const LINK_MFA_TTL_MS = 30 * 60 * 1000;
+  const linkChallenge = (user, linkKey) => {
+    const idHash = sha256hex(`link-mfa:${linkKey}`);
+    const existing = store.getChallenge(idHash);
+    if (existing && existing.userId === user.id && existing.expiresAt > now() && !existing.consumedAt) return existing;
+    if (existing) store.deleteChallenge(idHash);
+    store.createChallenge({ idHash, userId: user.id, purpose: 'login', now: now(), expiresAt: now() + LINK_MFA_TTL_MS });
+    return store.getChallenge(idHash);
+  };
+
   /**
    * Проверка второго фактора: totp — код из приложения, recovery —
    * резервный код, webauthn — подпись ключом доступа (challenge выдан
@@ -450,11 +460,17 @@ export const createAccountService = ({
     if (!mfa) return { ok: false };
     if (method === 'totp') return { ...mfa.verifyTotp(user.id, code), method };
     if (method === 'recovery') return { ...mfa.verifyRecovery(user.id, code), method };
-    if (method === 'webauthn') return { ...mfa.verifyPasskey(user.id, credential, challenge), method };
+    if (method === 'webauthn') return { ...mfa.verifyPasskey(user.id, credential, challenge, { requireUv: isStaff(user) }), method };
     return { ok: false, method };
   };
 
-  /** Свежесть подтверждения личности для критических действий. */
+  /*
+   * Свежесть подтверждения личности для критических действий: только явное
+   * подтверждение (пароль и, если включён, второй фактор) не старше
+   * auth.reauthMinutes. Сам вход его не заменяет: украденная сессия — даже
+   * только что созданная со вторым фактором — не даёт ни сменить email и
+   * факторы, ни выдать ссылку для сброса пароля чужому аккаунту.
+   */
   const reauthWindowMs = () => config.get('auth.reauthMinutes') * 60 * 1000;
   const isFresh = (session) => Boolean(session?.reauthAt && session.reauthAt > now() - reauthWindowMs());
 
@@ -548,7 +564,7 @@ export const createAccountService = ({
       if (status.methods.includes('webauthn')) {
         const value = randomBytes(32).toString('base64url');
         store.setChallengeValue(record.idHash, value);
-        passkey = mfa.assertionOptions(user.id, value);
+        passkey = mfa.assertionOptions(user.id, value, { requireUv: isStaff(user) });
       }
       return { methods: status.methods, passkey, expiresAt: iso(record.expiresAt) };
     },
@@ -584,6 +600,60 @@ export const createAccountService = ({
       return { ...finishLogin(user, context, { aal: 2, method: `mfa:${result.method}` }), recoveryCodesLeft: result.method === 'recovery' ? result.remaining : null };
     },
 
+    /*
+     * Второй фактор вне входа — для смены пароля по ссылке, если у аккаунта
+     * включена MFA: без него ссылка из письма давала бы вход в обход
+     * второго фактора. linkKey — SHA-256 контекста ссылки: к нему привязаны
+     * вызов для ключа доступа и счётчик попыток (5 на ссылку); счётчик
+     * неверных кодов аккаунта — общий со входом.
+     */
+    linkSecondFactorOptions(user, linkKey) {
+      const record = linkChallenge(user, linkKey);
+      const status = mfa ? mfa.status(user.id) : { methods: [] };
+      let passkey = null;
+      if (status.methods.includes('webauthn')) {
+        const value = randomBytes(32).toString('base64url');
+        store.setChallengeValue(record.idHash, value);
+        passkey = mfa.assertionOptions(user.id, value, { requireUv: isStaff(user) });
+      }
+      return { methods: status.methods, passkey };
+    },
+
+    /**
+     * Проверить второй фактор для ссылки. Неверный код — bad_mfa_code (ничего
+     * не меняется); исчерпаны попытки — exhausted: ссылку нужно погасить.
+     */
+    verifyLinkSecondFactor(user, factor = {}, linkKey, context = {}) {
+      const accountKey = emailKey(user.email);
+      if (throttle) {
+        const gate = throttle.mfaCheck(accountKey);
+        if (!gate.allowed) fail('too_many_attempts', 429, `Слишком много неверных кодов. Повторите через ${Math.max(1, Math.ceil(gate.retryAfterSeconds / 60))} мин.`, { retryAfterSeconds: gate.retryAfterSeconds });
+      }
+      const record = linkChallenge(user, linkKey);
+      const attempts = store.addChallengeAttempt(record.idHash);
+      if (attempts > ACCOUNT_LIMITS.MFA_MAX_ATTEMPTS) {
+        store.deleteChallenge(record.idHash);
+        return { ok: false, exhausted: true };
+      }
+      // Вызов для ключа доступа — одноразовый.
+      const challenge = factor.method === 'webauthn' ? record.challenge : null;
+      if (challenge) store.setChallengeValue(record.idHash, null);
+      const result = verifySecondFactor(user, factor, challenge);
+      const event = { client: context.client || null, ipPrefix: context.ipPrefix || null, userId: user.id };
+      if (!result.ok) {
+        throttle?.mfaFailure(accountKey);
+        authEvent({ ...event, type: 'mfa_failed', reason: 'link' });
+        fail('bad_mfa_code', 400, MFA_FAILED, { attemptsLeft: Math.max(0, ACCOUNT_LIMITS.MFA_MAX_ATTEMPTS - attempts) });
+      }
+      throttle?.mfaSuccess(accountKey);
+      store.deleteChallenge(record.idHash);
+      if (result.method === 'recovery') {
+        authEvent({ ...event, type: 'recovery_code_used', reason: String(result.remaining) });
+        notify(user, 'recovery_code_used', { remaining: result.remaining });
+      }
+      return result;
+    },
+
     /**
      * Сессия и пользователь по токену из cookie, или null. Истёкшая сессия
      * удаляется; заблокированный или архивный аккаунт теряет все сессии.
@@ -613,6 +683,17 @@ export const createAccountService = ({
       user = releaseExpiredBlock(user, stamp);
       if (statusProblem(user)) {
         store.deleteUserSessions(user.id);
+        return null;
+      }
+      /*
+       * Инвариант: у аккаунта с включённым вторым фактором не бывает
+       * действующей сессии без него — откуда бы она ни взялась (вход до
+       * включения MFA на другом устройстве, ссылка из письма, старая база).
+       * Такая сессия завершается: войти можно только стандартным входом.
+       */
+      if ((session.aal || 1) < 2 && mfaEnabled(user)) {
+        store.deleteSession(tokenHash);
+        authEvent({ type: 'session_revoked', userId: user.id, sessionId: session.publicId, reason: 'mfa_required' });
         return null;
       }
       if (touch && stamp - session.lastSeenAt >= ACCOUNT_LIMITS.TOUCH_INTERVAL_MS) {
@@ -648,8 +729,6 @@ export const createAccountService = ({
 
     /** Свежее ли подтверждение личности (для критических действий). */
     isFresh,
-    /** Сессия создана недавно (первая настройка MFA сразу после входа). */
-    isNewSession: (session) => Boolean(session && session.createdAt > now() - ACCOUNT_LIMITS.FRESH_SESSION_MS),
 
     /** Вызов для ключа доступа при подтверждении личности (вошедший пользователь). */
     reauthOptions(user, session) {
@@ -661,7 +740,7 @@ export const createAccountService = ({
         const idHash = sha256hex(`reauth:${session.tokenHash}`);
         store.deleteChallenge(idHash);
         store.createChallenge({ idHash, userId: user.id, purpose: 'reauth', now: now(), expiresAt: now() + ACCOUNT_LIMITS.MFA_CHALLENGE_TTL_MS, challenge: value });
-        passkey = mfa.assertionOptions(user.id, value);
+        passkey = mfa.assertionOptions(user.id, value, { requireUv: isStaff(user) });
       }
       return { methods: status.methods, passkey };
     },
@@ -715,7 +794,14 @@ export const createAccountService = ({
 
     /** Повысить уровень сессии после добавления первого фактора (настройка MFA сотрудником). */
     elevateAfterSetup(user, session, context = {}) {
-      return rotateSession(user, session, context, { aal: 2, mfaAt: now(), reauthAt: now() });
+      // Добавить фактор можно было только после подтверждения личности: его отметка сохраняется, но не продлевается.
+      return store.transaction(() => {
+        const fresh = rotateSession(user, session, context, { aal: 2, mfaAt: now() });
+        // Сессии на других устройствах вошли без второго фактора — с включённой MFA они не действуют.
+        const revoked = store.deleteOtherSessions(user.id, fresh.tokenHash);
+        if (revoked > 0) authEvent({ type: 'sessions_revoked', userId: user.id, reason: 'mfa_enabled' });
+        return fresh;
+      });
     },
 
     /** Своё имя и программа ДМС (PATCH /api/account). Других полей нет. */
@@ -764,7 +850,7 @@ export const createAccountService = ({
         // Ссылки для смены пароля, выданные раньше, после смены не нужны.
         store.revokeUserAccessTokens(user.id, 'password_changed', stamp, { purpose: 'reset' });
         return startSession(user, context, {
-          aal: session?.aal || 1, mfaAt: session?.mfaAt || null, reauthAt: stamp, deviceHash: session?.deviceHash || null,
+          aal: session?.aal || 1, mfaAt: session?.mfaAt || null, reauthAt: session?.reauthAt || null, deviceHash: session?.deviceHash || null,
         });
       });
       authEvent({ type: 'password_changed', userId: user.id, sessionId: fresh.publicId, client: context.client || null, ipPrefix: context.ipPrefix || null });
@@ -888,7 +974,7 @@ export const createAccountService = ({
     /* Для adminService, invitations и registration: общие части без дублирования. */
     __internal: {
       startSession, releaseExpiredBlock, statusProblem, newId, permissionsFor, canManage, generateTemporaryPassword,
-      notify, checkNewPassword, isStaff, mfaEnabled, appUrl,
+      notify, checkNewPassword, isStaff, mfaEnabled, appUrl, authEvent,
     },
   };
 

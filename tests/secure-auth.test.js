@@ -24,6 +24,7 @@ import { cleanRecoveryCode } from '../backend/accounts/mfa.js';
 import { hashPassword, needsRehash, verifyPassword } from '../backend/accounts/passwords.js';
 import { registrationModeFromEnv } from '../backend/accounts/registration.js';
 import { createSecretBox, loadMfaKey, parseKey } from '../backend/accounts/secrets.js';
+import { hashToken } from '../backend/accounts/service.js';
 import { ACCOUNT_MIGRATIONS, createSqliteAccountStore, loadSqlite } from '../backend/accounts/sqliteStore.js';
 import { createLoginThrottle, emailKey, ipKeyOf } from '../backend/accounts/throttle.js';
 import { base32Decode, hotp, matchTotp, totpAt } from '../backend/accounts/totp.js';
@@ -409,6 +410,8 @@ describe('Регистрация: режимы и недоступная поч�
     const clock = { t: Date.now() };
     let attempts = 0;
     const { context } = makeContext({ clock, send: async () => { attempts += 1; throw Object.assign(new Error('down'), { code: 'smtp_connect' }); } });
+    // Все пять попыток укладываются в срок ссылки (иначе последние не отправляются — см. тест очереди).
+    context.settings.update({ 'auth.registrationTtlMinutes': 120 }, null);
     const result = await context.registration.request('smtp.down@medkarta.test', { sourceKey: 'k' });
     assert.equal(result.status, 'sent');
     const [queued] = context.store.listPendingMail();
@@ -416,7 +419,7 @@ describe('Регистрация: режимы и недоступная поч�
     for (let index = 0; index < 8; index += 1) {
       await context.mailer.drain();
       assert.equal(context.store.getRegistrationById(queued.refId).deliveryStatus, attempts < MAIL_LIMITS.MAX_ATTEMPTS ? 'pending' : 'failed', 'пока есть попытки — не «отправлено» и не «ошибка»');
-      clock.t += 31 * MINUTE;
+      clock.t += 21 * MINUTE;
     }
     assert.equal(attempts, MAIL_LIMITS.MAX_ATTEMPTS);
     assert.equal(context.store.listPendingMail().length, 0, 'в очереди ничего не осталось');
@@ -706,6 +709,7 @@ describe('Второй фактор, админ-панель и суперадм
       const done = await tab.call('/api/auth/activation/complete', { method: 'POST', body: { password: passwords[role] } });
       assert.equal(done.status, 200, JSON.stringify(done.body));
       const key = softAuthenticator();
+      tab.password = passwords[role];
       if (role !== 'user') await tab.enrollPasskey(key);
       created[role] = { tab, key, id: response.body.user.id };
     }
@@ -749,31 +753,76 @@ describe('Второй фактор, админ-панель и суперадм
     assert.equal((await tab.call('/api/admin/me')).status, 401);
   });
 
-  it('сброс пароля по почте не отключает второй фактор и завершает все сессии; сотруднику без MFA ссылка почтой не уходит', async () => {
+  it('сброс пароля по почте при включённой MFA: без второго фактора пароль не меняется и сессии нет; со вторым — вход уровня 2', async () => {
     const tab = browserFor(base);
     await tab.signIn(ROOT_EMAIL, ROOT_PASSWORD, rootKey);
-    const before = outbox.length;
-    const request = await browserFor(base).call('/api/auth/access-link', { method: 'POST', body: { email: ROOT_EMAIL } });
-    assert.equal(request.status, 202);
-    await settle(context);
-    const mail = outbox.slice(before).find((item) => item.to === ROOT_EMAIL && /Восстановление пароля/.test(item.subject));
-    assert.ok(mail, 'у суперадминистратора с MFA — ссылка уходит');
-    const token = tokenOfLink(linkIn(mail.text));
+    const requestLink = async () => {
+      const before = outbox.length;
+      const request = await browserFor(base).call('/api/auth/access-link', { method: 'POST', body: { email: ROOT_EMAIL } });
+      assert.equal(request.status, 202);
+      await settle(context);
+      const mail = outbox.slice(before).find((item) => item.to === ROOT_EMAIL && /Восстановление пароля/.test(item.subject));
+      assert.ok(mail, 'у суперадминистратора с MFA — ссылка уходит');
+      return tokenOfLink(linkIn(mail.text));
+    };
+    const token = await requestLink();
     const newcomer = browserFor(base);
-    await newcomer.call('/api/auth/activation/start', { method: 'POST', body: { token } });
+    const started = await newcomer.call('/api/auth/activation/start', { method: 'POST', body: { token } });
+    assert.equal(started.status, 200);
+    assert.equal(started.body.context.mfa.required, true, 'страница заранее знает, что нужен второй фактор');
     const NEW_PASSWORD = 'Новый корневой пароль после сброса';
-    const done = await newcomer.call('/api/auth/activation/complete', { method: 'POST', body: { password: NEW_PASSWORD } });
+
+    // Только пароль — отказ: пароль не изменён, сессии нет, профиль закрыт.
+    const bare = await newcomer.call('/api/auth/activation/complete', { method: 'POST', body: { password: NEW_PASSWORD } });
+    assert.equal(bare.status, 403);
+    assert.equal(bare.body.code, 'mfa_required');
+    assert.ok(bare.body.methods.includes('webauthn'));
+    assert.equal([...newcomer.jar.keys()].some((name) => /mk_sid$/.test(name)), false, 'cookie сессии не выдана');
+    assert.equal((await newcomer.call('/api/me')).status, 401);
+    assert.equal((await browserFor(base).login(ROOT_EMAIL, NEW_PASSWORD)).status, 401, 'новый пароль не действует');
+    assert.equal((await browserFor(base).login(ROOT_EMAIL, ROOT_PASSWORD)).body.mfaRequired, true, 'прежний пароль по-прежнему верный');
+
+    // Неверный резервный код — тоже ничего не меняется.
+    const wrong = await newcomer.call('/api/auth/activation/complete', { method: 'POST', body: { password: NEW_PASSWORD, method: 'recovery', code: 'aaaaa-bbbbb' } });
+    assert.equal(wrong.status, 400);
+    assert.equal(wrong.body.code, 'bad_mfa_code');
+    assert.equal((await browserFor(base).login(ROOT_EMAIL, NEW_PASSWORD)).status, 401);
+    // Лишние поля — отказ.
+    assert.equal((await newcomer.call('/api/auth/activation/complete', { method: 'POST', body: { password: NEW_PASSWORD, aal: 2 } })).status, 400);
+
+    // Ключ доступа: вызов привязан к этой ссылке; подпись — и вход уровня 2.
+    const options = await newcomer.call('/api/auth/activation/mfa-options', { method: 'POST', body: {} });
+    assert.equal(options.status, 200);
+    assert.equal(options.body.passkey.userVerification, 'required', 'сотруднику — с проверкой человека');
+    const done = await newcomer.call('/api/auth/activation/complete', {
+      method: 'POST', body: { password: NEW_PASSWORD, method: 'webauthn', credential: rootKey.assert(options.body.passkey) },
+    });
     assert.equal(done.status, 200, JSON.stringify(done.body));
-    // Старая сессия завершена; новая — без второго фактора, админ-панель просит его.
+    // Старая сессия завершена; новая — со вторым фактором, но без подтверждения личности для критичных действий.
     assert.equal((await tab.call('/api/admin/me')).status, 401);
-    const gate = await newcomer.call('/api/admin/me');
-    assert.equal(gate.status, 403);
-    assert.equal(gate.body.code, 'mfa_required');
-    assert.ok(context.mfa.hasMfa(context.store.getUserByEmail(ROOT_EMAIL).id), 'MFA на месте');
+    assert.equal((await newcomer.call('/api/admin/me')).status, 200);
+    const userId = context.store.getUserByEmail(ROOT_EMAIL).id;
+    assert.equal((await newcomer.call(`/api/admin/users/${userId}/invitations`, { method: 'POST', body: {} })).body.code, 'reauth_required');
+    assert.ok(context.mfa.hasMfa(userId), 'MFA на месте');
     // Повторное использование ссылки.
     assert.equal((await browserFor(base).call('/api/auth/activation/start', { method: 'POST', body: { token } })).status, 410);
     await settle(context);
     assert.ok(outbox.some((item) => item.to === ROOT_EMAIL && /Пароль изменён/.test(item.subject)));
+
+    // Пять неверных кодов по одной ссылке — она гаснет; пароль не меняется.
+    clock.t += 20 * MINUTE;
+    const second = await requestLink();
+    const guesser = browserFor(base);
+    await guesser.call('/api/auth/activation/start', { method: 'POST', body: { token: second } });
+    const statuses = [];
+    for (let index = 0; index < 6; index += 1) {
+      statuses.push((await guesser.call('/api/auth/activation/complete', { method: 'POST', body: { password: 'Пароль подбирающего злоумышленника', method: 'totp', code: String(100000 + index) } })).status);
+    }
+    assert.deepEqual(statuses, [400, 400, 400, 400, 400, 410]);
+    assert.equal((await guesser.call('/api/auth/activation/complete', { method: 'POST', body: { password: 'Пароль подбирающего злоумышленника', method: 'totp', code: '123456' } })).status, 410);
+    assert.equal((await browserFor(base).login(ROOT_EMAIL, 'Пароль подбирающего злоумышленника')).status, 401);
+    await root.signIn(ROOT_EMAIL, NEW_PASSWORD, rootKey);
+
     // Сотрудник без MFA: ссылка почтой не уходит (ответ тот же).
     const mod = context.store.getUserByEmail('plain@medkarta.test');
     assert.equal(mod.role, 'moderator');
@@ -782,7 +831,19 @@ describe('Второй фактор, админ-панель и суперадм
     assert.equal(response.status, 202);
     await settle(context);
     assert.equal(outbox.slice(count).filter((item) => item.to === 'plain@medkarta.test' && /пароля/.test(item.subject)).length, 0);
-    await root.signIn(ROOT_EMAIL, NEW_PASSWORD, rootKey);
+  });
+
+  it('инвариант: у аккаунта с MFA сессия без второго фактора не действует, откуда бы она ни взялась', async () => {
+    const user = context.store.getUserByEmail(ROOT_EMAIL);
+    assert.ok(context.mfa.hasMfa(user.id));
+    // Сессия уровня 1 «в обход» (как раньше выдавала ссылка из письма) — прямо в хранилище.
+    const token = randomBytes(32).toString('base64url');
+    context.store.createSession({
+      tokenHash: hashToken(token), publicId: randomBytes(12).toString('hex'), userId: user.id, now: clock.t, createdAt: clock.t,
+      expiresAt: clock.t + 60 * MINUTE, maxPerUser: 10, client: null, ipPrefix: null, aal: 1,
+    });
+    assert.equal(context.accounts.authenticate(token), null);
+    assert.equal(context.store.getSession(hashToken(token)), null, 'такая сессия удаляется');
   });
 });
 
@@ -920,6 +981,7 @@ describe('Сессии, восстановление и смена email для 
     context.store.createUser({ id: randomBytes(16).toString('hex'), email: 'taken@medkarta.test', firstName: 'Занят', passwordHash: await hashPassword(USER_PASSWORD), now: clock.t });
     const tab = browserFor(base);
     await tab.login('anna.new@medkarta.test', 'Синее небо над Волгой летом');
+    await tab.reauth();
     const response = await tab.call('/api/me/email', { method: 'POST', body: { newEmail: 'taken@medkarta.test' } });
     assert.equal(response.status, 202);
     await settle(context);
@@ -972,7 +1034,7 @@ describe('Почтовая очередь и шаблоны', { skip }, () => {
 
 /* ------------------------------------------------------------------------ */
 
-describe('Миграция базы: схема 4 → 5', { skip }, () => {
+describe('Миграция базы: схема 4 → 6', { skip }, () => {
   it('копия перед миграцией, пользователи и пароли сохранены, старые сессии отозваны, пароль пересчитан при входе', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mk-migrate-'));
     const file = path.join(dir, 'accounts.sqlite');
@@ -999,7 +1061,7 @@ describe('Миграция базы: схема 4 → 5', { skip }, () => {
 
       const { context } = makeContext({ file });
       const { store } = context;
-      assert.equal(store.health().schemaVersion, 5);
+      assert.equal(store.health().schemaVersion, 6);
       assert.ok(store.migrationBackup && fs.existsSync(store.migrationBackup), 'копия базы перед миграцией');
       assert.equal(fs.statSync(store.migrationBackup).mode & 0o777, 0o600);
       const owner = store.getUserByEmail('owner@medkarta.test');
@@ -1011,7 +1073,7 @@ describe('Миграция базы: схема 4 → 5', { skip }, () => {
       assert.ok(result.session, 'старый пароль работает (пароль владельца не менялся)');
       assert.match(store.getUserByEmail('owner@medkarta.test').passwordHash, /^scrypt2\$/, 'хэш пересчитан в новый формат');
       store.close();
-      // Повторный запуск: схема уже 5 — новой копии не делается.
+      // Повторный запуск: схема уже 6 — новой копии не делается.
       const again = makeContext({ file });
       assert.equal(again.context.store.migrationBackup, null);
       again.context.store.close();

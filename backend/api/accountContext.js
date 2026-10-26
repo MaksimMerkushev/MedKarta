@@ -82,9 +82,16 @@ export const createAccountContext = ({
     if (ref.type === 'access_token') store.setAccessTokenDelivery(ref.id, status);
     else if (ref.type === 'registration') store.setRegistrationDelivery(ref.id, status);
   };
-  const mailer = createMailer({ store, delivery, onStatus, now });
+  // Ссылка из письма ещё действует: не использована, не отозвана, не истекла.
+  const refActive = (ref) => {
+    const record = ref.type === 'access_token' ? store.getAccessTokenById(ref.id) : ref.type === 'registration' ? store.getRegistrationById(ref.id) : null;
+    return Boolean(record && !record.usedAt && !record.revokedAt && record.expiresAt > now());
+  };
+  const masterKey = mfaKey || loadMfaKey({ env }).key;
+  // Ключ писем — из того же главного ключа: письма со ссылками переживают перезапуск.
+  const mailer = createMailer({ store, delivery, onStatus, masterKey, refActive, now });
   const throttle = createLoginThrottle({ store, settings, now, rules: throttleRules });
-  const box = createSecretBox(mfaKey || loadMfaKey({ env }).key);
+  const box = createSecretBox(masterKey);
   const mfa = createMfaService({ store, box, webauthn: webauthnConfigFromEnv(env, delivery.appUrl), now });
   const accounts = createAccountService({
     store, settings, isKnownPlan, mfa, mailer, throttle, breachCheck, appUrl: delivery.appUrl, now,

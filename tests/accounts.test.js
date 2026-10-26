@@ -15,7 +15,7 @@ import { after, before, describe, it } from 'node:test';
 import { randomBytes } from 'node:crypto';
 
 import { generateTemporaryPassword, hashPassword, needsRehash, PasswordBusyError, passwordProblem, verifyPassword } from '../backend/accounts/passwords.js';
-import { ACCOUNT_LIMITS, AccountError, createAccountService, decodeItemId, encodeItemId } from '../backend/accounts/service.js';
+import { ACCOUNT_LIMITS, AccountError, createAccountService, decodeItemId, encodeItemId, hashToken } from '../backend/accounts/service.js';
 import { createSqliteAccountStore, loadSqlite } from '../backend/accounts/sqliteStore.js';
 import { createAccountHandler, parseCookies, SESSION_COOKIE } from '../backend/api/account.js';
 import { createLoginThrottle } from '../backend/accounts/throttle.js';
@@ -484,8 +484,15 @@ describe('Кабинет: HTTP', () => {
   it('удаление аккаунта требует подтверждения', async () => {
     await addUser(store, { email: 'bye@user.ru' });
     const created = await call('/api/auth/login', { method: 'POST', body: { email: 'bye@user.ru', password: 'пароль-пароль' } });
-    const cookie = `${SESSION_COOKIE}=${cookieFrom(created).value}`;
+    const token = cookieFrom(created).value;
+    const cookie = `${SESSION_COOKIE}=${token}`;
     assert.equal((await call('/api/account', { method: 'DELETE', body: {}, cookie })).status, 400);
+    // Сам вход подтверждением личности не считается: нужен пароль ещё раз.
+    const early = await call('/api/account', { method: 'DELETE', body: { confirm: true }, cookie });
+    assert.equal(early.status, 403);
+    assert.equal((await early.json()).code, 'reauth_required');
+    // Подтверждение личности (POST /api/me/reauth проверяется в secure-auth) — здесь отметкой в сессии.
+    store.setSessionReauth(hashToken(token), Date.now());
     assert.equal((await call('/api/account', { method: 'DELETE', body: { confirm: true }, cookie })).status, 200);
     assert.equal((await (await call('/api/account', { cookie })).json()).user, null);
   });

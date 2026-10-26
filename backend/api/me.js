@@ -30,10 +30,10 @@
  *   POST   /api/me/email/verify            — подтвердить текущий email (письмо со ссылкой)
  *   POST   /api/me/sessions/revoke-all     — выйти на всех устройствах
  *
- * Критические действия (email, факторы, коды, пароль при включённой MFA)
- * требуют свежего подтверждения личности: 403 reauth_required. Первый
- * фактор можно добавить без повторного пароля только в первые 15 минут
- * после входа.
+ * Критические действия (email, факторы — в том числе первый, коды, пароль
+ * при включённой MFA) требуют свежего явного подтверждения личности:
+ * 403 reauth_required. Сам вход его не заменяет — украденная сессия не
+ * позволит привязать к аккаунту чужой ключ или телефон.
  *
  * Пока временный пароль не сменён, доступны профиль, смена пароля, аватар
  * для чтения и выход — остальное отвечает 403 password_change_required.
@@ -155,11 +155,13 @@ export const createMeHandler = ({
     const audit = (action, details = null) => store?.addAudit({ at: Date.now(), action, actorId: user.id, actorLabel: userLabel(user), targetId: user.id, targetLabel: userLabel(user), result: 'ok', details });
     const event = (type, reason = null) => store?.addAuthEvent({ at: Date.now(), type, userId: user.id, sessionId: session.publicId, reason });
     /*
-     * Добавить фактор: нужна свежая проверка личности. Исключение — первый
-     * фактор в первые 15 минут после входа (сотрудник настраивает
-     * обязательную MFA сразу после входа паролем).
+     * Добавить фактор: нужна свежая проверка личности — и для первого тоже:
+     * иначе чужой, получивший сессию, привязал бы свой ключ или телефон и
+     * закрыл бы владельцу вход.
      */
-    const canAddFactor = () => service.isFresh(session) || (!auth.security.mfaEnabled && service.isNewSession(session));
+    const canAddFactor = () => service.isFresh(session);
+    // Сотруднику ключ доступа обязан проверять человека (PIN, биометрия).
+    const requireUv = Boolean(auth.security.mfaRequired);
     const requireMfaService = () => {
       if (mfa) return true;
       respondJson(res, 503, { error: 'Двухфакторная защита недоступна на этом сервере.', code: 'mfa_unavailable' });
@@ -275,27 +277,27 @@ export const createMeHandler = ({
         }
         case 'totpStart': {
           if (!requireMfaService()) return;
-          if (!canAddFactor() && !requireFresh(res, auth, service)) return;
+          if (!requireFresh(res, auth, service)) return;
           respondJson(res, 200, mfa.beginTotp(user));
           return;
         }
         case 'totpConfirm': {
           if (!requireMfaService()) return;
-          if (!canAddFactor() && !requireFresh(res, auth, service)) return;
+          if (!requireFresh(res, auth, service)) return;
           const result = mfa.confirmTotp(user, { factorId: body.factorId, code: body.code, label: body.label });
           respondJson(res, 200, afterFactorAdded(result, 'totp'));
           return;
         }
         case 'passkeyStart': {
           if (!requireMfaService()) return;
-          if (!canAddFactor() && !requireFresh(res, auth, service)) return;
-          respondJson(res, 200, { publicKey: mfa.beginPasskey(user) });
+          if (!requireFresh(res, auth, service)) return;
+          respondJson(res, 200, { publicKey: mfa.beginPasskey(user, { requireUv }) });
           return;
         }
         case 'passkeyFinish': {
           if (!requireMfaService()) return;
-          if (!canAddFactor() && !requireFresh(res, auth, service)) return;
-          const result = mfa.finishPasskey(user, { credential: body.credential, label: body.label });
+          if (!requireFresh(res, auth, service)) return;
+          const result = mfa.finishPasskey(user, { credential: body.credential, label: body.label, requireUv });
           respondJson(res, 200, afterFactorAdded(result, 'webauthn'));
           return;
         }
