@@ -1936,6 +1936,8 @@ export default function App() {
     };
 
     window.addEventListener('resize', handleResize);
+    // Ширина могла измениться между первым рендером и подпиской на resize.
+    handleResize();
     return () => {
       window.removeEventListener('resize', handleResize);
       clearTimeout(resizeTimer);

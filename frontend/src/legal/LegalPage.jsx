@@ -101,7 +101,12 @@ export default function LegalPage() {
   const { path } = useLocation();
   const slug = path.replace(/^\/legal\/?/, '').split('/')[0] || 'privacy';
   const [version, setVersion] = useState(readVersion);
-  const [state, setState] = useState({ status: 'loading' });
+  const [result, setResult] = useState(null);
+  // Ответ принадлежит конкретному документу и редакции. При смене запроса
+  // показываем загрузку сразу, без дополнительного обновления в эффекте.
+  const state = result?.slug === slug && result.version === version
+    ? result
+    : { status: 'loading' };
 
   useEffect(() => {
     const onPop = () => setVersion(readVersion());
@@ -111,14 +116,13 @@ export default function LegalPage() {
 
   useEffect(() => {
     let alive = true;
-    setState({ status: 'loading' });
     fetchLegalDocument(slug, version)
       .then((payload) => {
         if (!alive) return;
-        setState({ status: 'ready', document: payload.document, history: payload.history || [] });
+        setResult({ slug, version, status: 'ready', document: payload.document, history: payload.history || [] });
         document.title = `${payload.document.title} — МедКарта`;
       })
-      .catch((error) => alive && setState({ status: 'error', error }));
+      .catch((error) => alive && setResult({ slug, version, status: 'error', error }));
     return () => {
       alive = false;
     };
