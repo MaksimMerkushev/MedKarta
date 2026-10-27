@@ -70,6 +70,9 @@ npm start              # backend/server.js: API + статика из dist/
 | `HOST` | 127.0.0.1 |
 | `SERVE_STATIC` | включено, если существует `dist/`; `off` — только API |
 | `TRUST_PROXY` | 0; за nginx — 1 |
+| `PUBLIC_BASE_URL` | — ; адрес сайта для ссылок в письмах и ключей доступа (`https://…`) |
+| `MFA_SECRET_KEY` | файл `var/accounts/secrets/mfa.key`; ключ двухфакторной защиты, копию хранить отдельно от базы |
+| `REGISTRATION_MODE` | `invite_only`; `open` — регистрация по email (нужна почта) |
 | `AI_DAILY_CALL_LIMIT` | 2000 обращений к модели в сутки |
 | `CHAT_MAX_CONCURRENCY` | 1 |
 
@@ -161,8 +164,10 @@ add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" alway
 add_header X-Content-Type-Options "nosniff" always;
 add_header X-Frame-Options "DENY" always;
 add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-add_header Permissions-Policy "geolocation=(self), camera=(), microphone=(), payment=(), usb=(), magnetometer=(), accelerometer=(), gyroscope=(), browsing-topics=()" always;
+add_header Permissions-Policy "geolocation=(self), camera=(), microphone=(), payment=(), usb=(), magnetometer=(), accelerometer=(), gyroscope=(), browsing-topics=(), publickey-credentials-get=(self), publickey-credentials-create=(self)" always;
 ```
+
+`publickey-credentials-*` — ключи доступа (passkeys) только на своём сайте.
 
 `/etc/nginx/sites-available/medkarta`:
 
@@ -209,6 +214,16 @@ server {
         try_files $uri /index.html;
         add_header Cache-Control "no-cache" always;
         include snippets/medkarta-headers.conf;
+    }
+
+    # Страницы, открываемые по ссылке из письма (#token=…): не кэшировать и не
+    # отправлять Referer. Токен во фрагменте и так не уходит в Referer — это
+    # вторая линия защиты. Последнее значение Referrer-Policy действует.
+    location ~ ^/(activate|register/confirm|email/confirm)/?$ {
+        try_files /index.html =404;
+        add_header Cache-Control "no-store" always;
+        include snippets/medkarta-headers.conf;
+        add_header Referrer-Policy "no-referrer" always;
     }
 
     # Имена файлов в assets/ содержат хэш содержимого — их можно кэшировать навсегда.
@@ -267,14 +282,28 @@ sudo ufw enable                 # порт 3001 снаружи закрыт: Nod
 ### 5. Журналы и резервные копии
 
 - Журналы сервиса — `journald`; ограничьте размер: `SystemMaxUse=200M` в
-  `/etc/systemd/journald.conf`. Журналы nginx ротирует пакетный logrotate.
+  `/etc/systemd/journald.conf`. Журналы nginx ротирует пакетный logrotate:
+  в журнале доступа — полный IP посетителя, поэтому задайте короткий срок
+  (например, `rotate 14` при `daily` в `/etc/logrotate.d/nginx`) и впишите
+  его в политику (п. 4.10) — [privacy/05](privacy/05-retention-and-destruction.md).
 - Аналитика сама удаляет файлы старше `ANALYTICS_RETENTION_DAYS` и держит
   каталог в пределах `ANALYTICS_MAX_TOTAL_MB`.
-- Раз в сутки копируйте на другую машину: `.env`, `data/doctors.full.js`,
-  `data/graph/`, `data/collected/`, `var/analytics/` и базу кабинета.
-  Без копии `.env` и полной базы восстановление после потери VPS займёт дни.
+- Раз в сутки копируйте на другую машину (в РФ —
+  [privacy/10](privacy/10-processors-and-localization.md)): `data/doctors.full.js`,
+  `data/graph/`, `data/collected/`, `var/analytics/`, **зашифрованную** копию
+  базы кабинета и `var/accounts/erasures.jsonl`. Секреты из `.env`
+  (`MFA_SECRET_KEY`, `PRIVACY_TOKEN_SECRET`, пароль SMTP, ключ модели,
+  `BACKUP_ENCRYPTION_KEY`) храните **отдельно** от копий базы — в менеджере
+  секретов или другом хранилище: копия базы рядом с ключом перестаёт быть
+  защищённой. Без секретов и полной базы восстановление после потери VPS
+  займёт дни.
 - База аккаунтов — `var/accounts/medkarta.sqlite`. Копия без остановки
-  сервиса: `sudo -u medkarta npm run accounts -- backup --out /backup/accounts-$(date +%F).sqlite`.
+  сервиса, зашифрованная (ключ `BACKUP_ENCRYPTION_KEY`, 32 байта):
+  `sudo -u medkarta npm run accounts -- backup --encrypt --out /backup/accounts-$(date +%F).enc`.
+  После восстановления из копии — `npm run accounts -- reapply-erasures`
+  (повторить удаления аккаунтов, сделанные после копии).
+- Раз в сутки сохраняйте вне сервера вывод `npm run accounts -- consents-verify`
+  (отпечаток журнала согласий).
   Каталог `var/` уже открыт на запись в unit-файле (`ReadWritePaths`).
   Первый выпуск с админ-панелью (миграция схемы 3, главный администратор) —
   по порядку из [15-deployment.md](15-deployment.md#выпуск-с-аккаунтами-и-админ-панелью).

@@ -268,15 +268,22 @@ describe('Модель видит текущее состояние разгов
     assert.doesNotMatch(request.serialized, /pediatrician|Приём детский/);
   });
 
-  it('выбор после вопроса «к кому?»: только выбранный профиль', async () => {
-    const request = await seen(['болит голова и живот', 'к неврологу']);
-    assert.deepEqual(request.hints.specialties, ['neurologist']);
+  /*
+   * Жалоба в любой реплике — сведения о здоровье: с политики 2026-10-26.1 такой
+   * диалог модели не передаётся вовсе, и выбор профиля и уточнения разбирает
+   * локальный планировщик.
+   */
+  it('выбор после вопроса «к кому?»: только выбранный профиль (локально, модели — ничего)', async () => {
+    const { action, sent } = await chat(['болит голова и живот', 'к неврологу'], MODELS['модель переспрашивает'], { outboundMode: 'structured' });
+    assert.equal(sent.length, 0, 'диалог с жалобой ушёл модели');
+    assert.equal(action.booking.request.specialty, 'neurologist');
   });
 
-  it('уточнение без нового профиля сохраняет прежний: «горло болит» → «а после 18?»', async () => {
-    const request = await seen(['горло болит третий день', 'а есть кто-то после 18?']);
-    assert.ok(request.hints.specialties.includes('lor'));
-    assert.match(request.serialized, /availableAfter=18:00/);
+  it('уточнение без нового профиля сохраняет прежний: «горло болит» → «а после 18?» (локально)', async () => {
+    const { action, sent } = await chat(['горло болит третий день', 'а есть кто-то после 18?'], MODELS['модель переспрашивает'], { outboundMode: 'structured' });
+    assert.equal(sent.length, 0, 'диалог с жалобой ушёл модели');
+    assert.equal(action.booking.request.specialty, 'lor');
+    assert.equal(action.booking.request.timeFrom, '18:00');
   });
 
   it('маршрут из нескольких реплик: порядок остановок виден модели', async () => {

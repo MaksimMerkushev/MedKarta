@@ -8,16 +8,22 @@
  * по ссылке-приглашению; если её нет — «Нет пароля или забыли его?»:
  * ссылка на почту (если почта настроена) или к администратору.
  *
+ * Если у аккаунта включена двухфакторная защита, после пароля — третий шаг:
+ * ключ доступа, код из приложения или резервный код (SecondFactor.jsx).
+ * Если открыта регистрация — ссылка «Создать аккаунт» на /register.
+ *
  * Одна и та же форма — на странице /login, в окне кабинета на карте, в
  * профиле и на входе в админ-панель.
  */
 import { useEffect, useId, useRef, useState } from 'react';
 import { AnimatePresence, MotionConfig, motion as Motion, useReducedMotion } from 'motion/react';
-import { ArrowLeft, LogIn, Mail, MailCheck, Send } from 'lucide-react';
+import { ArrowLeft, LogIn, Mail, MailCheck, Send, UserPlus } from 'lucide-react';
 
-import { requestAccessLink } from '../services/account';
+import { fetchMfaLoginOptions, requestAccessLink, verifyMfaLogin } from '../services/account';
+import { navigate } from '../ui/navigation';
 import AutoHeight from './AutoHeight';
 import { AuthButton, FormError, PasswordField, SuccessMark, TextAction, TextField } from './parts';
+import SecondFactorForm from './SecondFactor';
 import { stepTransition, stepVariants } from './motion';
 
 const EMAIL = /^[^\s@<>()[\]\\,;:"]{1,64}@[^\s@]+\.[^\s@]{2,}$/u;
@@ -36,7 +42,7 @@ const loginError = (error) => {
       return `Аккаунт заблокирован${until}.${reason} Обратитесь к администратору.`;
     }
     case 'too_many_attempts':
-      return 'Слишком много неудачных попыток для этого email. Подождите 15 минут или задайте пароль заново по ссылке.';
+      return `${error.message || 'Слишком много неудачных попыток.'} Если пароль забыт — задайте новый по ссылке.`;
     case 'rate_limited':
       return 'Слишком много попыток с этого устройства. Подождите несколько минут.';
     default:
@@ -82,7 +88,7 @@ function EmailChip({ email, onChange }) {
   );
 }
 
-function EmailStep({ level, title, description, email, setEmail, onNext, autoFocus }) {
+function EmailStep({ level, title, description, email, setEmail, onNext, autoFocus, registration }) {
   const errorId = useId();
   const inputRef = useFocusOnMount(autoFocus);
   const [error, setError] = useState('');
@@ -121,8 +127,16 @@ function EmailStep({ level, title, description, email, setEmail, onNext, autoFoc
           data-testid="login-email"
         />
         <FormError id={errorId} message={error} />
-        <Motion.div layout="position">
+        <Motion.div layout="position" className="space-y-4">
           <AuthButton type="submit" data-testid="login-continue">Продолжить</AuthButton>
+          {registration && (
+            <p className="text-center text-[14px] text-slate-600 dark:text-slate-300">
+              Нет аккаунта?{' '}
+              <TextAction onClick={() => navigate('/register')} className="inline-flex items-center gap-1 px-1 py-1" data-testid="auth-register">
+                <UserPlus size={15} aria-hidden="true" />Создать аккаунт
+              </TextAction>
+            </p>
+          )}
         </Motion.div>
       </div>
     </form>
@@ -146,6 +160,7 @@ function PasswordStep({ level, email, onBack, onLogin, onHelp, onDone }) {
     setError(null);
     try {
       const result = await onLogin({ email, password });
+      setPassword('');
       onDone(result);
     } catch (failure) {
       setError({ message: loginError(failure), code: failure?.code });
@@ -184,6 +199,25 @@ function PasswordStep({ level, email, onBack, onLogin, onHelp, onDone }) {
         </Motion.div>
       </div>
     </form>
+  );
+}
+
+function MfaStep({ level, email, methods, onBack, onVerified, onDone }) {
+  return (
+    <div data-testid="auth-step-mfa">
+      <StepTitle level={level} description="Для этого аккаунта включена двухфакторная защита.">Подтвердите вход</StepTitle>
+      <EmailChip email={email} onChange={onBack} />
+      <SecondFactorForm
+        methods={methods}
+        submitLabel="Войти"
+        getPasskeyOptions={async () => (await fetchMfaLoginOptions()).passkey}
+        onSubmit={async (factor) => {
+          const payload = await verifyMfaLogin(factor);
+          onDone(await onVerified(payload));
+        }}
+        onFatal={onBack}
+      />
+    </div>
   );
 }
 
@@ -325,7 +359,9 @@ function SuccessStep({ level, title = 'Вы вошли', description = 'Откр
 
 /**
  * @param {object} props
- * @param {(credentials: {email: string, password: string}) => Promise<any>} props.onLogin вход; ошибка — исключение с code
+ * @param {(credentials: {email: string, password: string}) => Promise<any>} props.onLogin вход; ошибка — исключение с code;
+ *   ответ {mfaRequired, methods} — нужен второй шаг
+ * @param {(payload: any) => any} [props.onVerified] вход завершён вторым фактором (сообщить приложению о сессии)
  * @param {(result: any) => void} [props.onSuccess] после входа (на странице — после короткого «Вы вошли»)
  * @param {{emailLinks?: boolean}} [props.features]
  * @param {{email?: string, phone?: string}} [props.support] контакты поддержки из настроек
@@ -335,6 +371,7 @@ function SuccessStep({ level, title = 'Вы вошли', description = 'Откр
  */
 export default function AuthFlow({
   onLogin,
+  onVerified = (payload) => payload,
   onSuccess = null,
   features = {},
   support = {},
@@ -351,9 +388,10 @@ export default function AuthFlow({
   const [direction, setDirection] = useState(1);
   const [email, setEmail] = useState('');
   const [sentTo, setSentTo] = useState('');
+  const [mfaMethods, setMfaMethods] = useState([]);
   // prefers-reduced-motion: шаг сменяется без сдвига, только прозрачностью.
   const shift = useReducedMotion() ? 0 : direction;
-  const announce = { email: 'Шаг 1 из 2: email', password: 'Шаг 2 из 2: пароль', access: 'Ссылка для входа', sent: 'Ссылка отправлена', success: 'Вход выполнен' }[step];
+  const announce = { email: 'Шаг 1: email', password: 'Шаг 2: пароль', mfa: 'Шаг 3: подтверждение входа', access: 'Ссылка для входа', sent: 'Ссылка отправлена', success: 'Вход выполнен' }[step];
 
   const go = (next, dir = 1) => {
     setDirection(dir);
@@ -372,9 +410,19 @@ export default function AuthFlow({
 
   let content;
   if (step === 'email') {
-    content = <EmailStep level={level} title={title} description={description} email={email} setEmail={setEmail} autoFocus={autoFocus} onNext={(value) => { setEmail(value); go('password'); }} />;
+    content = <EmailStep level={level} title={title} description={description} email={email} setEmail={setEmail} autoFocus={autoFocus} registration={Boolean(features.registration)} onNext={(value) => { setEmail(value); go('password'); }} />;
   } else if (step === 'password') {
-    content = <PasswordStep level={level} email={email} onBack={() => go('email', -1)} onLogin={onLogin} onHelp={() => go('access')} onDone={done} />;
+    const afterPassword = (result) => {
+      if (result?.mfaRequired) {
+        setMfaMethods(Array.isArray(result.methods) ? result.methods : []);
+        go('mfa');
+      } else {
+        done(result);
+      }
+    };
+    content = <PasswordStep level={level} email={email} onBack={() => go('email', -1)} onLogin={onLogin} onHelp={() => go('access')} onDone={afterPassword} />;
+  } else if (step === 'mfa') {
+    content = <MfaStep level={level} email={email} methods={mfaMethods} onBack={() => go('password', -1)} onVerified={onVerified} onDone={done} />;
   } else if (step === 'access') {
     content = <AccessStep level={level} email={email} setEmail={setEmail} emailLinks={Boolean(features.emailLinks)} support={support} onBack={() => go(email ? 'password' : 'email', -1)} onSent={(value) => { setSentTo(value); go('sent'); }} />;
   } else if (step === 'sent') {

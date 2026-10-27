@@ -1,8 +1,9 @@
 /*
  * © 2026 МедКарта Казань. Все права защищены.
  *
- * Корень приложения: /admin…, /profile, /login и /activate — отдельными
- * чанками (карта их код не грузит), всё остальное — карта.
+ * Корень приложения: /admin…, /profile, /login, /activate, /register…,
+ * /email/confirm и /legal/… — отдельными чанками (карта их код не грузит), всё
+ * остальное — карта.
  */
 import { lazy, Suspense } from 'react'
 import App from './App.jsx'
@@ -12,6 +13,9 @@ const AdminApp = lazy(() => import('./admin/AdminApp.jsx'))
 const ProfilePage = lazy(() => import('./profile/ProfilePage.jsx'))
 const LoginPage = lazy(() => import('./auth/LoginPage.jsx'))
 const ActivationPage = lazy(() => import('./auth/ActivationPage.jsx'))
+const RegisterPage = lazy(() => import('./auth/RegisterPage.jsx'))
+const EmailConfirmPage = lazy(() => import('./auth/EmailConfirmPage.jsx'))
+const LegalPage = lazy(() => import('./legal/LegalPage.jsx'))
 
 const Fallback = () => <div className="h-full bg-slate-50 dark:bg-slate-950" />
 const AuthFallback = () => <div className="h-full bg-white dark:bg-slate-950" />
@@ -29,6 +33,15 @@ export default function Root() {
   }
   if (path === '/activate') {
     return <Suspense fallback={<AuthFallback />}><ActivationPage /></Suspense>
+  }
+  if (path === '/register' || path === '/register/confirm') {
+    return <Suspense fallback={<AuthFallback />}><RegisterPage /></Suspense>
+  }
+  if (path === '/email/confirm') {
+    return <Suspense fallback={<AuthFallback />}><EmailConfirmPage /></Suspense>
+  }
+  if (path === '/legal' || path.startsWith('/legal/')) {
+    return <Suspense fallback={<AuthFallback />}><LegalPage /></Suspense>
   }
   return <App />
 }

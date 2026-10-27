@@ -1936,6 +1936,8 @@ export default function App() {
     };
 
     window.addEventListener('resize', handleResize);
+    // Ширина могла измениться между первым рендером и подпиской на resize.
+    handleResize();
     return () => {
       window.removeEventListener('resize', handleResize);
       clearTimeout(resizeTimer);
@@ -4403,7 +4405,14 @@ export default function App() {
                   </>
                 )}
               </div>
-              <footer className="py-5 text-center text-[11px] text-slate-400 dark:text-slate-500">© 2026 МедКарта Казань</footer>
+              <footer className="py-5 text-center text-[11px] leading-5 text-slate-400 dark:text-slate-500">
+                © 2026 МедКарта Казань
+                <span className="block">
+                  <a href="/legal/privacy" className="underline-offset-2 hover:text-slate-600 hover:underline dark:hover:text-slate-300" data-testid="app-privacy-link">Политика обработки персональных данных</a>
+                  {' · '}
+                  <a href="/legal/terms" className="underline-offset-2 hover:text-slate-600 hover:underline dark:hover:text-slate-300">Пользовательское соглашение</a>
+                </span>
+              </footer>
             </div>
           </aside>
         </>

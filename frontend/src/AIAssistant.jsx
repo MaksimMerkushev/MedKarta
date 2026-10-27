@@ -82,10 +82,26 @@ const friendlyError = (error) => {
       return 'Сессия личного кабинета закончилась — войдите снова, чтобы продолжить разговор.';
     case 'accounts_unavailable':
       return 'Личный кабинет сейчас недоступен, поэтому ассистент тоже. Попробуйте позже.';
+    case 'password_change_required':
+      return 'Сначала смените временный пароль в профиле — после этого ассистент станет доступен.';
     default:
       return 'Что-то пошло не так. Попробуйте ещё раз через пару секунд 🔄';
   }
 };
+
+/**
+ * Что происходит с запросом (152-ФЗ): не сохраняется и не связывается с
+ * аккаунтом; жалобы на здоровье разбираются на сервере МедКарты и внешней
+ * модели не передаются (docs/privacy/04-health-data.md).
+ */
+function PrivacyNote({ className = '' }) {
+  return (
+    <p className={`leading-snug text-slate-400 dark:text-slate-500 ${className}`} data-testid="ai-privacy-note">
+      Запросы не сохраняются и не связываются с аккаунтом; жалобы на здоровье внешнему ИИ не передаются. Не указывайте ФИО и номера документов.{' '}
+      <a href="/legal/privacy" target="_blank" rel="noopener" className="underline underline-offset-2 hover:text-slate-600 dark:hover:text-slate-300">Подробнее</a>
+    </p>
+  );
+}
 
 export default function AIAssistant({
   isOpen,
@@ -390,6 +406,7 @@ export default function AIAssistant({
               {charCount} / {LIMITS.MAX_MESSAGE_CHARS}
             </div>
           )}
+          <PrivacyNote className="mt-2 text-[11.5px]" />
         </div>
       </Motion.div>
   );
@@ -491,6 +508,7 @@ export default function AIAssistant({
             {charCount} / {LIMITS.MAX_MESSAGE_CHARS}
           </div>
         )}
+        <PrivacyNote className="mt-1.5 text-[10.5px]" />
       </div>
     </Motion.div>
   );

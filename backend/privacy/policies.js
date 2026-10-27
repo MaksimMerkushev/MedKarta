@@ -10,14 +10,19 @@ import { FAIL_CLOSED_REASON, GATEWAY_DECISION } from './models.js';
 import { HARD_BLOCK_KINDS } from './detectors.js';
 
 /** Версия политики. Пишется в логи и в SanitizedPlannerRequest. */
-export const POLICY_VERSION = '2026-10-05.1';
+export const POLICY_VERSION = '2026-10-26.1';
 
 export const POLICY = Object.freeze({
   /**
-   * strict: сырое описание симптомов не покидает контур, наружу уходит только
-   * синтезированное «ищет therapist». Режима, ослабляющего это правило, нет.
+   * local_only (с 2026-10-26.1): запрос со сведениями о здоровье (жалобы,
+   * симптомы, диагнозы — в любой реплике диалога) внешней модели не
+   * передаётся вовсе — ни словами пользователя, ни синтезированным
+   * описанием: профиль врача, выведенный из жалобы («ищет gastroenterologist»),
+   * — тоже сведение о здоровье (docs/privacy/04-health-data.md). Такой
+   * запрос планирует локальный планировщик. Режима, ослабляющего это
+   * правило, нет.
    */
-  medicalTextMode: 'strict',
+  medicalTextMode: 'local_only',
 
   /** Ниже порога классификатор считается неуверенным → fail-closed. */
   symptomConfidenceThreshold: 0.7,
@@ -83,6 +88,15 @@ export const decideGatewayPolicy = ({
     // после редактуры: пользователь делится документами, и ответ должен
     // попросить этого не делать.
     return { decision: GATEWAY_DECISION.LOCAL_ONLY, reason: FAIL_CLOSED_REASON.HARD_IDENTIFIER };
+  }
+
+  /*
+   * Сведения о здоровье не уходят внешней модели ни в каком виде — ни
+   * текстом, ни описанием с профилем, выведенным из жалобы. Ответ строит
+   * локальный планировщик (тот же путь, что и без модели).
+   */
+  if (classification.hasMedicalText) {
+    return { decision: GATEWAY_DECISION.LOCAL_ONLY, reason: FAIL_CLOSED_REASON.MEDICAL_TEXT };
   }
 
   /*

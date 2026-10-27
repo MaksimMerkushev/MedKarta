@@ -51,7 +51,7 @@ flowchart TD
 
 | Шаг | Модуль | Что делает | Что при отказе |
 |---|---|---|---|
-| 0. Вход | [api/chatAccess.js](../backend/api/chatAccess.js) | ассистент включён в настройках админ-панели; действующая сессия (настройка «только после входа», по умолчанию из `CHAT_REQUIRES_ACCOUNT`), пароль не временный | 503 `assistant_disabled` / 401 `login_required` / 403 `password_change_required` / 503 `accounts_unavailable` |
+| 0. Вход | [api/chatAccess.js](../backend/api/chatAccess.js), [api/assistantPass.js](../backend/api/assistantPass.js) | ассистент включён в настройках админ-панели; при настройке «только после входа» (по умолчанию из `CHAT_REQUIRES_ACCOUNT`) — действующий **пропуск** `mk_ai` (cookie на час, `Path=/api/chat`, внутри только срок и случайное число под HMAC). Пропуск выдаёт `POST /api/account/assistant-pass` вошедшему пользователю с постоянным паролем; `/api/chat` сессию **не читает** — запрос не связан с аккаунтом ([privacy/04-health-data.md](privacy/04-health-data.md)) | 503 `assistant_disabled` / 401 `assistant_pass_required` (интерфейс берёт пропуск и повторяет; гостю — 401 при выдаче) / 503 `accounts_unavailable` |
 | 1. Приём | [api/chat.js](../backend/api/chat.js) | метод `POST`, `Origin`, лимит частоты, тело до 32 КБ, `validateChatMessages` | 405 / 403 / 429 / 413 / 400 |
 | 2. Разбор | [privacy/gateway.js](../backend/privacy/gateway.js) | детекторы, связывание со справочником, классификатор жалоб, условия, решение политики | сбой анализа → `local_only`, текст наружу не уходит |
 | 3. План | [planner/client.js](../backend/planner/client.js) или [localPlanner.js](../backend/planner/localPlanner.js) | JSON-план из перечислений | любой сбой внешнего пути → локальный план |
@@ -67,6 +67,12 @@ flowchart TD
 Внешний вызов делает **только** [planner/client.js](../backend/planner/client.js),
 и только с объектом `SanitizedPlannerRequest`, который умеет создавать один
 модуль — Privacy Gateway ([07-privacy.md](07-privacy.md)).
+
+Запрос со сведениями о здоровье (жалоба, симптом, диагноз, «гинеколог»,
+«нарколог» — в любой реплике диалога) с политики `2026-10-26.1` модели **не
+передаётся вовсе**: решение шлюза `local_only`, план строит
+[localPlanner.js](../backend/planner/localPlanner.js), профиль выводится из
+жалобы локально. Ниже — запросы без жалобы.
 
 Тело запроса (`buildPlannerBody`):
 

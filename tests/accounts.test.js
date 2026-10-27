@@ -15,9 +15,10 @@ import { after, before, describe, it } from 'node:test';
 import { randomBytes } from 'node:crypto';
 
 import { generateTemporaryPassword, hashPassword, needsRehash, PasswordBusyError, passwordProblem, verifyPassword } from '../backend/accounts/passwords.js';
-import { ACCOUNT_LIMITS, AccountError, createAccountService, decodeItemId, encodeItemId } from '../backend/accounts/service.js';
+import { ACCOUNT_LIMITS, AccountError, createAccountService, decodeItemId, encodeItemId, hashToken } from '../backend/accounts/service.js';
 import { createSqliteAccountStore, loadSqlite } from '../backend/accounts/sqliteStore.js';
-import { createAccountHandler, createFailureCounter, parseCookies, SESSION_COOKIE } from '../backend/api/account.js';
+import { createAccountHandler, parseCookies, SESSION_COOKIE } from '../backend/api/account.js';
+import { createLoginThrottle } from '../backend/accounts/throttle.js';
 import { createRateLimiter } from '../backend/http/rateLimit.js';
 
 const DatabaseSync = await loadSqlite();
@@ -63,14 +64,14 @@ describe('Кабинет: пароли', () => {
   it('хэш scrypt с солью: тот же пароль — разные хэши, проверка проходит', async () => {
     const first = await hashPassword('correct horse battery');
     const second = await hashPassword('correct horse battery');
-    assert.match(first, /^scrypt\$32768\$8\$3\$[\w-]+\$[\w-]+$/);
+    assert.match(first, /^scrypt2\$32768\$8\$3\$[\w-]+\$[\w-]+$/);
     assert.notEqual(first, second);
     assert.equal(await verifyPassword('correct horse battery', first), true);
     assert.equal(await verifyPassword('correct horse batterY', first), false);
   });
 
   it('битый или чужой хэш — просто «нет», а не исключение', async () => {
-    for (const stored of [null, '', 'plain', 'scrypt$1$1$1$a$b', 'scrypt$1048576$8$1$c2FsdA$aGFzaGhhc2hoYXNoaGFzaA']) {
+    for (const stored of [null, '', 'plain', 'scrypt$1$1$1$a$b', 'scrypt$1048576$8$1$c2FsdA$aGFzaGhhc2hoYXNoaGFzaA', 'scrypt2$1048576$8$1$c2FsdA$aGFzaGhhc2hoYXNoaGFzaA', 'argon2id$x']) {
       assert.equal(await verifyPassword('anything-long', stored), false, String(stored));
     }
   });
@@ -81,7 +82,7 @@ describe('Кабинет: пароли', () => {
     assert.ok(busy.length >= 1 && busy.length <= 6, `отказов: ${busy.length}`);
     assert.ok(busy.every((item) => item.reason instanceof PasswordBusyError));
     // После волны очередь свободна.
-    assert.match(await hashPassword('после-волны-1'), /^scrypt\$/);
+    assert.match(await hashPassword('после-волны-1'), /^scrypt2\$/);
   });
 
   it('старые параметры пересчитываются при входе; временный пароль читаемый и стойкий', async () => {
@@ -94,10 +95,10 @@ describe('Кабинет: пароли', () => {
   });
 
   it('правила пароля', () => {
-    assert.match(passwordProblem('Password'), /распространён/);
-    assert.match(passwordProblem('ffffffffff'), /повторяющегося/);
-    assert.match(passwordProblem('short'), /не короче 8/);
-    assert.match(passwordProblem('12345678'), /только из цифр/);
+    assert.match(passwordProblem('passwordpassword'), /распространён|повторяющ/);
+    assert.match(passwordProblem('f'.repeat(16)), /повторяющ/);
+    assert.match(passwordProblem('short'), /не короче 15/);
+    assert.match(passwordProblem('1234567890123456'), /только из цифр/);
     assert.equal(passwordProblem('нормальный-пароль'), '');
     assert.match(passwordProblem(undefined), /Введите/);
     assert.match(passwordProblem('maksim-2026-pass', { email: 'maksim@bk.ru' }), /email/);
@@ -407,13 +408,13 @@ describe('Кабинет: HTTP', () => {
     assert.equal(response.headers.get('cache-control'), 'no-store');
   });
 
-  it('вход ставит cookie HttpOnly; SameSite=Lax; Path=/api, и кабинет её узнаёт', async () => {
+  it('вход ставит cookie HttpOnly; SameSite=Lax; Path=/, и кабинет её узнаёт', async () => {
     const response = await signIn({ firstName: 'Семья', lastName: 'Тестовая' });
     assert.equal(response.status, 200);
     const { header, value } = cookieFrom(response);
     assert.match(header, /HttpOnly/);
     assert.match(header, /SameSite=Lax/);
-    assert.match(header, /Path=\/api/);
+    assert.match(header, /^mk_sid=[^;]+; Path=\/;/);
     assert.ok(value && value.length >= 40);
     const me = await (await call('/api/account', { cookie: `${SESSION_COOKIE}=${value}` })).json();
     assert.equal(me.user.displayName, 'Семья Тестовая');
@@ -483,8 +484,15 @@ describe('Кабинет: HTTP', () => {
   it('удаление аккаунта требует подтверждения', async () => {
     await addUser(store, { email: 'bye@user.ru' });
     const created = await call('/api/auth/login', { method: 'POST', body: { email: 'bye@user.ru', password: 'пароль-пароль' } });
-    const cookie = `${SESSION_COOKIE}=${cookieFrom(created).value}`;
+    const token = cookieFrom(created).value;
+    const cookie = `${SESSION_COOKIE}=${token}`;
     assert.equal((await call('/api/account', { method: 'DELETE', body: {}, cookie })).status, 400);
+    // Сам вход подтверждением личности не считается: нужен пароль ещё раз.
+    const early = await call('/api/account', { method: 'DELETE', body: { confirm: true }, cookie });
+    assert.equal(early.status, 403);
+    assert.equal((await early.json()).code, 'reauth_required');
+    // Подтверждение личности (POST /api/me/reauth проверяется в secure-auth) — здесь отметкой в сессии.
+    store.setSessionReauth(hashToken(token), Date.now());
     assert.equal((await call('/api/account', { method: 'DELETE', body: { confirm: true }, cookie })).status, 200);
     assert.equal((await (await call('/api/account', { cookie })).json()).user, null);
   });
@@ -537,12 +545,13 @@ describe('Кабинет: HTTP', () => {
     assert.equal((await response.json()).user, null);
   });
 
-  it('перебор пароля одного аккаунта упирается в счётчик ошибок по email', async () => {
+  it('перебор пароля одного аккаунта упирается в счётчик ошибок аккаунта (в базе)', async () => {
     await addUser(store, { email: 'target@user.ru', password: 'верный-пароль-1' });
+    const throttle = createLoginThrottle({ store, rules: { acct: { threshold: 3 } } });
+    const guardedService = createAccountService({ store, throttle });
     const handler = createAccountHandler({
-      getService: async () => service,
+      getService: async () => guardedService,
       authLimit: createRateLimiter({ windowMs: 60_000, maxPerIp: 1000, maxPerInstance: Number.POSITIVE_INFINITY }),
-      failures: createFailureCounter({ max: 3 }),
       features: () => flags,
     });
     const guarded = http.createServer((req, res) => handler(req, res));

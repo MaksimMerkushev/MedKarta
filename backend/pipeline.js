@@ -10,7 +10,7 @@
  * получает только обезличенный запрос Gateway; пути с исходным текстом нет.
  */
 
-import { GATEWAY_DECISION } from './privacy/models.js';
+import { FAIL_CLOSED_REASON, GATEWAY_DECISION } from './privacy/models.js';
 import { loadCatalog } from './privacy/catalog.js';
 import { createEntityResolver } from './privacy/entityResolver.js';
 import { createPrivacyGateway } from './privacy/gateway.js';
@@ -35,6 +35,9 @@ import { demoNow } from './demo/time.js';
 import { publicClinicsHidden } from './demo/flags.js';
 import { logger as defaultLogger } from './observability/safeLogger.js';
 import { metrics as defaultMetrics } from './observability/metrics.js';
+
+/** Причины решения шлюза, которые сами говорят о здоровье: в журнал — как «policy». */
+const HEALTH_REASONS = new Set([FAIL_CLOSED_REASON.EMERGENCY, FAIL_CLOSED_REASON.MEDICAL_TEXT, FAIL_CLOSED_REASON.LOW_CLASSIFIER_CONFIDENCE]);
 
 /* Вопросы о найденном варианте посреди записи. */
 const QUESTION_PRICE = /(?<!\p{L})(?:сколько\s+(?:это\s+)?(?:стоит|стоить|будет\s+стоить)|какая\s+цена|почём|почем|стоимость|цена\s+при[её]ма)(?!\p{L})/u;
@@ -144,16 +147,21 @@ export const createPipeline = ({
       const gate = await exclusive(() => gateway.process({ messages, sessionId }));
 
       metrics.increment('gateway.decision', { decision: gate.decision });
+      /*
+       * В построчный журнал — без признаков здоровья: ни «медицинский текст»,
+       * ни «неотложное состояние», ни причина вида «жалоба»: строка журнала
+       * со временем сопоставима с журналом nginx (IP). Счётчики этих
+       * событий — только в агрегированных метриках.
+       */
       logger.event('gateway.decision', {
         request_id: gate.requestId,
-        decision: gate.decision,
-        reason: gate.reason,
+        decision: gate.decision === 'allow_external' ? 'external' : gate.decision === 'reject' ? 'reject' : 'local',
+        reason: HEALTH_REASONS.has(gate.reason) ? 'policy' : gate.reason,
         policy_version: gateway.policyVersion,
         pii_detected: gate.context.metrics.entitiesDetected > 0,
         redacted_entities: gate.context.metrics.entitiesDetected,
         placeholders: gate.context.metrics.placeholders,
         redaction_ratio: gate.context.metrics.redactionRatio,
-        medical_text: gate.context.metrics.medicalText,
       });
 
       if (gate.decision === GATEWAY_DECISION.EMERGENCY) {
@@ -345,7 +353,8 @@ export const createPipeline = ({
         plan_source: planSource,
         stops: execution.stops.length,
         relaxed: execution.notes.relaxed,
-        missing_specialties: execution.notes.missingSpecialties,
+        // Только число: названия профилей («онколог») — косвенное сведение о здоровье.
+        count: Array.isArray(execution.notes.missingSpecialties) ? execution.notes.missingSpecialties.length : 0,
         latency_ms: Date.now() - started,
       });
 
@@ -441,7 +450,12 @@ export const plannerTransportFromEnv = (env = process.env, logger = defaultLogge
 
 const buildDefaultPipeline = async () => {
   const catalog = await loadCatalog();
-  const vault = createTokenVault({ store: createStoreFromEnv() });
+  const vault = createTokenVault({
+    store: createStoreFromEnv(process.env, {
+      // Облачный Upstash — базы за пределами РФ (ч. 5 ст. 18 152-ФЗ): не используется, токены — в памяти.
+      onForeign: () => defaultLogger.error('token_vault.foreign_storage_blocked', { code: 'localization' }),
+    }),
+  });
   if ((process.env.OPENROUTER_API_KEY || process.env.AI_API_KEY) && !process.env.AI_UPSTREAM_URL) {
     // Без AI_UPSTREAM_URL ключ уйдёт на адрес по умолчанию (modelhub.my):
     // ключ одного провайдера не должен незаметно уходить другому.

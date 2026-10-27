@@ -9,7 +9,7 @@
  */
 import { useState } from 'react';
 import {
-  Archive, ArrowLeft, Ban, Copy, KeyRound, Link2, Lock, LogOut, Mail, Monitor, RotateCcw, Save, Send, ShieldAlert, Trash2, Unlock, UserCog,
+  Archive, ArrowLeft, Ban, Copy, KeyRound, Link2, Lock, LogOut, Mail, MailCheck, Monitor, RotateCcw, Save, Send, ShieldAlert, ShieldCheck, ShieldOff, Timer, Trash2, Unlock, UserCog,
 } from 'lucide-react';
 
 import { api, useApi } from '../api';
@@ -69,6 +69,29 @@ function ProfileTab({ user }) {
         <Row label="Последняя активность">{user.lastSeenAt ? `${formatDateTime(user.lastSeenAt)} (${formatRelative(user.lastSeenAt)})` : '—'}</Row>
         <Row label="Пароль изменён">{formatDateTime(user.passwordChangedAt)}</Row>
         <Row label="Смена пароля">{user.mustChangePassword ? <Badge tone="amber" icon={KeyRound}>Требуется при входе</Badge> : 'не требуется'}</Row>
+        <Row label="Email подтверждён">
+          {user.emailVerified
+            ? <Badge tone="green" icon={MailCheck}>{user.emailVerifiedAt ? `Да, ${formatDateTime(user.emailVerifiedAt)}` : 'Да'}</Badge>
+            : <Badge tone="slate">Нет</Badge>}
+        </Row>
+        <Row label="Как создан">{user.signupSource === 'self' ? 'Зарегистрировался сам' : user.createdBy ? 'Создан администратором' : '—'}{user.activatedAt ? ` · активирован ${formatDateTime(user.activatedAt)}` : ''}</Row>
+        <Row label="Двухфакторная защита">
+          {user.mfa?.enabled
+            ? <Badge tone="green" icon={ShieldCheck}>Включена · способов: {user.mfa.factors}</Badge>
+            : user.mfa?.required
+              ? <Badge tone="red" icon={ShieldAlert} className="whitespace-normal">Не настроена — обязательна для сотрудника</Badge>
+              : <Badge tone="slate">Не включена</Badge>}
+        </Row>
+        <Row label="Ограничения входа">
+          {user.loginLimits?.active
+            ? (
+              <Badge tone="amber" icon={Timer} className="whitespace-normal">
+                {user.loginLimits.accountLockedUntil ? `Вход с новых устройств закрыт до ${formatDateTime(user.loginLimits.accountLockedUntil)}` : user.loginLimits.mfaLockedUntil ? `Проверка кодов закрыта до ${formatDateTime(user.loginLimits.mfaLockedUntil)}` : `Ограничено мест входа: ${user.loginLimits.lockedPlaces}`}
+              </Badge>
+            )
+            : 'нет'}
+          {user.loginLimits?.recentFailures ? ` · неудачных попыток за последний час: ${user.loginLimits.recentFailures}` : ''}
+        </Row>
         <Row label="Неудачные входы подряд">{user.failedLogins}{user.lastFailedLoginAt ? ` · последний ${formatDateTime(user.lastFailedLoginAt)}` : ''}</Row>
         <Row label="Активные сессии">{user.activeSessions}</Row>
       </dl>
@@ -215,6 +238,40 @@ function AccessLinksCard({ data, onChanged }) {
   );
 }
 
+/**
+ * Сброс второго фактора «Пользователя», потерявшего все способы входа:
+ * email владельца для подтверждения и причина (как проверена личность) —
+ * в журнал. Сервер дополнительно требует свежего подтверждения личности
+ * администратора.
+ */
+function MfaResetDialog({ user, onConfirm, onClose }) {
+  const [reason, setReason] = useState('');
+  return (
+    <ConfirmDialog
+      title="Сбросить двухфакторную защиту?"
+      message={`${user.displayName} (${user.email}). Ключи доступа, приложения-аутентификаторы и резервные коды будут удалены, все сессии завершены; пароль не меняется. Владельцу придёт письмо. Делайте это, только если личность владельца подтверждена вне МедКарты.`}
+      confirmLabel="Сбросить защиту"
+      confirmText={user.email}
+      confirmHint="Введите email пользователя для подтверждения"
+      onClose={onClose}
+      onConfirm={() => {
+        const why = reason.trim();
+        if (why.length < 5) throw new Error('Укажите, как подтверждена личность владельца (не короче 5 символов).');
+        return onConfirm(why);
+      }}
+    >
+      <TextInput
+        label="Как подтверждена личность владельца"
+        hint="Попадёт в журнал действий. Например: «паспорт в регистратуре, 12.10» или «видеозвонок, сверка данных»."
+        value={reason}
+        maxLength={300}
+        onChange={(event) => setReason(event.target.value)}
+        data-testid="mfa-reset-reason"
+      />
+    </ConfirmDialog>
+  );
+}
+
 function ManageTab({ data, onChanged }) {
   const toast = useToast();
   const { user, can } = data;
@@ -307,6 +364,9 @@ function ManageTab({ data, onChanged }) {
               <Button variant="dangerGhost" icon={Lock} disabled={!can.block || user.status === 'archived'} onClick={() => setDialog('block')} data-testid="block-user">Заблокировать</Button>
             )}
             <Button variant="ghost" icon={LogOut} disabled={!can.sessions || user.isSelf || user.activeSessions === 0} onClick={() => setDialog('sessions')} data-testid="revoke-sessions">Завершить все сессии</Button>
+            {user.loginLimits?.active && (
+              <Button variant="ghost" icon={Timer} disabled={!can.unlockLogin} onClick={() => setDialog('unlock-login')} data-testid="unlock-login">Снять ограничения входа</Button>
+            )}
             {user.status === 'archived' ? (
               <Button icon={RotateCcw} disabled={!can.archive} onClick={() => setDialog('restore')}>Восстановить из архива</Button>
             ) : (
@@ -317,6 +377,24 @@ function ManageTab({ data, onChanged }) {
         </Card>
 
         {!user.pending && <AccessLinksCard data={data} onChanged={onChanged} />}
+
+        {user.mfa?.enabled && (
+          <Card title="Двухфакторная защита" description="Если владелец потерял все ключи, телефон с приложением и резервные коды.">
+            <p className="text-[13px] leading-5 text-slate-600 dark:text-slate-300">
+              Ссылка для смены пароля такому аккаунту не поможет: без второго фактора она пароль не меняет. Сброс удаляет все способы второго фактора и завершает сессии — после этого владелец входит паролем и сразу включает защиту снова.
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Button variant="dangerGhost" icon={ShieldOff} disabled={!can.mfaReset} onClick={() => setDialog('mfa-reset')} data-testid="mfa-reset">Сбросить двухфакторную защиту</Button>
+              {!can.mfaReset && (
+                <Reason>
+                  {user.mfa.required
+                    ? 'Второй фактор сотрудника сбрасывается только на сервере: npm run accounts -- mfa-reset.'
+                    : 'Нужно право «Сброс пароля» и роль выше, чем у пользователя.'}
+                </Reason>
+              )}
+            </div>
+          </Card>
+        )}
       </div>
 
       <Card title="Опасная зона">
@@ -353,6 +431,23 @@ function ManageTab({ data, onChanged }) {
             toast(`Завершено сессий: ${result.revoked}.`);
             onChanged(null);
           }} />
+      )}
+      {dialog === 'unlock-login' && (
+        <ConfirmDialog
+          title="Снять ограничения входа?"
+          message="Счётчики неудачных попыток для этого аккаунта обнулятся. Делайте это, только если уверены, что попытки делал сам владелец (например, он позвонил)."
+          confirmLabel="Снять ограничения"
+          tone="primary"
+          onClose={() => setDialog(null)}
+          onConfirm={() => act(() => api.post(`/api/admin/users/${user.id}/unlock-login`, {}), 'Ограничения входа сняты.')}
+        />
+      )}
+      {dialog === 'mfa-reset' && (
+        <MfaResetDialog
+          user={user}
+          onClose={() => setDialog(null)}
+          onConfirm={(reason) => act(() => api.post(`/api/admin/users/${user.id}/mfa-reset`, { confirmEmail: user.email, reason }), 'Двухфакторная защита сброшена. Владельцу отправлено письмо.')}
+        />
       )}
       {dialog === 'archive' && (
         <ConfirmDialog title="Отправить в архив?" message="Вход будет закрыт, сессии завершены. Данные сохранятся, аккаунт можно восстановить." confirmLabel="В архив" onClose={() => setDialog(null)}
@@ -484,7 +579,41 @@ function SecurityTab({ data, onChanged }) {
         )}
         {blocks.error && <ErrorState error={blocks.error} onRetry={blocks.reload} />}
       </Card>
+
+      <ConsentsCard user={user} />
     </div>
+  );
+}
+
+const CONSENT_ACTIONS = { granted: 'принято', withdrawn: 'отозвано', closed: 'закрыто' };
+const CONSENT_KINDS = { acceptance: 'Соглашение', acknowledgement: 'Политика', consent: 'Согласие' };
+
+/** Журнал принятия документов и согласий (только для права privacy.requests): чтение, без правки. */
+function ConsentsCard({ user }) {
+  const { can } = useAdmin();
+  const allowed = can('privacy.requests');
+  const consents = useApi(() => (allowed ? api.get(`/api/admin/users/${user.id}/consents`) : Promise.resolve(null)), [user.id, allowed]);
+  if (!allowed) return null;
+  return (
+    <Card title="Документы и согласия" description="Журнал только дополняется; изменить или удалить запись нельзя ни пользователю, ни сотрудникам." bodyClassName="p-0">
+      {consents.error && <ErrorState error={consents.error} onRetry={consents.reload} />}
+      {consents.data && consents.data.history.length === 0 && (
+        <EmptyState title="Записей нет" description={consents.data.pending.length > 0 ? 'Пользователь ещё не принял действующую редакцию — её предложат при входе.' : undefined} />
+      )}
+      {consents.data && consents.data.history.length > 0 && (
+        <ul className="divide-y divide-slate-100 dark:divide-slate-800" data-testid="user-consents">
+          {consents.data.history.map((item) => (
+            <li key={item.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-[13px]">
+              <span className="w-36 shrink-0 tabular-nums text-slate-500 dark:text-slate-400">{formatDateTime(item.at)}</span>
+              <Badge tone={item.action === 'granted' ? 'green' : 'slate'}>{CONSENT_KINDS[item.kind] || item.kind}</Badge>
+              <span className="text-slate-700 dark:text-slate-200">{item.version ? `редакция ${item.version}` : ''} — {CONSENT_ACTIONS[item.action] || item.action}</span>
+              <span className="text-slate-500 dark:text-slate-400">{item.method}</span>
+              {item.documentHash && <span className="font-mono text-[11px] text-slate-400" title={item.documentHash}>{item.documentHash.slice(0, 12)}…</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
   );
 }
 

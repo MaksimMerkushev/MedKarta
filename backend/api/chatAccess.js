@@ -2,24 +2,46 @@
  * © 2026 МедКарта Казань. Все права защищены.
  *
  * Ассистент — только для вошедших в личный кабинет (CHAT_REQUIRES_ACCOUNT=off
- * открывает его гостям). Проверяется лишь факт входа: id, email, имя и
- * программа ДМС в конвейер ассистента и к модели не попадают.
+ * или настройка assistant.requiresAccount=false открывают его гостям).
+ *
+ * Сессия здесь НЕ читается. Запрос к ассистенту может содержать сведения о
+ * здоровье, и связывать его с аккаунтом нельзя (ст. 10 152-ФЗ,
+ * docs/privacy/04-health-data.md). Вместо сессии проверяется пропуск
+ * (cookie mk_ai): вошедший получает его отдельным запросом
+ * POST /api/account/assistant-pass, а в пропуске нет id аккаунта — только
+ * срок и подпись (api/assistantPass.js). Нет пропуска — 401
+ * assistant_pass_required: интерфейс запросит пропуск и повторит запрос,
+ * а гостя попросит войти.
  *
  * Проверка стоит перед обработчиком /api/chat, а не внутри него: сервер и
  * dev-сервер Vite подключают её одинаково (server.js, vite.config.js).
  */
 
-import { chatRequiresAccount, getDefaultAccountService, parseCookies, SESSION_COOKIE } from './account.js';
-import { isTrustedWrite } from './accountHttp.js';
+import { chatRequiresAccount, getDefaultAccountService } from './account.js';
+import { getAccountContext } from './accountContext.js';
+import { isTrustedWrite, parseCookies } from './accountHttp.js';
+import { ASSISTANT_PASS_COOKIE } from './assistantPass.js';
 import { respondJson } from '../http/request.js';
 import { logger } from '../observability/safeLogger.js';
 
+const passOf = (req) => {
+  const header = String(req.headers.cookie || '');
+  // Две cookie пропуска — одну подбросили: не угадываем.
+  if (header.split(';').filter((part) => part.trim().startsWith(`${ASSISTANT_PASS_COOKIE}=`)).length !== 1) return '';
+  return parseCookies(header)[ASSISTANT_PASS_COOKIE] || '';
+};
+
 /**
  * true — запрос можно передать ассистенту; иначе ответ уже отправлен:
- * 403 csrf (не JSON или с чужого сайта), 401 login_required, 403 password_change_required, 503 accounts_unavailable
- * или assistant_disabled (выключен в настройках админ-панели).
+ * 403 csrf (не JSON или с чужого сайта), 401 assistant_pass_required (нет
+ * действующего пропуска), 503 accounts_unavailable или assistant_disabled
+ * (выключен в настройках админ-панели).
  */
-export const createChatAccessGate = ({ getService = getDefaultAccountService, isRequired = chatRequiresAccount } = {}) =>
+export const createChatAccessGate = ({
+  getService = getDefaultAccountService,
+  isRequired = chatRequiresAccount,
+  getPass = async () => (await getAccountContext())?.assistantPass || null,
+} = {}) =>
   async function chatAccessGate(req, res) {
     // OPTIONS и неверный метод обработчик чата отклоняет сам.
     if (req.method !== 'POST') return true;
@@ -54,19 +76,18 @@ export const createChatAccessGate = ({ getService = getDefaultAccountService, is
       return false;
     }
 
-    const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
-    let auth = null;
+    let pass = null;
     try {
-      auth = token ? service.authenticate(token) : null;
+      pass = await getPass();
     } catch (error) {
-      logger.error('chat.account_lookup_failed', error);
+      logger.error('chat.pass_unavailable', error);
     }
-    if (!auth) {
-      respondJson(res, 401, { error: 'Ассистент доступен после входа в личный кабинет.', code: 'login_required' });
+    if (!pass) {
+      respondJson(res, 503, { error: 'Личный кабинет сейчас недоступен, поэтому ассистент тоже.', code: 'accounts_unavailable' });
       return false;
     }
-    if (auth.user.mustChangePassword) {
-      respondJson(res, 403, { error: 'Сначала смените временный пароль.', code: 'password_change_required' });
+    if (!pass.verify(passOf(req))) {
+      respondJson(res, 401, { error: 'Ассистент доступен после входа в личный кабинет.', code: 'assistant_pass_required' });
       return false;
     }
     return true;

@@ -52,6 +52,7 @@ describe('Набор: ручные примеры', () => {
       const results = await evaluateSamples(runners[mode], handwrittenSamples(HANDWRITTEN));
       const { overall } = summarize(results);
       assert.equal(overall.leakedSamples, 0, describeLeaks(results));
+      assert.equal(overall.healthSent, 0, 'сведения о здоровье ушли модели');
       assert.equal(overall.benignSentRate, 100);
       assert.equal(overall.catalogTokenRate ?? 100, 100);
       assert.equal(overall.emergencyFalseAlarms, 0);
@@ -72,6 +73,12 @@ describe('Набор: сгенерированные примеры (10 % про
   it('structured: ни одной утечки', () => {
     assert.ok(overall.piiSamples > 600, `примеров с данными: ${overall.piiSamples}`);
     assert.equal(overall.leakedSamples, 0, describeLeaks(results));
+  });
+
+  it('structured: сведения о здоровье не уходят модели ни в каком виде', () => {
+    assert.ok(overall.healthSamples > 20, `примеров со сведениями о здоровье: ${overall.healthSamples}`);
+    const sent = results.filter((item) => (item.medical || item.reason === 'medical_text_policy') && item.sent);
+    assert.equal(overall.healthSent, 0, sent.slice(0, 5).map((item) => item.messages.join(' || ')).join('\n'));
   });
 
   it('structured: описание шлюза проходит выходной предохранитель', () => {
@@ -238,10 +245,22 @@ describe('Описание вместо текста: кто есть кто', (
     }
   });
 
+  /*
+   * «Беспокоит» классификатор читает как жалобу («меня беспокоит…»), и
+   * запрос с ним обрабатывается только локально (политика 2026-10-26.1):
+   * наружу не уходит ничего — ни метка, ни имя.
+   */
+  it('«…беспокоит, нужен кардиолог» — только локально, наружу ничего', async () => {
+    const result = await describeRequest('добрый вечер Марат Ринатович беспокоит нужен кардиолог', namesakeCatalog());
+    assert.equal(result.decision, 'local_only');
+    assert.equal(result.reason, 'medical_text_policy');
+    assert.equal(result.text, '');
+  });
+
   for (const text of [
     'ФИО: ЗИННАТУЛЛИНА РЕГИНА ФАРИТОВНА. НУЖЕН УРОЛОГ',
     'Добрый день, меня зовут Алсу Кадырова, ищу дерматолога',
-    'добрый вечер Марат Ринатович беспокоит нужен кардиолог',
+    'добрый вечер, Марат Ринатович на связи, нужен кардиолог',
   ]) {
     it(`представившийся пользователь — не врач справочника: «${text.slice(0, 40)}»`, async () => {
       const result = await describeRequest(text, namesakeCatalog());

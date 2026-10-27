@@ -5,11 +5,12 @@
  * словаря shared/analytics.js и случайный id вкладки. Текст поиска, координаты
  * и данные о человеке не уходят: событие с лишним полем отбрасывается целиком
  * в браузере и повторно на сервере. При Do Not Track / Global Privacy Control
- * не отправляется ничего. Отправка пачками раз в несколько секунд и через
+ * или отказе в настройках сайта (ANALYTICS_OPT_OUT_KEY) не отправляется ничего. Отправка пачками раз в несколько секунд и через
  * sendBeacon при уходе со страницы.
  */
 
 import { ANALYTICS_LIMITS, sanitizeEvent } from '@shared/analytics.js';
+import { ANALYTICS_OPT_OUT_KEY } from '@shared/legal.js';
 
 const ENDPOINT = '/api/events';
 const STORAGE_KEY = 'medkarta.analytics.sid';
@@ -21,11 +22,39 @@ let timer = null;
 let listenersAttached = false;
 let cachedSid = null;
 
-const optedOut = () => {
-  if (typeof navigator === 'undefined') return true;
-  return navigator.globalPrivacyControl === true
-    || navigator.doNotTrack === '1'
-    || (typeof window !== 'undefined' && window.doNotTrack === '1');
+/** Отказ в настройках сайта (профиль → «Мои данные» или подвал карты): хранится только в этом браузере. */
+const storedOptOut = () => {
+  try {
+    return localStorage.getItem(ANALYTICS_OPT_OUT_KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+
+/** Сигналы браузера (DNT / GPC) — отказ, который не выключить на сайте. */
+export const browserOptOut = () => typeof navigator === 'undefined'
+  || navigator.globalPrivacyControl === true
+  || navigator.doNotTrack === '1'
+  || (typeof window !== 'undefined' && window.doNotTrack === '1');
+
+const optedOut = () => browserOptOut() || storedOptOut();
+
+export const isAnalyticsOptedOut = optedOut;
+
+/** Включить или выключить статистику в этом браузере; при отказе — очередь очищается, ничего не уходит. */
+export const setAnalyticsOptOut = (value) => {
+  try {
+    if (value) localStorage.setItem(ANALYTICS_OPT_OUT_KEY, '1');
+    else localStorage.removeItem(ANALYTICS_OPT_OUT_KEY);
+  } catch {
+    // Без хранилища отказ действует до перезагрузки страницы.
+  }
+  if (value) {
+    queue = [];
+    if (timer) clearTimeout(timer);
+    timer = null;
+  }
+  return optedOut();
 };
 
 /** Случайный идентификатор вкладки: не связан ни с человеком, ни с диалогом ассистента. */

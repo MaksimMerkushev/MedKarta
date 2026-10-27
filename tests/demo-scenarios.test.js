@@ -304,25 +304,40 @@ describe('Демо-сценарии: приватность', () => {
     const plan = { action: 'FIND_DOCTOR', steps: [{ type: 'specialty', specialty: 'lor', selection: 'any', constraints: {} }], constraints: {}, reply_hint: 'doctors_found' };
     const { pipeline, sent } = makeTestPipeline({ catalog, respond: plan, outboundMode: 'structured', booking: { enabled: true, now: () => clock } });
     const { action } = await pipeline.handle({
-      messages: [{ role: 'user', content: 'Нужен ЛОР послезавтра после 18:00 до 2500 ₽ в Иннополисе, болит ухо' }],
+      messages: [{ role: 'user', content: 'Нужен ЛОР послезавтра после 18:00 до 2500 ₽ в Иннополисе' }],
       sessionId: TEST_SESSION,
     });
     assert.equal(sent.length, 1);
     const outbound = sent[0].serialized + JSON.stringify(sent[0].hints);
-    for (const leaked of ['2500', 'Иннополис', 'innopolis', 'after_tomorrow', 'послезавтра', 'maxPrice', 'болит', 'ухо']) {
+    for (const leaked of ['2500', 'Иннополис', 'innopolis', 'after_tomorrow', 'послезавтра', 'maxPrice']) {
       assert.ok(!outbound.includes(leaked), `во внешний запрос попало «${leaked}»`);
     }
     assert.equal(action.booking.request.maxPrice, 2500);
     assert.equal(action.booking.request.city, 'innopolis');
   });
 
-  it('новые условия (пол, стаж, программа, исключения, «на дом») тоже не уходят наружу', async () => {
-    const plan = { action: 'FIND_DOCTOR', steps: [{ type: 'specialty', specialty: 'gynecologist', selection: 'any', constraints: {} }], constraints: {}, reply_hint: 'doctors_found' };
+  it('та же запись с жалобой («болит ухо») — модели не уходит ничего, условия разобраны локально', async () => {
+    const plan = { action: 'FIND_DOCTOR', steps: [{ type: 'specialty', specialty: 'lor', selection: 'any', constraints: {} }], constraints: {}, reply_hint: 'doctors_found' };
     const { pipeline, sent } = makeTestPipeline({ catalog, respond: plan, outboundMode: 'structured', booking: { enabled: true, now: () => clock } });
     const { action } = await pipeline.handle({
-      messages: [{ role: 'user', content: 'Гинеколог-женщина со стажем больше 15 лет, не в Ясене, по программе Demo Premium, кроме понедельника, лучше на дом' }],
+      messages: [{ role: 'user', content: 'Нужен ЛОР послезавтра после 18:00 до 2500 ₽ в Иннополисе, болит ухо' }],
       sessionId: TEST_SESSION,
     });
+    assert.equal(sent.length, 0, 'запрос с жалобой ушёл модели');
+    assert.equal(action.booking.request.specialty, 'lor');
+    assert.equal(action.booking.request.maxPrice, 2500);
+    assert.equal(action.booking.request.city, 'innopolis');
+    assert.equal(action.booking.request.timeFrom, '18:00');
+  });
+
+  it('новые условия (пол, стаж, программа, исключения, «на дом») тоже не уходят наружу', async () => {
+    const plan = { action: 'FIND_DOCTOR', steps: [{ type: 'specialty', specialty: 'therapist', selection: 'any', constraints: {} }], constraints: {}, reply_hint: 'doctors_found' };
+    const { pipeline, sent } = makeTestPipeline({ catalog, respond: plan, outboundMode: 'structured', booking: { enabled: true, now: () => clock } });
+    const { action } = await pipeline.handle({
+      messages: [{ role: 'user', content: 'Терапевт-женщина со стажем больше 15 лет, не в Ясене, по программе Demo Premium, кроме понедельника, лучше на дом' }],
+      sessionId: TEST_SESSION,
+    });
+    assert.equal(sent.length, 1);
     const outbound = sent[0].serialized + JSON.stringify(sent[0].hints);
     // Стаж как числовой фильтр (minExperience=15) планировщику передаётся — это не данные о человеке.
     for (const leaked of ['female', 'женщин', 'Premium', 'premium', '16', 'excludeWeekdays', 'понедельник', 'home_visit', 'на дом', 'demo-yasen', 'Ясен']) {
@@ -334,6 +349,23 @@ describe('Демо-сценарии: приватность', () => {
     assert.equal(request.dms.planId, 'demo-premium');
     assert.deepEqual(request.excludeWeekdays, [1]);
     assert.deepEqual(request.unsupported, ['home_visit']);
+    assert.ok(request.excludeBranchIds.includes('demo-yasen-centr'));
+  });
+
+  it('«гинеколог» — профиль особой категории: модели не уходит ничего, условия разобраны локально', async () => {
+    const plan = { action: 'FIND_DOCTOR', steps: [{ type: 'specialty', specialty: 'gynecologist', selection: 'any', constraints: {} }], constraints: {}, reply_hint: 'doctors_found' };
+    const { pipeline, sent } = makeTestPipeline({ catalog, respond: plan, outboundMode: 'structured', booking: { enabled: true, now: () => clock } });
+    const { action } = await pipeline.handle({
+      messages: [{ role: 'user', content: 'Гинеколог-женщина со стажем больше 15 лет, не в Ясене, по программе Demo Premium, кроме понедельника, лучше на дом' }],
+      sessionId: TEST_SESSION,
+    });
+    assert.equal(sent.length, 0, 'запрос к гинекологу ушёл модели');
+    const { request } = action.booking;
+    assert.equal(request.specialty, 'gynecologist');
+    assert.equal(request.doctorGender, 'female');
+    assert.equal(request.minExperience, 16);
+    assert.equal(request.dms.planId, 'demo-premium');
+    assert.deepEqual(request.excludeWeekdays, [1]);
     assert.ok(request.excludeBranchIds.includes('demo-yasen-centr'));
   });
 });

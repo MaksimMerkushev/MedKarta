@@ -66,6 +66,10 @@ describe('Граница доверия в исходниках', () => {
       path.join('backend', 'planner', 'client.js'),
       path.join('backend', 'storage', 'tokenVault.js'),
       path.join('backend', 'executor', 'routing.js'),
+      // Проверка пароля по базе утечек — только при PASSWORD_BREACH_CHECK=hibp и только
+      // первые 5 символов SHA-1 (k-анонимность); пароль, email и данные пользователя не уходят
+      // (проверяется в secure-auth.test.js).
+      path.join('backend', 'accounts', 'breachedPasswords.js'),
     ];
 
     for (const caller of callers) {

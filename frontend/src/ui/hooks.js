@@ -9,6 +9,15 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 export const ToastContext = createContext(() => {});
 export const useToast = () => useContext(ToastContext);
 
+/*
+ * Подтверждение личности перед важным действием (ReauthProvider в
+ * reauth.jsx). withReauth(work): выполнить; если сервер ответил 403
+ * reauth_required — спросить пароль (и второй фактор) и повторить один раз.
+ * Без провайдера — просто выполнить.
+ */
+export const ReauthContext = createContext({ confirm: async () => false, withReauth: (work) => work() });
+export const useReauth = () => useContext(ReauthContext);
+
 const THEME_KEY = 'med-navigator-dark-mode';
 
 export function useTheme() {

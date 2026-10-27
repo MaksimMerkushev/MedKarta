@@ -41,12 +41,21 @@ export const SECURITY_HEADERS = Object.freeze({
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
+  // Ключи доступа (WebAuthn) — только на своём сайте; usb=() не мешает: аппаратные ключи браузер подключает сам.
   'Permissions-Policy':
-    'geolocation=(self), camera=(), microphone=(), payment=(), usb=(), magnetometer=(), accelerometer=(), gyroscope=(), browsing-topics=()',
+    'geolocation=(self), camera=(), microphone=(), payment=(), usb=(), magnetometer=(), accelerometer=(), gyroscope=(), browsing-topics=(), publickey-credentials-get=(self), publickey-credentials-create=(self)',
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Cross-Origin-Resource-Policy': 'same-origin',
   'X-DNS-Prefetch-Control': 'off',
 });
+
+/*
+ * Страницы со ссылками-ключами в адресе (#token=…): Referer не уходит
+ * никуда. Токен во фрагменте и так не попадает в Referer, это — вторая
+ * линия защиты (и для nginx — тот же заголовок, docs/deployment.md).
+ */
+export const TOKEN_PAGES = Object.freeze(['/activate', '/register/confirm', '/email/confirm']);
+export const isTokenPage = (pathname) => TOKEN_PAGES.includes(String(pathname || '').replace(/\/+$/, '') || '/');
 
 export const API_HEADERS = Object.freeze({
   'Cache-Control': 'no-store, max-age=0',
