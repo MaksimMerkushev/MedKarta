@@ -61,7 +61,11 @@ export default function AuthLayout({ children, support = null, back = null }) {
           </main>
 
           <footer className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[13px] text-slate-500 dark:text-slate-400">
-            <span>МедКарта, Казань</span>
+            <span className="flex flex-wrap gap-x-3 gap-y-1">
+              <span>МедКарта, Казань</span>
+              <a className="underline-offset-4 hover:text-slate-800 hover:underline dark:hover:text-slate-200" href="/legal/privacy" data-testid="footer-privacy">Политика обработки данных</a>
+              <a className="underline-offset-4 hover:text-slate-800 hover:underline dark:hover:text-slate-200" href="/legal/terms" data-testid="footer-terms">Соглашение</a>
+            </span>
             {(support?.email || support?.phone) && (
               <span className="min-w-0 truncate">
                 Поддержка:{' '}

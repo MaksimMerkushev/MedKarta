@@ -16,13 +16,38 @@
  *       В production — только с --allow-production.
  *   npm run accounts -- access-link --email адрес [--base …]
  *       одноразовая ссылка для входа: приглашение (аккаунт не активирован)
- *       или смена пароля. Прежняя ссылка того же вида отзывается.
+ *       или смена пароля. Прежняя ссылка того же вида отзывается. Если у
+ *       аккаунта включена MFA, пароль по ссылке меняется только вместе со
+ *       вторым фактором владельца; утрачены все факторы — сначала mfa-reset.
  *   npm run accounts -- reset-password --email адрес
  *       то же, что access-link, плюс завершает все сессии пользователя.
  *   npm run accounts -- restore-admin --email адрес
  *       вернуть аккаунту роль superadmin и статус «активен» (потеря доступа).
+ *   npm run accounts -- mfa-reset --email адрес [--yes]
+ *       процедура восстановления при потере всех факторов входа (телефон,
+ *       ключи и резервные коды): факторы и коды удаляются, все сессии и
+ *       доверенные устройства завершаются. Только на сервере, с подтверждением:
+ *       для сотрудника это единственный способ вернуть доступ без второго
+ *       фактора — письма для этого недостаточно. После входа MFA нужно
+ *       настроить заново (админ-панель потребует это сама).
+ *   npm run accounts -- unlock --email адрес
+ *       снять временные ограничения входа (счётчики неудачных попыток).
  *   npm run accounts -- list-staff | status
- *   npm run accounts -- backup --out файл.sqlite
+ *   npm run accounts -- backup --out файл [--encrypt]
+ *       горячая копия базы; с --encrypt — зашифрованная AES-256-GCM ключом
+ *       BACKUP_ENCRYPTION_KEY (отдельно от MFA_SECRET_KEY).
+ *   npm run accounts -- decrypt-backup --in файл --out файл.sqlite
+ *   npm run accounts -- legal-status
+ *       редакции документов, черновики (незаполненные сведения об операторе)
+ *       и можно ли открывать регистрацию.
+ *   npm run accounts -- consents-verify [--as-of ISO-время]
+ *       проверка журнала согласий: хэши записей и цепочек; «отпечаток»
+ *       журнала — сохраняйте его вне сервера (docs/privacy/09-security-measures.md).
+ *   npm run accounts -- privacy-requests
+ *       открытые обращения субъектов ПДн и сроки ответа.
+ *   npm run accounts -- reapply-erasures [--yes]
+ *       после восстановления базы из копии: повторить удаления аккаунтов из
+ *       журнала удалений (var/accounts/erasures.jsonl).
  *
  * Ссылки выводятся только в терминал (TTY): при перенаправлении вывода в
  * файл или журнал команда откажется, если не передан --print-secrets.
@@ -46,6 +71,11 @@ const { bootstrapSuperadmin, createTestUsers, DEFAULT_SUPERADMIN } = await impor
 const { normalizeEmail, userLabel } = await import('../backend/accounts/service.js');
 const { createSqliteAccountStore, loadSqlite } = await import('../backend/accounts/sqliteStore.js');
 const { createAccountContext, defaultAccountsDbPath } = await import('../backend/api/accountContext.js');
+const { loadMfaKey } = await import('../backend/accounts/secrets.js');
+const { emailKey } = await import('../backend/accounts/throttle.js');
+const { backupKeyFromEnv, decryptBackup, encryptBackup } = await import('../backend/accounts/backupCrypto.js');
+const { createErasureLog } = await import('../backend/accounts/erasureLog.js');
+const fs = await import('node:fs');
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -83,7 +113,10 @@ const DatabaseSync = await loadSqlite();
 if (!DatabaseSync) die('Нужен Node 22.13+ (node:sqlite).');
 const file = defaultAccountsDbPath();
 const store = createSqliteAccountStore({ DatabaseSync, file });
-const context = createAccountContext({ store, onAccountDeleted: async () => {}, systemInfo: async () => null });
+// Ключ MFA — тот же, что у сервера (MFA_SECRET_KEY или файл рядом с базой).
+const mfaKey = loadMfaKey({ keyFile: path.join(path.dirname(file), 'secrets', 'mfa.key') }).key;
+const erasureLog = createErasureLog({ file: path.join(path.dirname(file), 'erasures.jsonl') });
+const context = createAccountContext({ store, mfaKey, onAccountDeleted: async () => {}, systemInfo: async () => null, erasureLog });
 const linkBase = () => {
   const base = option('base') || `http://localhost:${process.env.PORT || 3001}`;
   try {
@@ -174,6 +207,9 @@ switch (command) {
     }
     try {
       printLink(user, await context.invitations.issue({ user, actor: null, source: 'cli', base: linkBase() }));
+      if (context.mfa?.hasMfa(user.id)) {
+        console.log('У аккаунта включена двухфакторная защита: по ссылке пароль сменится только вместе со вторым фактором владельца. Утрачены все факторы — сначала mfa-reset --email ….');
+      }
     } catch (error) {
       die(error.message);
     }
@@ -187,6 +223,35 @@ switch (command) {
     });
     console.log(`${user.email}: роль superadmin, статус «активен».`);
     if (!user.activatedAt) console.log('Аккаунт ещё не активирован — выдайте ссылку: npm run accounts -- access-link --email …');
+    break;
+  }
+  case 'mfa-reset': {
+    const user = findByEmail(option('email'));
+    if (user.demoTemplate) die('У демо-копии нет факторов входа.');
+    if (!flag('yes')) {
+      if (!process.stdin.isTTY) die('Подтвердите в терминале или передайте --yes.');
+      console.log(`Будут удалены все факторы входа и резервные коды ${user.email}, завершены все сессии.`);
+      const answer = await ask('Введите email ещё раз для подтверждения: ');
+      if (normalizeEmail(answer) !== user.email) die('Email не совпал — ничего не изменено.');
+    }
+    const revoked = store.transaction(() => {
+      const count = context.mfa.resetAll(user.id);
+      store.deleteUserSessions(user.id);
+      store.deleteUserDevices(user.id);
+      audit('user.mfa_reset', user, { factors: count, via: 'cli' });
+      store.addAuthEvent({ at: Date.now(), type: 'mfa_reset', userId: user.id, reason: 'cli' });
+      return count;
+    });
+    console.log(`${user.email}: удалено факторов — ${revoked}, резервные коды и сессии сброшены.`);
+    console.log('Дальше: войдите паролем (если пароль тоже утрачен — access-link --email …) и сразу настройте второй фактор.');
+    break;
+  }
+  case 'unlock': {
+    const user = findByEmail(option('email'));
+    const cleared = context.throttle.clearAccount(emailKey(user.email));
+    audit('user.login_unlock', user, { cleared, via: 'cli' });
+    store.addAuthEvent({ at: Date.now(), type: 'login_unlocked', userId: user.id, reason: 'cli' });
+    console.log(`${user.email}: ограничения входа сняты (${cleared}).`);
     break;
   }
   case 'list-staff': {
@@ -203,23 +268,127 @@ switch (command) {
     for (const row of counts) console.log(`  ${row.role.padEnd(11)} ${row.status.padEnd(9)} ${row.count}`);
     console.log(`Ожидают активации: ${store.countPendingUsers()}`);
     console.log(`Активных суперадминистраторов: ${store.countActiveSuperadmins()}`);
+    const closed = context.registration.closedReason;
+    const reasons = { mail_disabled: 'почта не настроена', legal_documents_incomplete: 'в документах не заполнены сведения об операторе (legal-status)', legal_unavailable: 'документы недоступны' };
+    console.log(`Регистрация: ${context.registration.mode === 'open' ? (closed ? `open, но выключена — ${reasons[closed] || closed}` : 'открыта') : 'только по приглашению'}`);
+    const readiness = context.documents.readiness();
+    console.log(`Документы: ${readiness.ready ? 'готовы' : `черновики — ${[...readiness.drafts, ...readiness.missing].join(', ')}`}`);
+    console.log(`Журнал согласий: ${store.countConsentRecords()} записей; открытых обращений по ПДн: ${store.listPrivacyRequests({ limit: 1 }).open}`);
+    const staff = store.listUsers({ filters: { roles: ['superadmin', 'admin', 'moderator'], kind: 'real' }, sort: 'role', dir: 'desc', limit: 100, now: Date.now() }).rows;
+    const withoutMfa = staff.filter((user) => store.countActiveFactors(user.id) === 0);
+    console.log(`Сотрудников без второго фактора: ${withoutMfa.length}${withoutMfa.length ? ` (${withoutMfa.map((user) => user.email).join(', ')}) — админ-панель попросит настроить при входе` : ''}`);
+    if (store.migrationBackup) console.log(`Перед миграцией сделана копия базы: ${store.migrationBackup}`);
     const mail = context.delivery.describe();
     console.log(mail.mode === 'smtp' ? `Почта: SMTP ${mail.host}, ссылки ведут на ${mail.appUrl}` : `Почта: не настроена — ссылки передаются вручную${mail.problems.length ? ` (${mail.problems.join('; ')})` : ''}`);
     break;
   }
   case 'backup': {
     const out = option('out');
-    if (!out) die('Укажите --out путь/к/копии.sqlite');
+    if (!out) die('Укажите --out путь/к/копии');
+    const target = path.resolve(out);
+    if (flag('encrypt')) {
+      let key;
+      try {
+        key = backupKeyFromEnv();
+      } catch (error) {
+        die(error.message);
+      }
+      if (!key) die('Для --encrypt задайте BACKUP_ENCRYPTION_KEY (openssl rand -base64 32) — отдельно от MFA_SECRET_KEY.');
+      if (fs.existsSync(target)) die('Файл уже существует.');
+      const plain = `${target}.plain-${process.pid}`;
+      try {
+        store.backupTo(plain);
+        fs.writeFileSync(target, encryptBackup(fs.readFileSync(plain), key), { mode: 0o600, flag: 'wx' });
+      } catch (error) {
+        die(`Не получилось: ${error.message}`);
+      } finally {
+        fs.rmSync(plain, { force: true });
+      }
+      console.log(`Зашифрованная копия: ${target}. Ключ BACKUP_ENCRYPTION_KEY храните отдельно от копий.`);
+      break;
+    }
     try {
-      store.backupTo(path.resolve(out));
+      store.backupTo(target);
+      fs.chmodSync(target, 0o600);
     } catch (error) {
       die(`Не получилось: ${error.message}`);
     }
-    console.log(`Копия сохранена: ${path.resolve(out)} (храните её так же бережно, как саму базу).`);
+    console.log(`Копия сохранена: ${target} (не зашифрована — храните её так же бережно, как саму базу; лучше --encrypt).`);
+    break;
+  }
+  case 'decrypt-backup': {
+    const input = option('in');
+    const out = option('out');
+    if (!input || !out) die('Укажите --in зашифрованная-копия и --out база.sqlite');
+    let key;
+    try {
+      key = backupKeyFromEnv();
+    } catch (error) {
+      die(error.message);
+    }
+    if (!key) die('Задайте BACKUP_ENCRYPTION_KEY — тот, которым шифровали копию.');
+    try {
+      fs.writeFileSync(path.resolve(out), decryptBackup(fs.readFileSync(path.resolve(input)), key), { mode: 0o600, flag: 'wx' });
+    } catch (error) {
+      die(`Не получилось: ${error.message}`);
+    }
+    console.log(`Расшифровано: ${path.resolve(out)}. После восстановления базы выполните reapply-erasures.`);
+    break;
+  }
+  case 'legal-status': {
+    for (const doc of context.documents.list()) {
+      if (doc.missing) {
+        console.log(`  ${doc.key}: нет действующей редакции`);
+        continue;
+      }
+      console.log(`  ${doc.title}: редакция ${doc.version}${doc.draft ? ' — ЧЕРНОВИК (есть «[ТРЕБУЕТСЯ ЗАПОЛНИТЬ ОПЕРАТОРОМ]»)' : ''}, SHA-256 ${doc.sha256.slice(0, 16)}…`);
+    }
+    const problems = context.documents.problems();
+    if (problems.length) console.log(`Расхождения с legal/manifest.json: ${problems.map((item) => `${item.key} ${item.version || ''} ${item.problem}`).join('; ')}`);
+    const readiness = context.documents.readiness();
+    console.log(readiness.ready ? 'Документы готовы для открытой регистрации.' : 'Открытая регистрация закрыта, пока в политике и соглашении есть незаполненные сведения об операторе.');
+    break;
+  }
+  case 'consents-verify': {
+    // --as-of 2026-10-26T12:00:00Z — пересчитать отпечаток на сохранённое ранее время и сверить.
+    const asOfText = option('as-of');
+    const asOf = asOfText ? Date.parse(asOfText) : null;
+    if (asOfText && !Number.isFinite(asOf)) die('--as-of: время в формате ISO, например 2026-10-26T12:00:00Z');
+    const result = context.consents.verify({ asOf });
+    console.log(`Записей: ${result.records}, субъектов: ${result.subjects}`);
+    console.log(result.ok ? 'Цепочки целы.' : `НАРУШЕНЫ цепочки, записи: ${result.broken.join(', ')}`);
+    console.log(`Отпечаток журнала на ${new Date(result.asOf).toISOString()}: ${result.anchor}`);
+    if (!asOfText) console.log('Сохраните эту строку вне сервера; позже сверьте: consents-verify --as-of <то же время>.');
+    if (!result.ok) process.exitCode = 2;
+    break;
+  }
+  case 'privacy-requests': {
+    const { rows, open } = store.listPrivacyRequests({ limit: 100 });
+    console.log(`Открытых обращений: ${open}`);
+    for (const item of rows.filter((row) => ['received', 'in_progress'].includes(row.status))) {
+      const due = new Date(item.dueAt).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' });
+      console.log(`  ${item.id}  ${item.type.padEnd(8)} ${item.status.padEnd(11)} ${item.subjectLabel}  срок до ${due} МСК${item.dueAt < Date.now() ? ' — ПРОСРОЧЕНО' : ''}`);
+    }
+    break;
+  }
+  case 'reapply-erasures': {
+    const entries = erasureLog.list();
+    const present = entries.map((entry) => store.getUserById(entry.userId)).filter(Boolean);
+    console.log(`В журнале удалений: ${entries.length}; из них снова есть в базе (восстановлены из копии): ${present.length}`);
+    if (present.length === 0) break;
+    if (!flag('yes')) {
+      if (!process.stdin.isTTY) die('Подтвердите в терминале или передайте --yes.');
+      const answer = await ask(`Удалить снова ${present.length} аккаунт(ов)? Введите «да»: `);
+      if (answer.trim().toLowerCase() !== 'да') die('Ничего не изменено.');
+    }
+    for (const user of present) {
+      context.accounts.__internal.eraseUser(user, { method: 'cli' }, () => audit('user.delete', user, { via: 'cli', reason: 'reapply_erasure' }));
+    }
+    console.log(`Удалено повторно: ${present.length}.`);
     break;
   }
   default:
-    console.log('Команды: bootstrap, seed-test-users, access-link, reset-password, restore-admin, list-staff, status, backup. Подробности — docs/accounts.md.');
+    console.log('Команды: bootstrap, seed-test-users, access-link, reset-password, restore-admin, mfa-reset, unlock, list-staff, status, backup, decrypt-backup, legal-status, consents-verify, privacy-requests, reapply-erasures. Подробности — docs/accounts.md и docs/privacy/.');
     if (command) process.exitCode = 1;
 }
 

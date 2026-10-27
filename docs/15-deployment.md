@@ -166,9 +166,9 @@ cd /srv/medkarta/app && sudo -u medkarta git pull && sudo -u medkarta npm ci \
    откажется при `NODE_ENV=production`); настоящие аккаунты — в разделе
    «Пользователи».
 7. **По желанию — доступ к `/admin` только из своих сетей** в nginx
-   (`location /admin` и `location /api/admin/` с `allow … ; deny all;`): второго
-   фактора у входа нет. Это изменение конфигурации сервера — делайте его
-   осознанно.
+   (`location /admin` и `location /api/admin/` с `allow … ; deny all;`) —
+   дополнительно ко второму фактору сотрудников. Это изменение конфигурации
+   сервера — делайте его осознанно.
 
 Откат: остановить сервис, вернуть прежний код и файл базы из копии шага 1
 (`chmod 600`), запустить. Всё, что изменилось после копии, будет потеряно.
@@ -184,7 +184,7 @@ cd /srv/medkarta/app && sudo -u medkarta git pull && sudo -u medkarta npm ci \
    `npm test`, `npm run lint`, `npm run build` — без перезапуска.
 3. **Почта (по желанию, можно позже)** — в `/srv/medkarta/app/.env`:
    `APP_URL=https://<домен>`, `MAIL_FROM`, `SMTP_URL` (или `SMTP_HOST` и
-   др.) — [14-configuration.md](14-configuration.md#почта-приглашения-и-ссылки-для-входа).
+   др.) — [14-configuration.md](14-configuration.md#почта-регистрация-приглашения-восстановление).
    Без почты приглашения работают в ручном режиме: ссылку видит
    администратор и передаёт сам.
 4. **Перезапуск** — миграция при открытии базы: у всех аккаунтов с паролем
@@ -197,20 +197,102 @@ cd /srv/medkarta/app && sudo -u medkarta git pull && sudo -u medkarta npm ci \
 
 Откат — как выше: прежний код и файл базы из копии шага 1.
 
+### Выпуск с регистрацией и двухфакторной защитой (схема 5)
+
+Регистрация по email (по умолчанию выключена), второй фактор (обязателен
+сотрудникам), защита входа в базе, очередь писем. Порядок:
+
+1. **Копия базы** до `git pull`: `sudo -u medkarta npm run accounts -- backup
+   --out /backup/accounts-before-v5.sqlite`. Сервер при миграции и сам
+   сделает копию `medkarta.sqlite.before-v5-….bak`.
+2. **Код и проверки:** `git pull`, `npm ci` (новых зависимостей нет),
+   `npm test`, `npm run lint`, `npm run build` — без перезапуска.
+3. **Окружение** (`/srv/medkarta/app/.env`): `PUBLIC_BASE_URL=https://<домен>`,
+   `MFA_SECRET_KEY=` (`openssl rand -base64 32`; копию — в менеджер паролей,
+   отдельно от базы), `REGISTRATION_MODE=invite_only`. Почта — по желанию:
+   [mail-setup.md](mail-setup.md).
+4. **nginx:** обновить сниппет заголовков (`Permissions-Policy` с ключами
+   доступа) и добавить блок для страниц ссылок с `Referrer-Policy:
+   no-referrer` — [deployment.md](deployment.md). `nginx -t`, затем reload.
+5. **Перезапуск** — миграция при открытии базы. Все сессии завершатся: каждый
+   войдёт один раз заново; пароли и роли не меняются.
+6. **Суперадминистратор:** вход в `/admin` → «Включите двухфакторную
+   защиту» → ключ доступа (и второй способ) → сохранить резервные коды —
+   [admin-security-runbook.md](admin-security-runbook.md).
+7. **Проверка:** `npm run accounts -- status` — схема 5, регистрация «только
+   по приглашению», «Сотрудников без второго фактора: 0».
+
+Откат — прежний код и файл базы из копии шага 1 (ключ `MFA_SECRET_KEY` на
+схеме 4 не нужен).
+
+### Исправления аудита (схема 6)
+
+Восстановление пароля при включённой MFA — только со вторым фактором;
+явное подтверждение личности перед первым фактором и критичными действиями
+администратора; сброс второго фактора пользователя из карточки; очередь
+писем переживает перезапуск; ключи доступа сотрудников — с проверкой
+человека. Порядок:
+
+1. Копия базы (`backup --out /backup/accounts-before-v6.sqlite`); сервер
+   сам сделает `medkarta.sqlite.before-v6-….bak`.
+2. `git pull`, `npm ci` (новых зависимостей нет), `npm test`, `npm run lint`,
+   `npm run build`.
+3. `MFA_SECRET_KEY` (или `mfa.key`) **не менять** — из него выводится ключ
+   писем в очереди.
+4. Перезапуск. Миграция 5 → 6 добавляет два столбца; аккаунты, пароли,
+   факторы и сессии сохраняются (сессии без второго фактора у аккаунтов с
+   MFA завершатся при первом запросе).
+5. `npm run accounts -- status` — схема 6. Сотрудникам — предупредить, что
+   перед ключевыми действиями панель будет спрашивать пароль и второй
+   фактор ([admin-security-runbook.md](admin-security-runbook.md)).
+
+Откат — прежний код и копия базы шага 1 (схема 5 не откроет базу схемы 6).
+
 Потеря доступа к админ-панели — `npm run accounts -- access-link --email …`
 (ссылка в терминал, если почта не настроена), `reset-password --email …`
 (то же и завершить все сессии) или `restore-admin --email …` на сервере
 ([accounts.md](accounts.md#потеря-доступа)).
 
+### Персональные данные: документы, журнал согласий, обращения (схема 7)
+
+Политика и соглашение на сайте (`/legal/*`), отметка о соглашении при
+регистрации и первой установке пароля, журнал согласий, «Мои данные» в
+профиле, «Обращения по ПДн» в админ-панели, пропуск к ассистенту без id
+аккаунта, сведения о здоровье — только локально. Подробности и что остаётся
+за оператором — [privacy/README.md](privacy/README.md). Порядок:
+
+1. Копия базы (`backup --encrypt --out /backup/accounts-before-v7.enc`, ключ
+   `BACKUP_ENCRYPTION_KEY`); сервер сам сделает `medkarta.sqlite.before-v7-….bak`.
+2. `git pull`, `npm ci` (новых зависимостей нет), `npm test`, `npm run lint`,
+   `npm run build`.
+3. **Не задавать** `LEGAL_DRAFTS_ALLOWED` на боевом сервере. Пока в
+   `legal/*.md` есть метки `[ТРЕБУЕТСЯ ЗАПОЛНИТЬ ОПЕРАТОРОМ]`, открытая
+   регистрация закрыта (`npm run accounts -- legal-status`); вход,
+   приглашения и всё остальное работают.
+4. Перезапуск. Миграция 6 → 7 добавляет две таблицы; аккаунты, пароли,
+   факторы и сессии сохраняются. Пользователям, зарегистрированным раньше,
+   при входе предлагается принять документы (не блокирует работу).
+5. Если на сервере задан `TOKEN_VAULT_BACKEND=upstash` с `*.upstash.io` —
+   убрать: такой адрес теперь игнорируется (`token_vault.foreign_storage_blocked`).
+6. `npm run accounts -- status` — схема 7; `consents-verify` — цепочки целы.
+7. Сотрудникам с правом `privacy.requests` — порядок ответа на обращения
+   ([privacy/06-subject-requests.md](privacy/06-subject-requests.md)).
+
+Откат — прежний код и копия базы шага 1 (схема 6 не откроет базу схемы 7).
+Метки удаления (`erasures.jsonl`) после отката оставить: они нужны для
+повторного удаления.
+
 ### Резервные копии
 
-Раз в сутки на другую машину: `.env`, `data/doctors.full.js`, `data/graph/`,
-`data/collected/`, `var/analytics/`, базы `var/accounts/medkarta.sqlite` и
-`var/demo/booking.sqlite`. Горячая копия базы аккаунтов (целостный снимок
-через `VACUUM INTO`, права 600):
+Раз в сутки на другую машину (в РФ): `data/doctors.full.js`, `data/graph/`,
+`data/collected/`, `var/analytics/`, `var/demo/booking.sqlite`,
+`var/accounts/erasures.jsonl` и **зашифрованная** копия базы аккаунтов
+(целостный снимок через `VACUUM INTO`, AES-256-GCM). Секреты из `.env` —
+отдельно от копий базы ([deployment.md](deployment.md)):
 
 ```bash
-sudo -u medkarta npm run accounts -- backup --out /backup/accounts-$(date +%F).sqlite
+sudo -u medkarta BACKUP_ENCRYPTION_KEY=… npm run accounts -- backup --encrypt --out /backup/accounts-$(date +%F).enc
+# восстановление: decrypt-backup → замена базы → reapply-erasures
 ```
 
 ### Перед выкладкой

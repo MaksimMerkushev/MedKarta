@@ -3,24 +3,38 @@
  *
  * Хэши паролей: scrypt из node:crypto, без внешних зависимостей.
  *
- * Формат строки: scrypt$N$r$p$соль$хэш (base64url). Параметры хранятся
- * вместе с хэшем — их можно усилить позже, не ломая старые пароли: при
- * входе хэш со старыми параметрами пересчитывается (needsRehash).
- * scrypt считается в пуле потоков libuv и не блокирует сервер с одним ядром.
+ * Формат строки: scrypt2$N$r$p$соль$хэш (base64url) — пароль перед хэшем
+ * нормализуется в NFKC (NIST SP 800-63B-4): «é» из двух кодовых точек и из
+ * одной дают один и тот же хэш. Старый формат scrypt$… (без нормализации)
+ * проверяется как раньше и при входе пересчитывается в новый (needsRehash):
+ * миграция не требует знать пароли.
+ *
+ * Параметры хранятся вместе с хэшем — их можно усилить позже, не ломая
+ * старые пароли. scrypt считается в пуле потоков libuv и не блокирует
+ * сервер с одним ядром.
  *
  * Почему не Argon2id: в node:crypto Node 22 его нет (появился в Node 24.7),
  * а нативный модуль усложняет сборку на сервере. scrypt — функция с большим
- * расходом памяти из того же списка OWASP; N=2^15, r=8, p=3 — равноценная
- * OWASP-рекомендации настройка (32 МБ, ~0,3 с на ядро). Перейти на Argon2id
- * можно с новым префиксом в строке хэша и пересчётом при входе.
+ * расходом памяти из того же списка OWASP Password Storage Cheat Sheet;
+ * N=2^15, r=8, p=3 — одна из рекомендованных OWASP настроек (32 МБ, ~0,3 с
+ * на ядро). Перейти на Argon2id можно с новым префиксом в строке хэша и
+ * пересчётом при входе — как сделан переход scrypt → scrypt2.
  */
 
 import { randomBytes, randomInt, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
 
+import { normalizePassword, PASSWORD_LIMITS } from '../../shared/passwordPolicy.js';
+
 const PARAMS = Object.freeze({ N: 32768, r: 8, p: 3, keylen: 32 });
 const MAX_MEMORY = 64 * 1024 * 1024;
-
-import { PASSWORD_LIMITS } from '../../shared/passwordPolicy.js';
+const FORMAT = 'scrypt2';
+const LEGACY_FORMAT = 'scrypt';
+/*
+ * Сколько единиц UTF-16 принимается на проверку: 256 символов пароля — это до
+ * 512 единиц (символы вне BMP), с запасом. Длиннее — сразу «неверно», без
+ * обрезки: обрезанный длинный пароль совпал бы с другим.
+ */
+export const MAX_PASSWORD_INPUT = 1024;
 
 export { PASSWORD_LIMITS };
 
@@ -65,8 +79,8 @@ const withSlot = async (work) => {
 
 export const hashPassword = async (password) => {
   const salt = randomBytes(16);
-  const key = await withSlot(() => scrypt(String(password), salt, PARAMS));
-  return ['scrypt', PARAMS.N, PARAMS.r, PARAMS.p, salt.toString('base64url'), key.toString('base64url')].join('$');
+  const key = await withSlot(() => scrypt(normalizePassword(String(password)), salt, PARAMS));
+  return [FORMAT, PARAMS.N, PARAMS.r, PARAMS.p, salt.toString('base64url'), key.toString('base64url')].join('$');
 };
 
 /*
@@ -83,7 +97,11 @@ const getDummyHash = async () => {
 export const verifyPassword = async (password, stored) => {
   const target = typeof stored === 'string' && stored ? stored : await getDummyHash();
   const parts = target.split('$');
-  if (parts.length !== 6 || parts[0] !== 'scrypt') return false;
+  if (parts.length !== 6 || (parts[0] !== FORMAT && parts[0] !== LEGACY_FORMAT)) return false;
+  const input = typeof password === 'string' ? password : '';
+  // Слишком длинный ввод — сразу «неверно», но после такой же работы (по времени не отличить).
+  const tooLong = input.length > MAX_PASSWORD_INPUT;
+  const candidate = tooLong ? '' : parts[0] === FORMAT ? normalizePassword(input) : input;
   const [N, r, p] = parts.slice(1, 4).map(Number);
   // Чужие параметры из базы не должны превращать проверку в отказ в обслуживании.
   if (![N, r, p].every(Number.isInteger) || N > 1 << 17 || r > 16 || p > 8) return false;
@@ -92,13 +110,13 @@ export const verifyPassword = async (password, stored) => {
   if (expected.length < 16 || expected.length > 64) return false;
   let actual;
   try {
-    actual = await withSlot(() => scrypt(String(password), salt, { N, r, p, keylen: expected.length }));
+    actual = await withSlot(() => scrypt(candidate, salt, { N, r, p, keylen: expected.length }));
   } catch (error) {
     // «Занято» — не «неверный пароль»: пользователь должен узнать, что надо подождать.
     if (error instanceof PasswordBusyError) throw error;
     return false;
   }
-  return timingSafeEqual(actual, expected) && typeof stored === 'string' && stored.length > 0;
+  return timingSafeEqual(actual, expected) && !tooLong && typeof stored === 'string' && stored.length > 0;
 };
 
 // Правила пароля общие с интерфейсом: shared/passwordPolicy.js.
@@ -108,7 +126,7 @@ export { passwordChecks, passwordProblem } from '../../shared/passwordPolicy.js'
 export const needsRehash = (stored) => {
   if (typeof stored !== 'string') return false;
   const parts = stored.split('$');
-  return parts[0] !== 'scrypt' || Number(parts[1]) !== PARAMS.N || Number(parts[2]) !== PARAMS.r || Number(parts[3]) !== PARAMS.p;
+  return parts[0] !== FORMAT || Number(parts[1]) !== PARAMS.N || Number(parts[2]) !== PARAMS.r || Number(parts[3]) !== PARAMS.p;
 };
 
 /*

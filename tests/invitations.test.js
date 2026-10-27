@@ -9,8 +9,8 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { randomBytes, scryptSync } from 'node:crypto';
 import fs from 'node:fs';
-import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -19,104 +19,71 @@ import { bootstrapSuperadmin } from '../backend/accounts/bootstrap.js';
 import { accessLink, accessLinkMessage, appUrlFromEnv, createDelivery } from '../backend/accounts/delivery.js';
 import { INVITATION_LIMITS } from '../backend/accounts/invitations.js';
 import { PERMISSION_KEYS } from '../backend/accounts/rbac.js';
-import { createSqliteAccountStore, loadSqlite } from '../backend/accounts/sqliteStore.js';
-import { createAccountHandler, createFailureCounter } from '../backend/api/account.js';
+import { ACCOUNT_MIGRATIONS, ACCOUNT_SCHEMA_VERSION, createSqliteAccountStore, loadSqlite } from '../backend/accounts/sqliteStore.js';
 import { createAccountContext } from '../backend/api/accountContext.js';
 import { SESSION_COOKIE } from '../backend/api/accountHttp.js';
-import { ACTIVATION_COOKIE, createActivationHandler, createEmailWindow } from '../backend/api/activation.js';
-import { createAdminHandler } from '../backend/api/admin.js';
-import { createMeHandler } from '../backend/api/me.js';
+import { ACTIVATION_COOKIE, createEmailWindow } from '../backend/api/activation.js';
+import { MAIL_LIMITS } from '../backend/mail/outbox.js';
 import { buildMessage, MailError, sendMail, smtpConfigFromEnv } from '../backend/mail/smtp.js';
 import { createRateLimiter } from '../backend/http/rateLimit.js';
 import { passwordChecks, passwordProblem } from '../shared/passwordPolicy.js';
 import { startSmtpServer } from './fixtures/smtpServer.js';
+import { browserFor as baseBrowser, capture, legalAcceptance, linkIn, softAuthenticator, startAuthServer, tokenOfLink } from './helpers/authKit.js';
 
 const DatabaseSync = await loadSqlite();
 const ROOT_PASSWORD = 'Корневой-пароль-2026';
-const unlimited = () => ({ allowed: true });
 const HOUR = 60 * 60 * 1000;
+const MAIL_ENV = { MAIL_FROM: 'МедКарта <noreply@medkarta.test>', APP_URL: 'https://medkarta.test' };
 
-const tokenOfLink = (link) => new URL(link).hash.replace(/^#token=/, '');
-const linkIn = (message) => message.content.text.match(/https?:\/\/\S+/)[0];
+/** Ссылка из письма (учебная почта складывает {to, subject, text, html}). */
+const linkOf = (letter) => linkIn(letter.text);
 
 /** Учебная почта: письма складываются в массив (транспорт подменён — сам SMTP проверяется отдельно ниже). */
-const capturingDelivery = (outbox, env = {}) => createDelivery({
-  env: { MAIL_FROM: 'МедКарта <noreply@medkarta.test>', APP_URL: 'https://medkarta.test', ...env },
-  send: async (message) => {
-    outbox.push(message);
-  },
+const capturingDelivery = (outbox, env = {}) => createDelivery({ env: { ...MAIL_ENV, ...env }, send: capture(outbox) });
+
+/** Контекст кабинета для тестов: свой ключ MFA, без проверки по базе утечек (она проверяется в secure-auth). */
+const makeContext = ({ store, delivery, env = MAIL_ENV, mfaKey = randomBytes(32), now }) => createAccountContext({
+  store, delivery, env, mfaKey, breachCheck: async () => ({ breached: false }),
+  onAccountDeleted: async () => {}, systemInfo: async () => null, ...(now ? { now } : {}),
 });
 
-const startServer = async (context, { activationLimit = unlimited, requestLimit = unlimited, emailWindow = () => true } = {}) => {
-  const getService = async () => context.accounts;
-  const accountHandler = createAccountHandler({
-    getService, onAccountDeleted: async () => {}, authLimit: unlimited, apiLimit: unlimited,
-    failures: createFailureCounter(), features: () => ({ registration: false, demo: false, chatRequiresAccount: true }),
-    emailLinks: async () => context.invitations.emailEnabled,
+const startServer = (context, options = {}) => startAuthServer(context, options);
+
+/** «Браузер» с шагами активации по ссылке. */
+const browserFor = (base) => {
+  const browser = baseBrowser(base);
+  // Страница показывает соглашение, если его нужно принять, — и отправляет отметку с редакцией.
+  let legal = {};
+  return Object.assign(browser, {
+    peek: (token) => browser.call('/api/auth/activation/peek', { method: 'POST', body: { token } }),
+    start: async (token) => {
+      const started = await browser.call('/api/auth/activation/start', { method: 'POST', body: { token } });
+      legal = started.body?.context?.legal ? legalAcceptance(started.body.context) : {};
+      return started;
+    },
+    complete: (password) => browser.call('/api/auth/activation/complete', { method: 'POST', body: { password, ...legal } }),
   });
-  const meHandler = createMeHandler({ getService, apiLimit: unlimited, passwordLimit: unlimited });
-  const adminHandler = createAdminHandler({ getContext: async () => context, limit: unlimited, systemInfo: async () => ({}) });
-  const activationHandler = createActivationHandler({ getContext: async () => context, activationLimit, requestLimit, emailWindow });
-  const server = http.createServer((req, res) => {
-    if (req.url.startsWith('/api/admin')) return adminHandler(req, res);
-    if (req.url === '/api/me' || req.url.startsWith('/api/me/')) return meHandler(req, res);
-    if (req.url.startsWith('/api/auth/activation') || req.url === '/api/auth/access-link') return activationHandler(req, res);
-    return accountHandler(req, res);
-  });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  return { server, base: `http://127.0.0.1:${server.address().port}` };
 };
 
-const browserFor = (base) => {
-  const jar = new Map();
-  const cookies = [];
-  const call = async (urlPath, { method = 'GET', body, headers = {} } = {}) => {
-    const response = await fetch(`${base}${urlPath}`, {
-      method,
-      headers: {
-        origin: base,
-        ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
-        ...(jar.size ? { cookie: [...jar].map(([name, value]) => `${name}=${value}`).join('; ') } : {}),
-        ...headers,
-      },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
-    for (const line of response.headers.getSetCookie()) {
-      cookies.push(line);
-      const [pair] = line.split(';');
-      const name = pair.slice(0, pair.indexOf('='));
-      const value = pair.slice(pair.indexOf('=') + 1);
-      if (/Max-Age=0/i.test(line) || !value) jar.delete(name);
-      else jar.set(name, value);
-    }
-    const text = await response.text();
-    let json = null;
-    try {
-      json = text ? JSON.parse(text) : null;
-    } catch {
-      json = null;
-    }
-    return { status: response.status, body: json, text, headers: response.headers };
-  };
-  return {
-    jar,
-    cookies,
-    call,
-    login: (email, password) => call('/api/auth/login', { method: 'POST', body: { email, password } }),
-    peek: (token) => call('/api/auth/activation/peek', { method: 'POST', body: { token } }),
-    start: (token) => call('/api/auth/activation/start', { method: 'POST', body: { token } }),
-    complete: (password) => call('/api/auth/activation/complete', { method: 'POST', body: { password } }),
-  };
+/** Сотрудник после активации: админ-панель — только со вторым фактором, добавляем ключ доступа. */
+const activateStaff = async (base, token, password) => {
+  const tab = browserFor(base);
+  assert.equal((await tab.start(token)).status, 200);
+  assert.equal((await tab.complete(password)).status, 200);
+  const key = softAuthenticator();
+  tab.password = password;
+  await tab.enrollPasskey(key);
+  return { tab, key };
 };
 
 describe('Приглашения: правила пароля', () => {
   it('длина, частые пароли и email — одинаково для сервера и подсказок', () => {
     assert.equal(passwordProblem('Kazan Kremlin 1552'), '');
-    assert.match(passwordProblem('1234567'), /не короче 8/);
-    assert.match(passwordProblem('qwerty123'), /распространён/);
-    assert.match(passwordProblem('12345678901'), /только из цифр/);
-    assert.match(passwordProblem('olga.petrova-2026', { email: 'olga.petrova@medkarta.test' }), /email/);
-    const checks = passwordChecks('qwerty123', { email: 'a@b.ru' });
+    assert.match(passwordProblem('1234567'), /не короче 15/);
+    assert.match(passwordProblem('password12345678'), /распространён/);
+    assert.match(passwordProblem('123456789012345'), /только из цифр/);
+    assert.match(passwordProblem('olga.petrova-2026-x', { email: 'olga.petrova@medkarta.test' }), /email/);
+    const checks = passwordChecks('password12345678', { email: 'a@b.ru' });
     assert.deepEqual(checks.map((check) => [check.key, check.ok]), [['length', true], ['common', false], ['email', true]]);
     assert.deepEqual(passwordChecks('', {}).map((check) => check.ok), [false, false, false]);
   });
@@ -134,7 +101,8 @@ describe('Приглашения: почта', () => {
     const delivery = createDelivery({ env: {} });
     assert.equal(delivery.mode, 'manual');
     assert.equal(delivery.emailEnabled, false);
-    await assert.rejects(delivery.sendAccessLink({ to: 'a@b.ru', purpose: 'invite', link: 'https://x/activate#token=1', expiresAt: Date.now() }), (error) => error.code === 'mail_disabled');
+    const content = accessLinkMessage({ purpose: 'invite', link: 'https://x/activate#token=1', expiresAt: Date.now() });
+    await assert.rejects(delivery.deliver({ to: 'a@b.ru', content }), (error) => error.code === 'mail_disabled');
     const half = createDelivery({ env: { SMTP_URL: 'smtps://u:p@smtp.example.ru:465' } });
     assert.equal(half.mode, 'manual', 'без MAIL_FROM и APP_URL почта не включается');
     assert.ok(half.problems.length >= 2);
@@ -197,7 +165,7 @@ describe('Приглашения: почта', () => {
     try {
       const delivery = createDelivery({ env: { SMTP_HOST: '127.0.0.1', SMTP_PORT: String(smtp.port), SMTP_SECURE: 'none', SMTP_ALLOW_INSECURE: 'on', MAIL_FROM: 'МедКарта <noreply@medkarta.test>', APP_URL: 'http://localhost:3001' } });
       assert.equal(delivery.mode, 'smtp');
-      await delivery.sendAccessLink({ to: 'olga@medkarta.test', purpose: 'invite', name: 'Ольга', link: 'http://localhost:3001/activate#token=abc', expiresAt: Date.now() + HOUR });
+      await delivery.deliver({ to: 'olga@medkarta.test', content: accessLinkMessage({ purpose: 'invite', name: 'Ольга', link: 'http://localhost:3001/activate#token=abc', expiresAt: Date.now() + HOUR }) });
       assert.equal(smtp.messages.length, 1);
       assert.match(smtp.messages[0].data, /^Subject: =\?UTF-8\?B\?/m);
     } finally {
@@ -213,16 +181,16 @@ describe('Приглашения: сценарии через HTTP', { skip: !Da
   let root;
   let clock = Date.now();
   const outbox = [];
+  const rootKey = softAuthenticator();
 
   before(async () => {
-    context = createAccountContext({
-      store: createSqliteAccountStore({ DatabaseSync, file: ':memory:' }), onAccountDeleted: async () => {}, systemInfo: async () => null,
-      delivery: capturingDelivery(outbox), now: () => clock,
-    });
+    context = makeContext({ store: createSqliteAccountStore({ DatabaseSync, file: ':memory:' }), delivery: capturingDelivery(outbox), now: () => clock });
     await bootstrapSuperadmin({ store: context.store, email: 'root@medkarta.test', firstName: 'Максим', password: ROOT_PASSWORD, now: () => clock });
     ({ server, base } = await startServer(context));
     root = browserFor(base);
     assert.equal((await root.login('root@medkarta.test', ROOT_PASSWORD)).status, 200);
+    // Админ-панель — только со вторым фактором: суперадминистратор добавляет ключ доступа.
+    await root.enrollPasskey(rootKey);
   });
 
   after(() => server?.close());
@@ -232,7 +200,7 @@ describe('Приглашения: сценарии через HTTP', { skip: !Da
     const created = await root.call('/api/admin/users', { method: 'POST', body: { email, firstName: 'Ольга', lastName: 'Петрова', ...extra } });
     assert.equal(created.status, 201, JSON.stringify(created.body));
     const letter = outbox.slice(before).find((item) => item.to === email);
-    return { id: created.body.user.id, created, letter, token: letter ? tokenOfLink(linkIn(letter)) : tokenOfLink(created.body.link) };
+    return { id: created.body.user.id, created, letter, token: letter ? tokenOfLink(linkOf(letter)) : tokenOfLink(created.body.link) };
   };
 
   it('создание: письмо с приглашением, ссылки администратору не показывается, аккаунт ждёт активации', async () => {
@@ -241,8 +209,8 @@ describe('Приглашения: сценарии через HTTP', { skip: !Da
     assert.equal(created.body.invitation.deliveryStatus, 'sent');
     assert.equal(created.body.link, null, 'при отправке письмом ссылка администратору не нужна');
     assert.equal(created.body.user.pending, true);
-    assert.equal(letter.content.subject, 'Приглашение в МедКарту');
-    assert.match(linkIn(letter), /^https:\/\/medkarta\.test\/activate#token=[A-Za-z0-9_-]{43}$/);
+    assert.equal(letter.subject, 'Приглашение в МедКарту');
+    assert.match(linkOf(letter), /^https:\/\/medkarta\.test\/activate#token=[A-Za-z0-9_-]{43}$/);
     assert.equal(context.store.getAccessTokenByHash(token), null, 'в базе только хэш токена');
   });
 
@@ -294,13 +262,19 @@ describe('Приглашения: сценарии через HTTP', { skip: !Da
       const expired = await browserFor(base).start(token);
       assert.equal(expired.status, 410);
       assert.equal(expired.body.code, 'link_expired');
-      const list = await root.call(`/api/admin/users/${id}/invitations`);
+      // Сессия сотрудника за сутки истекла бы (30 минут бездействия) — входим заново паролем и ключом
+      // (основную сессию root не трогаем: истёкшая сессия удаляется при первом же запросе).
+      const admin = browserFor(base);
+      assert.equal((await admin.signIn('root@medkarta.test', ROOT_PASSWORD, rootKey)).status, 200);
+      // Новая ссылка — критическое действие: вход его не заменяет, нужно подтвердить личность.
+      await admin.reauth(rootKey);
+      const list = await admin.call(`/api/admin/users/${id}/invitations`);
       assert.equal(list.body.items[0].state, 'expired');
       const before = outbox.length;
-      const again = await root.call(`/api/admin/users/${id}/invitations`, { method: 'POST', body: {} });
+      const again = await admin.call(`/api/admin/users/${id}/invitations`, { method: 'POST', body: {} });
       assert.equal(again.status, 200);
       assert.equal(again.body.invitation.purpose, 'invite');
-      const fresh = tokenOfLink(linkIn(outbox[before]));
+      const fresh = tokenOfLink(linkOf(outbox.slice(before).find((item) => item.to === 'late@medkarta.test')));
       const tab = browserFor(base);
       assert.equal((await tab.start(fresh)).status, 200);
       assert.equal((await tab.complete('Опоздавший-но-успел')).status, 200);
@@ -353,9 +327,9 @@ describe('Приглашения: сценарии через HTTP', { skip: !Da
     assert.equal((await browserFor(base).start(token)).body.code, 'link_revoked');
     const before = outbox.length;
     await root.call(`/api/admin/users/${id}/invitations`, { method: 'POST', body: {} });
-    const second = tokenOfLink(linkIn(outbox[before]));
+    const second = tokenOfLink(linkOf(outbox[before]));
     await root.call(`/api/admin/users/${id}/invitations`, { method: 'POST', body: {} });
-    const third = tokenOfLink(linkIn(outbox[before + 1]));
+    const third = tokenOfLink(linkOf(outbox[before + 1]));
     assert.equal((await browserFor(base).start(second)).body.code, 'link_revoked', 'повторная отправка заменяет прежнюю ссылку');
     assert.equal((await browserFor(base).start(third)).status, 200);
     const audit = await root.call(`/api/admin/audit?targetId=${id}`);
@@ -400,9 +374,7 @@ describe('Приглашения: сценарии через HTTP', { skip: !Da
 
   it('смена роли отзывает ссылки: выдавший не получит аккаунт, повышенный до администратора', async () => {
     const adminUser = await invite('issuer-admin@medkarta.test', { role: 'admin' });
-    const admin = browserFor(base);
-    await admin.start(adminUser.token);
-    assert.equal((await admin.complete('Администратор-пароль-2026')).status, 200);
+    const { tab: admin } = await activateStaff(base, adminUser.token, 'Администратор-пароль-2026');
     const created = await admin.call('/api/admin/users', { method: 'POST', body: { email: 'promoted@medkarta.test', firstName: 'Пётр', lastName: 'Повышенный', delivery: 'manual' } });
     assert.equal(created.status, 201);
     const card = await root.call(`/api/admin/users/${created.body.user.id}`);
@@ -413,9 +385,7 @@ describe('Приглашения: сценарии через HTTP', { skip: !Da
 
   it('ссылка администратора гаснет, если он сам заблокирован, — и не оживает после разблокировки', async () => {
     const adminUser = await invite('blocked-issuer@medkarta.test', { role: 'admin' });
-    const admin = browserFor(base);
-    await admin.start(adminUser.token);
-    assert.equal((await admin.complete('Администратор-пароль-2027')).status, 200);
+    const { tab: admin } = await activateStaff(base, adminUser.token, 'Администратор-пароль-2027');
     const created = await admin.call('/api/admin/users', { method: 'POST', body: { email: 'issued-by-blocked@medkarta.test', firstName: 'Нина', lastName: 'Ждущая', delivery: 'manual' } });
     const token = tokenOfLink(created.body.link);
     assert.equal((await browserFor(base).peek(token)).status, 200);
@@ -432,9 +402,7 @@ describe('Приглашения: сценарии через HTTP', { skip: !Da
     const current = roles.body.roles.find((item) => item.key === 'moderator')?.permissions || ['admin.access', 'users.view', 'users.block'];
     assert.equal((await root.call('/api/admin/roles/moderator', { method: 'PUT', body: { permissions: [...new Set([...current, 'users.edit'])] } })).status, 200);
     try {
-      const tab = browserFor(base);
-      await tab.start(editor.token);
-      assert.equal((await tab.complete('Модератор-редактор-2026')).status, 200);
+      const { tab } = await activateStaff(base, editor.token, 'Модератор-редактор-2026');
       const card = await tab.call(`/api/admin/users/${target.id}`);
       assert.equal(card.body.can.edit, true);
       assert.equal(card.body.can.editEmail, false);
@@ -456,7 +424,7 @@ describe('Приглашения: сценарии через HTTP', { skip: !Da
     assert.equal((await root.call(`/api/admin/users/${user.id}/invitations`, { method: 'POST', body: {} })).status, 200);
     const letter = outbox.slice(before).find((item) => item.to === 'sessions-reset@medkarta.test');
     assert.equal((await root.call(`/api/admin/users/${user.id}/sessions/revoke`, { method: 'POST', body: {} })).status, 200);
-    assert.equal((await browserFor(base).start(tokenOfLink(linkIn(letter)))).body.code, 'link_revoked');
+    assert.equal((await browserFor(base).start(tokenOfLink(linkOf(letter)))).body.code, 'link_revoked');
   });
 
   it('подброшенная вторая cookie контекста: активация не завершается', async () => {
@@ -490,31 +458,36 @@ describe('Приглашения: сценарии через HTTP', { skip: !Da
     }
     assert.ok(responses.every((response) => JSON.stringify(response) === JSON.stringify(responses[0])), 'ответы неотличимы');
     assert.equal(responses[0].status, 202);
+    // Письма уходят после ответа, через очередь.
     await new Promise((resolve) => setTimeout(resolve, 50));
-    const letters = outbox.slice(before);
+    await context.mailer.drain();
+    const asked = new Set(['ask-pending@medkarta.test', 'ask-active@medkarta.test', 'ask-blocked@medkarta.test', 'nobody@medkarta.test']);
+    const letters = outbox.slice(before).filter((item) => asked.has(item.to));
     assert.deepEqual(letters.map((item) => item.to).sort(), ['ask-active@medkarta.test', 'ask-pending@medkarta.test']);
     const toPending = letters.find((item) => item.to === 'ask-pending@medkarta.test');
     const toActive = letters.find((item) => item.to === 'ask-active@medkarta.test');
-    assert.match(toPending.content.subject, /Приглашение/);
-    assert.match(toActive.content.subject, /Смена пароля/);
+    assert.match(toPending.subject, /Приглашение/);
+    assert.match(toActive.subject, /Восстановление пароля/);
     // Самостоятельный запрос не гасит приглашение администратора.
     assert.equal((await browserFor(base).peek(pendingUser.token)).status, 200);
     // Ссылка для смены пароля работает: старые сессии завершаются, старый пароль — нет.
     const reset = browserFor(base);
-    assert.equal((await reset.start(tokenOfLink(linkIn(toActive)))).body.context.purpose, 'reset');
+    assert.equal((await reset.start(tokenOfLink(linkOf(toActive)))).body.context.purpose, 'reset');
     assert.equal((await reset.complete('Новый-пароль-по-почте')).status, 200);
     assert.equal((await tab.call('/api/me')).status, 401);
     assert.equal((await browserFor(base).login('ask-active@medkarta.test', 'Помню-пароль-2026')).status, 401);
     assert.equal((await browserFor(base).login('ask-active@medkarta.test', 'Новый-пароль-по-почте')).status, 200);
   });
 
-  it('запросы ссылки ограничены: 3 письма в час на аккаунт, лимит по адресу и по email', async () => {
+  it('запросы ссылки ограничены: писем со ссылками на адрес — не больше 3 в час (вместе с приглашением), лимит по адресу и по email', async () => {
     const { token } = await invite('flood@medkarta.test');
     const before = outbox.length;
     for (let index = 0; index < 6; index += 1) {
       await context.invitations.requestLink('flood@medkarta.test');
     }
-    assert.equal(outbox.length - before, INVITATION_LIMITS.SELF_REQUESTS_PER_HOUR);
+    await context.mailer.drain();
+    const expected = Math.min(INVITATION_LIMITS.SELF_REQUESTS_PER_HOUR, MAIL_LIMITS.LINKS_PER_ADDRESS_HOUR - 1);
+    assert.equal(outbox.slice(before).filter((item) => item.to === 'flood@medkarta.test').length, expected);
     assert.equal((await browserFor(base).peek(token)).status, 200, 'приглашение администратора живо');
     const window = createEmailWindow({ max: 2 });
     assert.deepEqual([window('a@b.ru'), window('a@b.ru'), window('a@b.ru'), window('c@d.ru')], [true, true, false, true]);
@@ -555,9 +528,7 @@ describe('Приглашения: сценарии через HTTP', { skip: !Da
   it('без прав нельзя выдавать и отзывать ссылки; модератор не видит токенов', async () => {
     const { id } = await invite('target@medkarta.test');
     const moderator = await invite('moderator@medkarta.test', { role: 'moderator' });
-    const tab = browserFor(base);
-    await tab.start(moderator.token);
-    await tab.complete('Модератор-с-паролем');
+    const { tab } = await activateStaff(base, moderator.token, 'Модератор-с-паролем');
     assert.equal((await tab.call(`/api/admin/users/${id}/invitations`, { method: 'POST', body: {} })).status, 403);
     const list = await tab.call(`/api/admin/users/${id}/invitations`);
     assert.equal(list.status, 200);
@@ -570,36 +541,49 @@ describe('Приглашения: сценарии через HTTP', { skip: !Da
     const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'medkarta-invite-')), 'accounts.sqlite');
     const letters = [];
     let store = createSqliteAccountStore({ DatabaseSync, file });
-    let local = createAccountContext({ store, onAccountDeleted: async () => {}, systemInfo: async () => null, delivery: capturingDelivery(letters) });
+    const mfaKey = randomBytes(32);
+    let local = makeContext({ store, delivery: capturingDelivery(letters), mfaKey });
     await bootstrapSuperadmin({ store, email: 'root@medkarta.test', password: ROOT_PASSWORD });
     const actor = { ...store.getUserByEmail('root@medkarta.test'), permissions: PERMISSION_KEYS };
     await local.admin.createUser(actor, { email: 'keep@medkarta.test', firstName: 'Ольга', lastName: 'Сохранова' });
-    const opened = local.invitations.start(tokenOfLink(linkIn(letters[0])));
-    const done = await local.invitations.complete(opened.contextToken, 'Пароль-до-перезапуска');
+    const opened = local.invitations.start(tokenOfLink(linkOf(letters[0])));
+    const done = await local.invitations.complete(opened.contextToken, 'Пароль-до-перезапуска', { legal: legalAcceptance(opened.context) });
     store.close();
     store = createSqliteAccountStore({ DatabaseSync, file });
-    local = createAccountContext({ store, onAccountDeleted: async () => {}, systemInfo: async () => null, delivery: capturingDelivery([]) });
+    local = makeContext({ store, delivery: capturingDelivery([]), mfaKey });
     assert.equal(local.accounts.authenticate(done.session.token)?.user.email, 'keep@medkarta.test');
     assert.ok((await local.accounts.login({ email: 'keep@medkarta.test', password: 'Пароль-до-перезапуска' })).session.token);
     store.close();
   });
 
-  it('совместимость: база схемы 3 обновляется, прежние пользователи входят как раньше', async () => {
+  it('совместимость: база схемы 3 обновляется до текущей, прежние пользователи входят как раньше', async () => {
     const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'medkarta-v3-')), 'accounts.sqlite');
-    let store = createSqliteAccountStore({ DatabaseSync, file });
-    await bootstrapSuperadmin({ store, email: 'root@medkarta.test', password: ROOT_PASSWORD });
-    const { hashPassword } = await import('../backend/accounts/passwords.js');
-    store.createUser({ id: 'e'.repeat(32), email: 'old@medkarta.test', firstName: 'Старый', lastName: 'Пользователь', passwordHash: await hashPassword('Старый-пароль-2025'), mustChangePassword: true, now: Date.now() - 100 * HOUR });
-    store.close();
-    // Возвращаем файл к схеме 3: без таблицы ссылок и без activated_at.
+    // База схемы 3 — как до приглашений: миграции 1–3 и пароли в прежнем формате scrypt.
+    const legacyHash = (password) => {
+      const salt = randomBytes(16);
+      return ['scrypt', 32768, 8, 3, salt.toString('base64url'), scryptSync(password, salt, 32, { N: 32768, r: 8, p: 3, maxmem: 64 * 1024 * 1024 }).toString('base64url')].join('$');
+    };
     const raw = new DatabaseSync(file);
-    raw.exec('DROP TABLE access_tokens; DROP INDEX users_pending; ALTER TABLE users DROP COLUMN activated_at; PRAGMA user_version = 3;');
+    for (let version = 0; version < 3; version += 1) {
+      const migration = ACCOUNT_MIGRATIONS[version];
+      raw.exec('BEGIN');
+      if (typeof migration === 'function') migration(raw);
+      else raw.exec(migration);
+      raw.exec(`PRAGMA user_version = ${version + 1}`);
+      raw.exec('COMMIT');
+    }
+    const stamp = Date.now() - 100 * HOUR;
+    const insert = raw.prepare(`INSERT INTO users (id, email, display_name, first_name, password_hash, role, status, must_change_password, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`);
+    insert.run('r'.repeat(32), 'root@medkarta.test', 'Максим', 'Максим', legacyHash(ROOT_PASSWORD), 'superadmin', 0, stamp, stamp);
+    insert.run('e'.repeat(32), 'old@medkarta.test', 'Старый', 'Старый', legacyHash('Старый-пароль-2025'), 'user', 1, stamp, stamp);
     raw.close();
-    store = createSqliteAccountStore({ DatabaseSync, file });
-    assert.equal(store.health().schemaVersion, 4);
+
+    const store = createSqliteAccountStore({ DatabaseSync, file });
+    assert.equal(store.health().schemaVersion, ACCOUNT_SCHEMA_VERSION);
     const old = store.getUserByEmail('old@medkarta.test');
     assert.ok(old.activatedAt, 'аккаунт с паролем считается активированным');
-    const local = createAccountContext({ store, onAccountDeleted: async () => {}, systemInfo: async () => null, delivery: capturingDelivery([]) });
+    const local = makeContext({ store, delivery: capturingDelivery([]) });
     const login = await local.accounts.login({ email: 'old@medkarta.test', password: 'Старый-пароль-2025' });
     assert.equal(login.user.mustChangePassword, true, 'старое требование сменить временный пароль сохранилось');
     assert.ok((await local.accounts.login({ email: 'root@medkarta.test', password: ROOT_PASSWORD })).session.token);
@@ -610,12 +594,14 @@ describe('Приглашения: сценарии через HTTP', { skip: !Da
 
 describe('Приглашения: без почты', { skip: !DatabaseSync && 'нужен Node 22.13+ (node:sqlite)' }, () => {
   it('ссылку получает только создавший администратор, запрос ссылки выключен для всех одинаково', async () => {
-    const context = createAccountContext({ store: createSqliteAccountStore({ DatabaseSync, file: ':memory:' }), onAccountDeleted: async () => {}, systemInfo: async () => null, delivery: createDelivery({ env: {} }) });
+    // Почты нет (адрес сайта для ссылки — из запроса администратора); ключи доступа — для https://medkarta.test.
+    const context = makeContext({ store: createSqliteAccountStore({ DatabaseSync, file: ':memory:' }), delivery: createDelivery({ env: {} }), env: { PUBLIC_BASE_URL: 'https://medkarta.test' } });
     await bootstrapSuperadmin({ store: context.store, email: 'root@medkarta.test', password: ROOT_PASSWORD });
     const { server, base } = await startServer(context);
     try {
       const root = browserFor(base);
       await root.login('root@medkarta.test', ROOT_PASSWORD);
+      await root.enrollPasskey(softAuthenticator());
       const created = await root.call('/api/admin/users', { method: 'POST', body: { email: 'manual@medkarta.test', firstName: 'Ручной', lastName: 'Режим' } });
       assert.equal(created.body.invitation.delivery, 'manual');
       assert.ok(created.body.link.startsWith(`${base}/activate#token=`), 'адрес — сайт, с которого работает администратор');

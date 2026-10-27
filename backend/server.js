@@ -20,6 +20,7 @@ import { getAccountContext } from './api/accountContext.js';
 import activationHandler, { ACTIVATION_PATHS } from './api/activation.js';
 import adminHandler, { ADMIN_PREFIX } from './api/admin.js';
 import meHandler, { ME_PREFIX } from './api/me.js';
+import privacyHandler, { LEGAL_PREFIX, PRIVACY_PREFIX } from './api/privacy.js';
 import chatHandler from './api/chat.js';
 import { withChatAccess } from './api/chatAccess.js';
 import configHandler from './api/config.js';
@@ -27,7 +28,7 @@ import demoBookingHandler, { DEMO_BOOKING_PATHS } from './api/demoBooking.js';
 import eventsHandler from './api/events.js';
 import routeHandler from './api/route.js';
 import travelTimesHandler from './api/travelTimes.js';
-import { applySecurityHeaders } from './http/securityHeaders.js';
+import { applySecurityHeaders, isTokenPage } from './http/securityHeaders.js';
 import { rateLimitKey, validateTrustProxy } from './http/rateLimit.js';
 import { getDefaultRoutingEngine } from './routing/engine.js';
 import { logger } from './observability/safeLogger.js';
@@ -222,6 +223,9 @@ const apiPathOf = (url) => {
 const PREFIX_HANDLERS = [
   [ADMIN_PREFIX, adminHandler],
   [ME_PREFIX, meHandler],
+  // Документы (публично) и права субъекта ПДн (api/privacy.js).
+  [LEGAL_PREFIX, privacyHandler],
+  [PRIVACY_PREFIX, privacyHandler],
 ];
 const handlerFor = (pathname) => API_HANDLERS.get(pathname)
   || PREFIX_HANDLERS.find(([prefix]) => pathname === prefix || pathname.startsWith(`${prefix}/`))?.[1]
@@ -283,6 +287,7 @@ const handleRequest = async (req, res) => {
     return;
   }
   // SPA: любой неизвестный путь отдаёт index.html, маршрутизацию делает клиент.
+  if (isTokenPage(apiPathOf(req.url))) res.setHeader('Referrer-Policy', 'no-referrer');
   const index = path.join(DIST, 'index.html');
   const indexStats = await fs.promises.stat(index).catch(() => null);
   if (!indexStats?.isFile()) {

@@ -42,6 +42,7 @@ export const PERMISSIONS = Object.freeze([
   { key: 'roles.assign', group: 'Роли', label: 'Назначение ролей', requires: ['users.view', 'users.edit'], danger: true },
   { key: 'roles.manage', group: 'Роли', label: 'Изменение матрицы разрешений', danger: true, superadminOnly: true },
   { key: 'audit.view', group: 'Журналы', label: 'Журнал административных действий' },
+  { key: 'privacy.requests', group: 'Персональные данные', label: 'Обращения субъектов ПДн и журнал согласий', requires: ['users.view'], danger: true },
   { key: 'system.view', group: 'Система', label: 'Мониторинг и состояние' },
   { key: 'settings.view', group: 'Система', label: 'Просмотр настроек' },
   { key: 'settings.edit', group: 'Система', label: 'Изменение настроек', requires: ['settings.view'], danger: true, superadminOnly: true },

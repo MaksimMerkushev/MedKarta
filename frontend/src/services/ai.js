@@ -74,6 +74,33 @@ export const packMessages = (chatMessages) => {
   return turns;
 };
 
+/*
+ * Пропуск к ассистенту (cookie mk_ai, только для /api/chat): сервер выдаёт его
+ * вошедшему пользователю, но в самом пропуске нет id аккаунта, и /api/chat
+ * сессию не читает — запросы к ассистенту не связываются с аккаунтом
+ * (docs/privacy/04-health-data.md). Пропуск живёт час; когда он кончается,
+ * /api/chat отвечает 401 assistant_pass_required — берём новый и повторяем.
+ */
+const ASSISTANT_PASS_ENDPOINT = '/api/account/assistant-pass';
+
+const renewAssistantPass = async (signal) => {
+  const response = await fetch(ASSISTANT_PASS_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    signal,
+    body: '{}',
+  });
+  if (response.ok) return { ok: true };
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+  return { ok: false, status: response.status, payload };
+};
+
 export const analyzeSymptoms = async (chatMessages, { signal } = {}) => {
   const messages = packMessages(chatMessages);
   if (messages.length === 0) {
@@ -91,18 +118,30 @@ export const analyzeSymptoms = async (chatMessages, { signal } = {}) => {
   let payload = null;
   let bodyUnreadable = false;
   try {
-    response = await fetch(CHAT_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      signal: controller.signal,
-      body: JSON.stringify({ messages, sessionId: getSessionId() }),
-    });
-    try {
-      payload = await response.json();
-    } catch (error) {
-      if (error?.name === 'AbortError') throw error;
-      bodyUnreadable = true;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      payload = null;
+      bodyUnreadable = false;
+      response = await fetch(CHAT_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        signal: controller.signal,
+        body: JSON.stringify({ messages, sessionId: getSessionId() }),
+      });
+      try {
+        payload = await response.json();
+      } catch (error) {
+        if (error?.name === 'AbortError') throw error;
+        bodyUnreadable = true;
+      }
+      if (attempt > 0 || response.status !== 401 || payload?.code !== 'assistant_pass_required') break;
+      const renewed = await renewAssistantPass(controller.signal);
+      if (!renewed.ok) {
+        // 401 — нет входа; 403 password_change_required и т. п. — показать причину.
+        response = { ok: false, status: renewed.status };
+        payload = renewed.payload;
+        break;
+      }
     }
   } catch (error) {
     if (error?.name === 'AbortError') {
@@ -124,7 +163,8 @@ export const analyzeSymptoms = async (chatMessages, { signal } = {}) => {
   if (!response.ok) {
     // 401 — нет входа в кабинет: ассистент только для вошедших (backend/api/chatAccess.js).
     const code = response.status === 401 ? 'login_required'
-      : payload?.code === 'accounts_unavailable' ? 'accounts_unavailable'
+      : payload?.code === 'password_change_required' ? 'password_change_required'
+        : payload?.code === 'accounts_unavailable' ? 'accounts_unavailable'
         : response.status === 429 ? 'rate_limit' : response.status === 503 ? 'unavailable' : 'server';
     throw new AiError(payload?.error || 'Ошибка при обращении к ИИ.', {
       code,

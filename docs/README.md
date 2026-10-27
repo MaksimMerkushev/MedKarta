@@ -80,7 +80,10 @@
 | [privacy-evaluation.md](privacy-evaluation.md) | методика и результаты проверки обезличивания на размеченном наборе |
 | [routing.md](routing.md) | история и устройство движка маршрутизации, сборка графа |
 | [demo.md](demo.md) | демо-среда: данные, понимаемые фразы, строгий подбор |
-| [accounts.md](accounts.md) | личный кабинет |
+| [accounts.md](accounts.md) | аккаунты: регистрация, вход, двухфакторная защита, роли, админ-панель |
+| [auth-threat-model.md](auth-threat-model.md) | модель угроз входа и аккаунтов |
+| [mail-setup.md](mail-setup.md) | почта: SMTP, SPF, DKIM, DMARC, какие письма уходят |
+| [admin-security-runbook.md](admin-security-runbook.md) | инструкции администратору: MFA, почта, регистрация, восстановление доступа |
 | [analytics.md](analytics.md) | продуктовая аналитика |
 | [data-pipeline.md](data-pipeline.md) | сборщик данных частных клиник, ДМС |
 | [deployment.md](deployment.md) | эксплуатационная инструкция для VPS (nginx, systemd) |

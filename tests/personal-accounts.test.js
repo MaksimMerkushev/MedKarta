@@ -14,7 +14,7 @@ import { after, before, describe, it } from 'node:test';
 import { randomBytes } from 'node:crypto';
 
 import { hashPassword } from '../backend/accounts/passwords.js';
-import { createAccountService } from '../backend/accounts/service.js';
+import { createAccountService, hashToken } from '../backend/accounts/service.js';
 import { createSqliteAccountStore, loadSqlite } from '../backend/accounts/sqliteStore.js';
 import { createAccountHandler, currentAccountUser } from '../backend/api/account.js';
 import { createDemoBookingHandler, createDemoBookingService } from '../backend/api/demoBooking.js';
@@ -218,6 +218,8 @@ describe('Личные кабинеты: изоляция', { skip: !DatabaseSyn
     const booked = (await tab.book(slot.id)).body.booking;
     assert.equal(booked.owned, true);
     assert.equal((await tab.mine()).body.bookings.length, 1);
+    // Удаление — после подтверждения личности (здесь — отметкой в сессии; сам запрос проверяется в secure-auth).
+    accountStore.setSessionReauth(hashToken([...tab.jar].find(([name]) => /mk_sid$/.test(name))[1]), Date.now());
     assert.equal((await tab.call('/api/account', { method: 'DELETE', body: { confirm: true } })).status, 200);
 
     await createIso();

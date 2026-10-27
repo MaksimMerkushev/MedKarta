@@ -273,6 +273,8 @@ export const evaluateSamples = async (runner, samples, { onProgress = () => {} }
       origin: item.origin || null,
       variant: item.variant || null,
       benign: item.benign,
+      // Размеченные сведения о здоровье: с политики 2026-10-26.1 такой пример не уходит наружу никак.
+      medical: item.sensitive.some((entry) => entry.kind === 'MEDICAL'),
       messages: item.messages,
       sent: outcome.sent,
       leaks,
@@ -327,9 +329,20 @@ export const summarize = (results) => {
   }
 
   const describe = (list) => {
+    /*
+     * Сведения о здоровье (жалоба, диагноз, а также профили, которые
+     * классификатор считает медицинскими, — «гинеколог») с политики
+     * 2026-10-26.1 обрабатываются только локально. Их правильный путь —
+     * локальный ответ, поэтому доли «дошло до модели» считаются без них, а
+     * отдельная метрика healthSent обязана быть нулём.
+     */
+    const healthLocal = (item) => item.reason === 'medical_text_policy';
+    const health = list.filter((item) => item.medical || healthLocal(item));
     const pii = list.filter((item) => !item.benign && item.category !== 'catalog_doctor');
+    const piiPlannable = pii.filter((item) => !healthLocal(item));
     // «Привет» и «спасибо» — обычные реплики, но запроса в них нет: их правильный путь — локальный ответ.
-    const benign = list.filter((item) => item.benign && item.category !== 'smalltalk');
+    const benignAll = list.filter((item) => item.benign && item.category !== 'smalltalk');
+    const benign = benignAll.filter((item) => !healthLocal(item));
     const smalltalk = list.filter((item) => item.category === 'smalltalk');
     const catalog = list.filter((item) => item.category === 'catalog_doctor');
     return {
@@ -337,8 +350,11 @@ export const summarize = (results) => {
       piiSamples: pii.length,
       leakedSamples: pii.filter((item) => item.leaks.length > 0).length,
       leakRate: rate(pii.filter((item) => item.leaks.length > 0).length, pii.length),
-      piiSentRate: rate(pii.filter((item) => item.sent && item.leaks.length === 0).length, pii.length),
+      piiSentRate: rate(piiPlannable.filter((item) => item.sent && item.leaks.length === 0).length, piiPlannable.length),
       piiLocalRate: rate(pii.filter((item) => !item.sent).length, pii.length),
+      healthSamples: health.length,
+      healthSent: health.filter((item) => item.sent).length,
+      benignHealthLocal: benignAll.length - benign.length,
       benignSamples: benign.length,
       benignSentRate: rate(benign.filter((item) => item.sent).length, benign.length),
       benignVerbatimRate: rate(benign.filter((item) => item.verbatim).length, benign.length),

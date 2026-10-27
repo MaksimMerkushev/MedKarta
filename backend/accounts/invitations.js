@@ -23,12 +23,24 @@
  *
  * Активацию блокируют: блокировка и архив (токены отзываются), смена email
  * (токен выдан на прежний адрес), истечение срока, повторное использование.
+ *
+ * Письма уходят через почтовую очередь (mail/outbox.js): ссылка от
+ * администратора — сразу, одной попыткой (не ушло — администратор получает
+ * ссылку и передаёт сам); запрошенная самим пользователем — в фоне, с
+ * повторами. Статус доставки пишется в ссылку только по факту отправки.
+ *
+ * Ссылку для смены пароля сотруднику (модератор, администратор,
+ * суперадминистратор) почтой без второго фактора не отправляем: иначе доступ
+ * к админ-панели восстанавливался бы одним письмом. Сотрудник без MFA
+ * восстанавливает доступ через другого администратора или CLI на сервере
+ * (docs/accounts.md, «Восстановление доступа»). После смены пароля по ссылке
+ * второй фактор остаётся включённым.
  */
 
 import { randomBytes } from 'node:crypto';
 
 import { accessLink } from './delivery.js';
-import { hashPassword, PasswordBusyError, passwordProblem } from './passwords.js';
+import { hashPassword, PasswordBusyError } from './passwords.js';
 import { fail, hashToken, maskEmail, normalizeEmail, userLabel, EMAIL_PATTERN, ACCOUNT_LIMITS } from './service.js';
 
 const MINUTE_MS = 60 * 1000;
@@ -65,6 +77,7 @@ const REVOKE_REASONS = Object.freeze({
   password_changed: 'пароль изменён',
   role_changed: 'изменена роль',
   sessions_revoked: 'администратор завершил все сессии',
+  mfa_failed: 'слишком много неверных кодов второго фактора',
   issuer: 'у выдавшего больше нет прав на этот аккаунт',
 });
 
@@ -82,9 +95,9 @@ export const stateOf = (record, stamp) => {
  * @param {object} deps.delivery доставка (delivery.js)
  * @param {() => number} [deps.now]
  */
-export const createInvitationService = ({ store, accounts, delivery, now = () => Date.now() }) => {
+export const createInvitationService = ({ store, accounts, delivery, mailer = null, consents = null, now = () => Date.now() }) => {
   const config = accounts.settings;
-  const { startSession, releaseExpiredBlock, statusProblem, permissionsFor, canManage } = accounts.__internal;
+  const { startSession, releaseExpiredBlock, statusProblem, permissionsFor, canManage, notify, checkNewPassword, isStaff, mfaEnabled } = accounts.__internal;
 
   const busy = (error) => {
     if (error instanceof PasswordBusyError) fail('busy', 503, 'Сервер сейчас занят — повторите через минуту.');
@@ -133,7 +146,8 @@ export const createInvitationService = ({ store, accounts, delivery, now = () =>
   const findByToken = (token) => {
     if (typeof token !== 'string' || !TOKEN.test(token)) fail('invalid_link', 404, 'Ссылка недействительна. Проверьте, что она скопирована целиком.');
     const record = store.getAccessTokenByHash(hashToken(token));
-    if (!record) fail('invalid_link', 404, 'Ссылка недействительна. Проверьте, что она скопирована целиком.');
+    // Ссылка подтверждения нового email — у неё своя страница и свой обработчик.
+    if (!record || !['invite', 'reset'].includes(record.purpose)) fail('invalid_link', 404, 'Ссылка недействительна. Проверьте, что она скопирована целиком.');
     return record;
   };
 
@@ -175,13 +189,53 @@ export const createInvitationService = ({ store, accounts, delivery, now = () =>
     return allowed && canManage(issuer, user);
   };
 
+  /** Способы второго фактора владельца, если MFA включена: пароль по ссылке — только вместе с ним. */
+  const mfaOf = (user) => {
+    if (!mfaEnabled(user) || !accounts.mfa) return null;
+    return { required: true, methods: accounts.mfa.status(user.id).methods };
+  };
+
+  /*
+   * Аккаунту «Пользователь», который ещё не принимал действующую редакцию
+   * пользовательского соглашения (приглашение или аккаунт до схемы 7),
+   * пароль по ссылке задаётся только вместе с принятием соглашения.
+   * Сотрудники работают по внутренним документам оператора — им не нужно.
+   */
+  /*
+   * Соглашение принимают при первой установке пароля (приглашение: с этого
+   * момента договор заключён). Ссылка восстановления пароля его не требует —
+   * уже зарегистрированному пользователю новую редакцию предложат после
+   * входа (legalPending в /api/account), а не ценой доступа к аккаунту.
+   */
+  const pendingOf = (record, user) => (consents && record.purpose === 'invite' ? consents.pendingFor(user) : []);
+
+  const legalOf = (record, user) => {
+    const pending = pendingOf(record, user);
+    if (pending.length === 0) return null;
+    const documents = {};
+    for (const item of pending) documents[item.document] = { version: item.version, title: item.title, draft: item.draft };
+    return { required: true, documents };
+  };
+
   const contextView = (record, user) => ({
     purpose: record.purpose,
     email: user.email,
     firstName: user.firstName || '',
     lastName: user.lastName || '',
     expiresAt: iso(record.contextExpiresAt),
+    mfa: mfaOf(user),
+    legal: legalOf(record, user),
   });
+
+  /** Открытый контекст ссылки по токену контекста или ошибка «время истекло». */
+  const openedContext = (contextToken) => {
+    const expired = () => fail('activation_expired', 410, 'Время на создание пароля истекло. Откройте ссылку заново или попросите новую.');
+    if (typeof contextToken !== 'string' || !TOKEN.test(contextToken)) expired();
+    const contextHash = hashToken(contextToken);
+    const record = store.getAccessTokenByContext(contextHash);
+    if (!record || stateOf(record, now()) !== 'opened') expired();
+    return { record, contextHash, expired };
+  };
 
   const service = {
     /** Можно ли отправлять письма — для интерфейса (не зависит от адреса). */
@@ -199,16 +253,17 @@ export const createInvitationService = ({ store, accounts, delivery, now = () =>
      * @param {string|null} [options.base] адрес приложения для ссылки, если APP_URL не задан (только manual)
      * @returns {Promise<{invitation: object, link: string|null}>} link — только для ручной передачи
      */
-    async issue({ user, actor = null, source = 'admin', delivery: wanted = 'auto', base = null }) {
+    async issue({ user, actor = null, source = 'admin', delivery: wanted = 'auto', base = null, sourceKey = null }) {
       const target = eligible(user);
       const purpose = target.activatedAt ? 'reset' : 'invite';
-      const byEmail = wanted !== 'manual' && delivery.emailEnabled;
+      const byEmail = wanted !== 'manual' && delivery.emailEnabled && Boolean(mailer);
       if (wanted === 'email' && !delivery.emailEnabled) fail('mail_disabled', 409, 'Почта не настроена — передайте ссылку вручную.');
       const linkBase = delivery.appUrl || base;
       if (!linkBase) fail('no_app_url', 500, 'Не задан адрес приложения (APP_URL).');
       const stamp = now();
       const token = randomBytes(32).toString('base64url');
-      const record = store.transaction(() => {
+      const link = accessLink(linkBase, token);
+      const { record, mailId } = store.transaction(() => {
         // Новая ссылка от администратора или CLI заменяет прежнюю того же вида; самостоятельный запрос — нет,
         // иначе посторонний мог бы, запрашивая ссылки, «гасить» настоящее приглашение.
         if (source !== 'self') store.revokeUserAccessTokens(target.id, 'replaced', stamp, { purpose });
@@ -236,26 +291,26 @@ export const createInvitationService = ({ store, accounts, delivery, now = () =>
             details: { delivery: byEmail ? 'email' : 'manual', expiresAt: iso(created.expiresAt) },
           });
         }
-        return created;
-      });
-      const link = accessLink(linkBase, token);
-      if (!byEmail) return { invitation: view(record, stamp), link };
-      try {
-        await delivery.sendAccessLink({
+        // Письмо — в той же транзакции, что и ссылка: нет ссылки — нет письма, и наоборот.
+        const queued = byEmail ? mailer.enqueue({
+          kind: purpose,
           to: target.email,
-          purpose,
-          name: target.firstName,
-          link,
-          expiresAt: record.expiresAt,
-          inviter: actor ? `${actor.firstName || ''} ${actor.lastName || ''}`.trim() : '',
-        });
-        store.setAccessTokenDelivery(record.id, 'sent');
-        return { invitation: view({ ...record, deliveryStatus: 'sent' }, stamp), link: null };
-      } catch {
-        store.setAccessTokenDelivery(record.id, 'failed');
-        // Письмо не ушло: администратор (и только он, и только сейчас) получает ссылку, чтобы передать её сам.
-        return { invitation: view({ ...record, deliveryStatus: 'failed' }, stamp), link: source === 'self' ? null : link };
+          params: { name: target.firstName, link, expiresAt: created.expiresAt, inviter: actor ? `${actor.firstName || ''} ${actor.lastName || ''}`.trim() : '' },
+          ref: { type: 'access_token', id: created.id },
+          sourceKey,
+        }) : null;
+        return { record: created, mailId: queued };
+      });
+      if (!byEmail) return { invitation: view(record, stamp), link };
+      if (source === 'self') {
+        // Сам пользователь: в фоне, с повторами. Ссылку он не видит — только письмо.
+        mailer.kick();
+        return { invitation: view(record, stamp), link: null };
       }
+      const sent = await mailer.sendNow(mailId);
+      if (sent) return { invitation: view({ ...record, deliveryStatus: 'sent' }, stamp), link: null };
+      // Письмо не ушло: администратор (и только он, и только сейчас) получает ссылку, чтобы передать её сам.
+      return { invitation: view({ ...record, deliveryStatus: 'failed' }, stamp), link };
     },
 
     /**
@@ -264,16 +319,24 @@ export const createInvitationService = ({ store, accounts, delivery, now = () =>
      * если адрес принадлежит действующему аккаунту и лимит не исчерпан.
      * Работа идёт после ответа: время ответа не зависит от адреса.
      */
-    async requestLink(email) {
-      if (!delivery.emailEnabled) return;
+    async requestLink(email, { sourceKey = null } = {}) {
+      if (!delivery.emailEnabled || !mailer) return { sent: false, reason: 'mail_disabled' };
       const address = normalizeEmail(email);
-      if (!address || address.length > ACCOUNT_LIMITS.MAX_EMAIL || !EMAIL_PATTERN.test(address)) return;
+      if (!address || address.length > ACCOUNT_LIMITS.MAX_EMAIL || !EMAIL_PATTERN.test(address)) return { sent: false, reason: 'bad_email' };
       const user = store.getUserByEmail(address);
-      if (!user || user.demoTemplate || user.status !== 'active') return;
+      if (!user || user.demoTemplate || user.status !== 'active') return { sent: false, reason: 'no_account' };
       const stamp = now();
-      if (store.countRecentAccessTokens({ userId: user.id, source: 'self', since: stamp - HOUR_MS }) >= INVITATION_LIMITS.SELF_REQUESTS_PER_HOUR) return;
+      if (store.countRecentAccessTokens({ userId: user.id, source: 'self', since: stamp - HOUR_MS }) >= INVITATION_LIMITS.SELF_REQUESTS_PER_HOUR) return { sent: false, reason: 'limit' };
+      // Сотрудник без второго фактора: доступ одним письмом не восстанавливается.
+      if (user.activatedAt && isStaff(user) && !mfaEnabled(user)) {
+        store.addAuthEvent({ at: stamp, type: 'access_link_requested', userId: user.id, reason: 'staff_without_mfa' });
+        return { sent: false, reason: 'staff_without_mfa' };
+      }
+      const purpose = user.activatedAt ? 'reset' : 'invite';
+      if (!mailer.allows({ kind: purpose, to: user.email, sourceKey }).allowed) return { sent: false, reason: 'mail_limit' };
       store.addAuthEvent({ at: stamp, type: 'access_link_requested', userId: user.id });
-      await service.issue({ user, actor: null, source: 'self', delivery: 'email' }).catch(() => null);
+      await service.issue({ user, actor: null, source: 'self', delivery: 'email', sourceKey }).catch(() => null);
+      return { sent: true, reason: null };
     },
 
     /** Что за ссылка — до подтверждения, ничего не меняя: имя и email маской, срок. */
@@ -327,19 +390,53 @@ export const createInvitationService = ({ store, accounts, delivery, now = () =>
       }
     },
 
+    /** Второй фактор для смены пароля по ссылке: способы и вызов для ключа доступа. */
+    secondFactorOptions(contextToken) {
+      const { record, contextHash } = openedContext(contextToken);
+      const user = ownerOf(record);
+      if (!mfaOf(user)) return { methods: [], passkey: null };
+      return accounts.linkSecondFactorOptions(user, contextHash);
+    },
+
     /**
      * Задать пароль в контексте активации. Аккаунт активирован, все прочие
      * ссылки отозваны, прежние сессии завершены; выдаётся новая сессия.
+     * factor — второй фактор ({method, code} или {method: 'webauthn',
+     * credential}): обязателен, если у аккаунта включена MFA. Он проверяется
+     * до того, как пароль изменится: ссылка из письма (то есть доступ к
+     * ящику) без второго фактора не меняет пароль и не даёт сессии.
      */
-    async complete(contextToken, password, { client = null, ipPrefix = null } = {}) {
-      const expired = () => fail('activation_expired', 410, 'Время на создание пароля истекло. Откройте ссылку заново или попросите новую.');
-      if (typeof contextToken !== 'string' || !TOKEN.test(contextToken)) expired();
-      const contextHash = hashToken(contextToken);
-      const record = store.getAccessTokenByContext(contextHash);
-      if (!record || stateOf(record, now()) !== 'opened') expired();
+    async complete(contextToken, password, { client = null, ipPrefix = null, factor = null, legal = null } = {}) {
+      const { record, contextHash, expired } = openedContext(contextToken);
       const user = ownerOf(record);
-      const problem = passwordProblem(password, { email: user.email });
-      if (problem) fail('weak_password', 400, problem);
+      await checkNewPassword(password, user.email);
+      // Соглашение — до второго фактора и хэша: без него ничего не меняется.
+      const pendingLegal = pendingOf(record, user);
+      if (pendingLegal.length > 0) {
+        if (!legal || legal.acceptTerms !== true) {
+          fail('terms_required', 400, 'Чтобы продолжить, примите пользовательское соглашение.');
+        }
+        for (const item of pendingLegal) {
+          if ((legal.documents || {})[item.document] !== item.version) {
+            fail('documents_changed', 409, 'Документы обновились. Ознакомьтесь с новой редакцией и подтвердите снова.', {
+              current: { document: item.document, version: item.version },
+            });
+          }
+        }
+      }
+      const mfaRequired = mfaOf(user);
+      let secondFactor = null;
+      if (mfaRequired) {
+        if (!factor || typeof factor.method !== 'string') {
+          fail('mfa_required', 403, 'Для этого аккаунта включена двухфакторная защита: подтвердите смену пароля ключом доступа, кодом из приложения или резервным кодом.', { methods: mfaRequired.methods });
+        }
+        secondFactor = accounts.verifyLinkSecondFactor(user, factor, contextHash, { client, ipPrefix });
+        if (!secondFactor.ok) {
+          // Попытки исчерпаны: ссылка гаснет, нужна новая.
+          store.revokeAccessToken(record.id, 'mfa_failed', now());
+          fail('link_revoked', 410, 'Слишком много неверных кодов — ссылка больше не действует. Запросите новую.');
+        }
+      }
       const passwordHash = await hashPassword(password).catch(busy);
       const stamp = now();
       const session = store.transaction(() => {
@@ -349,10 +446,15 @@ export const createInvitationService = ({ store, accounts, delivery, now = () =>
         // И аккаунт могли заблокировать: проверка владельца — заново, в той же транзакции.
         ownerOf(again);
         if (!store.useAccessToken(again.id, stamp)) expired();
-        store.activateUser(user.id, passwordHash, stamp);
+        // Ссылка пришла письмом на этот адрес — владение ящиком подтверждено.
+        store.activateUser(user.id, passwordHash, stamp, { emailVerified: record.delivery === 'email' });
         store.revokeUserAccessTokens(user.id, 'superseded', stamp);
         store.deleteUserSessions(user.id);
-        const fresh = startSession(user, { client, ipPrefix });
+        if (pendingLegal.length > 0) {
+          consents.acceptCurrent(store.getUserById(user.id), legal.documents, { method: 'activation_form' });
+        }
+        // Второй фактор подтверждён — сессия того же уровня, что и после обычного входа с MFA.
+        const fresh = startSession(user, { client, ipPrefix }, secondFactor ? { aal: 2, mfaAt: stamp } : {});
         store.recordLogin(user.id, stamp);
         audit({
           action: record.purpose === 'invite' ? 'user.activate' : 'user.password_set',
@@ -365,6 +467,7 @@ export const createInvitationService = ({ store, accounts, delivery, now = () =>
         store.addAuthEvent({ at: stamp, type: record.purpose === 'invite' ? 'account_activated' : 'password_reset', userId: user.id, sessionId: fresh.publicId, client, ipPrefix });
         return fresh;
       });
+      if (record.purpose === 'reset') notify(user, 'password_changed', { how: 'reset' });
       return { ...accounts.snapshot(store.getUserById(user.id)), session, purpose: record.purpose };
     },
 

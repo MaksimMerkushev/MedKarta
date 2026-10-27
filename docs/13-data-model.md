@@ -24,6 +24,11 @@ erDiagram
     USER ||--o{ USER_BLOCK : "блокировки"
     USER ||--o| AVATAR : "фото"
     USER ||--o{ AUDIT : "действия (актор и цель)"
+    USER ||--o{ ACCESS_TOKEN : "ссылки из писем"
+    USER ||--o{ MFA_FACTOR : "факторы входа"
+    USER ||--o{ RECOVERY_CODE : "резервные коды"
+    USER ||--o{ TRUSTED_DEVICE : "знакомые устройства"
+    REGISTRATION }o--o| USER : "создаёт"
 ```
 
 Диаграмма объединяет справочник частных клиник и демо-набор
@@ -102,23 +107,29 @@ http(s); телефон — цифры и разделители; координ
 
 Режимы доступа и приоритет правил — [10-medical-search-and-data.md](10-medical-search-and-data.md).
 
-## SQLite: аккаунты (схема 4)
+## SQLite: аккаунты (схема 7)
 
 [backend/accounts/sqliteStore.js](../backend/accounts/sqliteStore.js); файл
 `ACCOUNTS_DB_PATH` (по умолчанию `var/accounts/medkarta.sqlite`). Прагмы:
 `foreign_keys = ON`, `busy_timeout = 2000`, `secure_delete = ON`, WAL для
 файла; миграции — по `user_version` в транзакции: 1 — пользователи, сессии,
 избранное; 2 — демо-копии; 3 — роли, статусы, журналы, аватары, настройки;
-4 — приглашения: `users.activated_at` и таблица `access_tokens`; у всех
-аккаунтов с паролем и у демо-копий `activated_at` заполняется при миграции
-(никто не теряет вход). Отката миграций нет: перед обновлением — `npm run accounts -- backup`.
+4 — приглашения: `users.activated_at` и таблица `access_tokens`; 5 —
+регистрация, двухфакторная защита, счётчики подбора, очередь писем; 6 —
+проверка человека у ключей доступа, срок ссылки у письма; 7 — журнал
+согласий и обращения субъектов ПДн (ниже).
+Перед миграцией сервер сам копирует базу (`VACUUM INTO`,
+`medkarta.sqlite.before-v5-….bak`, права 600). При переходе на схему 5
+пароли, роли и статусы сохраняются, email активированных аккаунтов
+считается подтверждённым, **все сессии завершаются**. Отката миграций нет:
+перед обновлением — `npm run accounts -- backup`.
 
 ```sql
 CREATE TABLE users (
   id            TEXT PRIMARY KEY,               -- 32 hex, случайный
   email         TEXT NOT NULL UNIQUE COLLATE NOCASE,
   display_name  TEXT NOT NULL,                  -- «Имя Фамилия», для совместимости
-  password_hash TEXT,                           -- scrypt$N$r$p$соль$хэш; у демо и неактивированных — NULL
+  password_hash TEXT,                           -- scrypt2$N$r$p$соль$хэш (NFKC); прежний scrypt$… пересчитывается при входе
   dms_plan_id   TEXT,
   demo_key      TEXT UNIQUE,                    -- устарел, не заполняется
   created_at    INTEGER NOT NULL,
@@ -142,14 +153,47 @@ CREATE TABLE users (
   created_by    TEXT,                           -- id сотрудника; NULL — CLI или старая регистрация
   version       INTEGER NOT NULL DEFAULT 1,     -- оптимистическая блокировка правок
   search_text   TEXT NOT NULL DEFAULT '',       -- id, email, имя в нижнем регистре (кириллица — в JS)
-  activated_at  INTEGER                         -- схема 4: пароль задан; NULL — «ожидает активации»
+  activated_at  INTEGER,                        -- схема 4: пароль задан; NULL — «ожидает активации»
+  email_verified_at INTEGER,                    -- схема 5: владение адресом подтверждено ссылкой
+  signup_source TEXT                            -- схема 5: self (регистрация) | admin | legacy
 );
+CREATE TABLE registrations (                    -- схема 5: заявки на регистрацию
+  id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE,  -- SHA-256 от токена ссылки
+  email TEXT NOT NULL COLLATE NOCASE, created_at, expires_at,
+  opened_at, context_hash TEXT UNIQUE, context_expires_at, -- контекст — cookie mk_register, 30 минут
+  used_at, revoked_at, revoked_reason, delivery_status, ip_prefix, user_id
+);
+CREATE TABLE mfa_factors (                      -- схема 5: факторы входа
+  id TEXT PRIMARY KEY, user_id → users ON DELETE CASCADE,
+  type CHECK (type IN ('totp', 'webauthn')), label, status CHECK (status IN ('pending', 'active', 'revoked')),
+  secret_enc TEXT,                              -- TOTP: AES-256-GCM ключом MFA_SECRET_KEY
+  last_step INTEGER,                            -- TOTP: последний принятый шаг (код не принимается дважды)
+  credential_id TEXT UNIQUE, public_key, algorithm, sign_count, transports, backed_up, -- ключ доступа
+  user_verified INTEGER,                        -- схема 6: ключ проверил человека (PIN, биометрия); NULL — добавлен раньше
+  created_at, confirmed_at, last_used_at, revoked_at, expires_at
+);
+CREATE TABLE mfa_recovery_codes (user_id → users, code_hash, created_at, used_at,  -- HMAC-SHA-256
+  PRIMARY KEY (user_id, code_hash)) WITHOUT ROWID;
+CREATE TABLE auth_challenges (id_hash PRIMARY KEY, user_id, purpose CHECK (purpose IN ('login', 'webauthn_register', 'reauth')),
+  created_at, expires_at, attempts, challenge, data, consumed_at);  -- одноразовые вызовы
+CREATE TABLE auth_throttle (key PRIMARY KEY, failures, window_start, locked_until, lock_count, data, updated_at);
+  -- ключи — усечённые SHA-256: ip:…, ipacct:…, acct:…, dev:…, mfa:…; без email и адресов
+CREATE TABLE trusted_devices (token_hash, user_id → users, created_at, last_used_at, expires_at,
+  PRIMARY KEY (token_hash, user_id)) WITHOUT ROWID;  -- cookie mk_device, 180 дней
+CREATE TABLE mail_outbox (id PRIMARY KEY, kind, to_hash, to_address, payload, key_id,
+  status CHECK (status IN ('pending', 'sending', 'sent', 'failed')), attempts, next_attempt_at,
+  last_error, source_key, ref_type, ref_id, created_at, sent_at,
+  expires_at);                                  -- схема 6: срок ссылки в письме — после него письмо не уходит
+  -- payload писем со ссылками зашифрован (AES-256-GCM) ключом писем: HMAC-SHA-256(MFA_SECRET_KEY, назначение),
+  -- key_id — его открытый идентификатор; письмо переживает перезапуск. last_error: expired, link_inactive,
+  -- key_changed, unreadable или код SMTP. После отправки to_address и payload стираются
 CREATE TABLE access_tokens (                    -- схема 4: приглашения и ссылки для смены пароля
   id               TEXT PRIMARY KEY,            -- 24 hex, публичный id для отзыва (не токен)
   token_hash       TEXT NOT NULL UNIQUE,        -- SHA-256 от токена ссылки; сам токен не хранится
   user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  purpose          TEXT NOT NULL CHECK (purpose IN ('invite', 'reset')),
+  purpose          TEXT NOT NULL CHECK (purpose IN ('invite', 'reset', 'email_change')),
   email            TEXT NOT NULL,               -- адрес на момент выдачи: сменили — ссылка не действует
+  new_email        TEXT,                        -- схема 5: новый адрес для email_change
   source           TEXT NOT NULL CHECK (source IN ('admin', 'self', 'cli')),
   delivery         TEXT NOT NULL CHECK (delivery IN ('email', 'manual')),
   delivery_status  TEXT NOT NULL DEFAULT 'pending' CHECK (delivery_status IN ('pending', 'sent', 'failed', 'manual')),
@@ -167,14 +211,21 @@ CREATE TABLE sessions (
   public_id    TEXT UNIQUE,                     -- схема 3: id для отзыва, не токен
   last_seen_at INTEGER,
   client       TEXT,                            -- «Chrome 129 · macOS»
-  ip_prefix    TEXT                             -- 203.0.113.0/24 или /48 для IPv6
+  ip_prefix    TEXT,                            -- 203.0.113.0/24 или /48 для IPv6
+  aal          INTEGER NOT NULL DEFAULT 1,      -- схема 5: 1 — пароль, 2 — пароль и второй фактор
+  mfa_at       INTEGER,                         -- когда подтверждён второй фактор
+  reauth_at    INTEGER,                         -- когда подтверждена личность (критичные действия)
+  device_hash  TEXT                             -- SHA-256 cookie mk_device
 );
 CREATE TABLE favorites (user_id, item_id, created_at, PRIMARY KEY (user_id, item_id));
 
 CREATE TABLE auth_events (id, at, type, user_id, session_id, client, ip_prefix, reason);
   -- type: login_ok | login_failed | login_denied | logout | password_changed
   --       | session_revoked | sessions_revoked | access_link_requested | access_link_opened
-  --       | account_activated | password_reset; хранится retention.authEventsDays (90)
+  --       | account_activated | password_reset | account_registered | login_locked | login_throttled
+  --       | mfa_challenge | mfa_failed | mfa_enabled | mfa_disabled | mfa_reset | recovery_codes
+  --       | recovery_code_used | reauth | reauth_failed | email_change_requested | email_changed
+  --       | email_verified | login_unlocked; хранится retention.authEventsDays (90)
 CREATE TABLE audit_log (id, at, action, actor_id, actor_label, target_id, target_label,
   result CHECK (result IN ('ok', 'denied', 'failed')), details, search_text);
   -- action: user.create, user.role, user.block, user.invite, user.reset_link, user.invite_revoke,
@@ -187,6 +238,23 @@ CREATE TABLE user_activity (user_id → users ON DELETE CASCADE, day, PRIMARY KE
 CREATE TABLE avatars (user_id PRIMARY KEY → users ON DELETE CASCADE, mime, data BLOB, etag, updated_at);
 CREATE TABLE settings (key PRIMARY KEY, value JSON, updated_at, updated_by);
 CREATE TABLE role_overrides (role PRIMARY KEY, permissions JSON, updated_at, updated_by);
+CREATE TABLE consent_log (                      -- схема 7: принятие документов и согласия (152-ФЗ)
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE, user_id TEXT NOT NULL,  -- без FK: переживает удаление аккаунта
+  purpose, kind CHECK (kind IN ('acceptance', 'acknowledgement', 'consent')),
+  action CHECK (action IN ('granted', 'withdrawn', 'closed')),
+  document, version, document_hash,            -- редакция и SHA-256 её текста из legal/manifest.json
+  method, at, prev_hash, hash UNIQUE           -- hash = SHA-256(prev_hash + запись); цепочка по каждому user_id
+);
+  -- триггер consent_log_append_only: UPDATE запрещён; consent_log_retention: DELETE — только если аккаунта
+  -- нет и последней записи этого user_id больше 3 лет. Email, IP и User-Agent не пишутся
+CREATE TABLE privacy_requests (                 -- схема 7: обращения субъектов ПДн
+  id TEXT PRIMARY KEY, user_id → users ON DELETE SET NULL, subject_label,  -- маска email
+  type CHECK (type IN ('access', 'rectify', 'restrict', 'erase', 'withdraw', 'other')),
+  status CHECK (status IN ('received', 'in_progress', 'completed', 'rejected')),
+  message, created_at, due_at, extended_at, extension_reason, closed_at, response,
+  handled_by, handled_label, updated_at
+);
+  -- message стирается при удалении аккаунта; закрытые обращения хранятся 3 года
 ```
 
 Индексы: `users(role)`, `users(status)`, `users(created_at)`, демо-копии,
@@ -196,13 +264,21 @@ CREATE TABLE role_overrides (role PRIMARY KEY, permissions JSON, updated_at, upd
 `(type, at)`, `(target_id, at)`, `(actor_id, at)`, `(action, at)`, `at`.
 
 Сроки сессий — настройки `sessions.idleDays` (14) и `sessions.maxDays` (30),
+у сотрудников — `sessions.staffIdleMinutes` (30) и `sessions.staffMaxHours` (12),
 демо-сессии — 12 часов; сессий на пользователя — `sessions.maxPerUser` (10);
 избранного — до 500 записей; демо-копия без входов 30 дней удаляется, копий —
 до 10 000 ([service.js](../backend/accounts/service.js), `ACCOUNT_LIMITS`).
 Раз в час сервер удаляет просроченные сессии, окончившиеся блокировки
-переводит в «активен», журналы старше срока хранения — удаляет, ссылки,
-истёкшие больше 30 дней назад, — тоже. Подробности
-о ролях и безопасности — [accounts.md](accounts.md).
+переводит в «активен», журналы старше срока хранения — удаляет, ссылки и
+заявки, истёкшие больше 30 дней назад, — тоже; заодно — просроченные вызовы,
+счётчики подбора, доверенные устройства и записи об отправленных письмах, а также
+записи журнала согласий удалённых аккаунтов старше 3 лет и обращения, закрытые
+больше 3 лет назад. Подробности о ролях и безопасности — [accounts.md](accounts.md),
+о сроках хранения — [privacy/05-retention-and-destruction.md](privacy/05-retention-and-destruction.md).
+
+Вне базы, рядом с ней: `erasures.jsonl` — строка `{userId, at}` на каждое
+удаление аккаунта (без email), чтобы повторить удаление после восстановления
+копии (`npm run accounts -- reapply-erasures`).
 
 ## SQLite: демо-запись
 

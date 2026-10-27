@@ -10,42 +10,32 @@
  *   2) «Принять приглашение» — start: токен гаснет, взамен cookie контекста
  *      (HttpOnly, 30 минут, только для /api/auth/activation);
  *   3) пароль — complete: аккаунт активирован, вход выполнен.
+ *      Если у аккаунта включена двухфакторная защита, ссылки (то есть
+ *      доступа к почте) мало: после пароля — второй фактор, и только вместе
+ *      с ним сервер меняет пароль и открывает сессию.
  * После перезагрузки на шаге пароля контекст берётся из cookie.
  */
 import { useEffect, useId, useRef, useState } from 'react';
 import { AnimatePresence, MotionConfig, motion as Motion, useReducedMotion } from 'motion/react';
-import { KeyRound, LogIn, Mail, MailPlus, RotateCw } from 'lucide-react';
+import { ArrowLeft, KeyRound, LogIn, MailPlus, RotateCw } from 'lucide-react';
 
 import { passwordProblem } from '@shared/passwordPolicy.js';
-import { completeActivation, fetchActivationContext, peekActivation, startActivation } from '../services/account';
+import { completeActivation, fetchActivationContext, fetchActivationMfaOptions, legalVersions, peekActivation, startActivation } from '../services/account';
 import { navigate } from '../ui/navigation';
 import AuthLayout from './AuthLayout';
 import AutoHeight from './AutoHeight';
+import LegalAcceptance from './LegalAcceptance';
 import { AuthSkeleton } from './LoginPage';
-import { AuthButton, FormError, PasswordField, PasswordRequirements, SuccessMark } from './parts';
+import { AuthButton, FormError, PasswordField, PasswordRequirements, PasswordStrength, SuccessMark, TextAction } from './parts';
+import SecondFactorForm from './SecondFactor';
 import { homeFor, useAuthEnvironment } from './environment';
+import { AccountRow, Heading } from './linkParts';
+import { cleanUrl as cleanUrlTo, formatMoscow, readTokenFromUrl } from './links';
 import { stepTransition, stepVariants } from './motion';
 
-const TOKEN = /^[A-Za-z0-9_-]{43}$/u;
 const REDIRECT_MS = 1400;
 
-/** Токен из #token=… — только чтение (рендер может выполниться дважды). */
-const readTokenFromUrl = () => {
-  const token = new URLSearchParams(window.location.hash.replace(/^#/u, '')).get('token');
-  return token && TOKEN.test(token) ? token : null;
-};
-
-/** Чистый адрес без токена — и в истории тоже: «Назад» его не вернёт. */
-const cleanUrl = () => {
-  if (window.location.hash || window.location.search) window.history.replaceState(window.history.state, '', '/activate');
-};
-
-const formatMoscow = (iso, withDate = true) => new Date(iso).toLocaleString('ru-RU', {
-  timeZone: 'Europe/Moscow',
-  ...(withDate ? { day: 'numeric', month: 'long' } : {}),
-  hour: '2-digit',
-  minute: '2-digit',
-});
+const cleanUrl = () => cleanUrlTo('/activate');
 
 const PROBLEMS = {
   invalid_link: { title: 'Ссылка не подходит', text: 'Возможно, она скопирована не полностью. Откройте ссылку из письма или сообщения ещё раз — целиком.' },
@@ -56,34 +46,20 @@ const PROBLEMS = {
   account_blocked: { title: 'Аккаунт заблокирован', text: 'По этой ссылке нельзя войти, пока аккаунт заблокирован. Обратитесь к администратору МедКарты.', noRequest: true },
   no_link: { title: 'Откройте ссылку из приглашения', text: 'Эта страница работает только по персональной ссылке из письма или сообщения от администратора.' },
   rate_limited: { title: 'Слишком много попыток', text: 'Подождите несколько минут и откройте ссылку снова.', retry: true },
+  mfa_failed: {
+    title: 'Слишком много неверных кодов',
+    text: 'Ссылка больше не действует — так код не подобрать. Запросите новую ссылку и подтвердите смену пароля ключом доступа, кодом из приложения или резервным кодом.',
+  },
 };
+
+// Ошибки второго фактора, которые форма показывает сама (дальше — снова ввод).
+const FACTOR_RETRY = new Set(['bad_mfa_code', 'too_many_attempts', 'bad_request', 'rate_limited', 'network']);
 
 const problemOf = (error) => {
   const known = PROBLEMS[error?.code];
   if (known) return { code: error.code, ...known };
   return { code: error?.code || 'network', title: 'Не получилось открыть ссылку', text: error?.message || 'Проверьте интернет и попробуйте ещё раз.', retry: true };
 };
-
-/** Заголовок шага, который получает фокус, — экранный диктор начинает с него. */
-function Heading({ children, focus = true }) {
-  const ref = useRef(null);
-  useEffect(() => {
-    if (focus) ref.current?.focus({ preventScroll: true });
-  }, [focus]);
-  return <h1 ref={ref} tabIndex={-1} className="text-[28px] font-semibold leading-[34px] tracking-[-0.015em] text-slate-900 outline-none dark:text-white">{children}</h1>;
-}
-
-function AccountRow({ email, name }) {
-  return (
-    <div className="mb-6 mt-5 flex items-center gap-3 rounded-[12px] border border-slate-200 px-3.5 py-3 dark:border-slate-800" data-testid="activation-account">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300" aria-hidden="true"><Mail size={17} /></span>
-      <span className="min-w-0">
-        {name && <span className="block truncate text-[15px] font-semibold text-slate-900 dark:text-white">{name}</span>}
-        <span className={`block truncate ${name ? 'text-[13.5px] text-slate-500 dark:text-slate-400' : 'text-[15px] font-medium text-slate-800 dark:text-slate-100'}`}>{email}</span>
-      </span>
-    </div>
-  );
-}
 
 function ConfirmStep({ link, onAccept }) {
   const [pending, setPending] = useState(false);
@@ -113,6 +89,39 @@ function ConfirmStep({ link, onAccept }) {
   );
 }
 
+/**
+ * Второй фактор при смене пароля по ссылке: аккаунт с включённой MFA.
+ * Пароль уже набран (держится в памяти шага); сервер меняет его только
+ * вместе с верным вторым фактором.
+ */
+function FactorStep({ context, methods, onSubmit, onBack }) {
+  const name = [context.firstName, context.lastName].filter(Boolean).join(' ');
+  return (
+    <div data-testid="activation-mfa">
+      <Heading focus={false}>Подтвердите, что это вы</Heading>
+      <p className="mt-3 text-[15px] leading-[22px] text-slate-600 dark:text-slate-300">
+        Для аккаунта включена двухфакторная защита. Одной ссылки из письма мало: подтвердите смену пароля ключом доступа, кодом из приложения или резервным кодом.
+      </p>
+      <AccountRow email={context.email} name={name} />
+      <SecondFactorForm
+        methods={methods}
+        getPasskeyOptions={async () => (await fetchActivationMfaOptions()).passkey}
+        onSubmit={onSubmit}
+        submitLabel="Сохранить пароль и войти"
+      />
+      <div className="mt-3 flex justify-center">
+        <TextAction onClick={onBack} className="inline-flex items-center gap-1.5 px-2 py-1" data-testid="activation-mfa-back">
+          <ArrowLeft size={15} aria-hidden="true" />
+          Изменить пароль
+        </TextAction>
+      </div>
+      <p className="mt-4 text-[13.5px] leading-5 text-slate-500 dark:text-slate-400" data-testid="activation-mfa-lost">
+        Нет доступа ни к ключу, ни к приложению, ни к резервным кодам? Обратитесь в поддержку МедКарты: после проверки личности защиту сбросят, и пароль можно будет задать заново.
+      </p>
+    </div>
+  );
+}
+
 function PasswordStep({ context, onDone, onProblem }) {
   const requirementsId = useId();
   const errorId = useId();
@@ -120,12 +129,43 @@ function PasswordStep({ context, onDone, onProblem }) {
   const [password, setPassword] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
+  // Второй фактор: известен заранее из контекста ссылки или по ответу сервера mfa_required.
+  const [factor, setFactor] = useState({ open: false, methods: context.mfa?.methods || [] });
+  // Соглашение — только при первой установке пароля пользователем (сервер сам решает, нужно ли: context.legal).
+  const [legal, setLegal] = useState(context.legal || null);
+  const [acceptTerms, setAcceptTerms] = useState(false);
+  const [legalError, setLegalError] = useState('');
   const invite = context.purpose === 'invite';
   const name = [context.firstName, context.lastName].filter(Boolean).join(' ');
+  const legalBody = () => (legal?.required ? { acceptTerms, documents: legalVersions(legal.documents) } : null);
+
+  /** Новая редакция вышла, пока страница была открыта: показать её и спросить снова. */
+  const legalFailure = async (failure) => {
+    if (failure?.code !== 'terms_required' && failure?.code !== 'documents_changed') return false;
+    if (failure.code === 'documents_changed') {
+      try {
+        const fresh = await fetchActivationContext();
+        setLegal(fresh.context?.legal || legal);
+      } catch {
+        // Контекст истёк — следующая отправка покажет причину.
+      }
+      setAcceptTerms(false);
+    }
+    setFactor((current) => ({ ...current, open: false }));
+    setLegalError(failure.message);
+    setPending(false);
+    return true;
+  };
 
   useEffect(() => {
-    inputRef.current?.focus({ preventScroll: true });
-  }, []);
+    if (!factor.open) inputRef.current?.focus({ preventScroll: true });
+  }, [factor.open]);
+
+  const backToPassword = (message = '') => {
+    setFactor((current) => ({ ...current, open: false }));
+    setError(message);
+    setPending(false);
+  };
 
   const submit = async (event) => {
     event.preventDefault();
@@ -136,27 +176,63 @@ function PasswordStep({ context, onDone, onProblem }) {
       inputRef.current?.focus();
       return;
     }
-    setPending(true);
     setError('');
+    if (legal?.required && !acceptTerms) {
+      setLegalError('Чтобы продолжить, примите пользовательское соглашение.');
+      return;
+    }
+    setLegalError('');
+    if (context.mfa?.required) {
+      setFactor((current) => ({ ...current, open: true }));
+      return;
+    }
+    setPending(true);
     try {
-      const result = await completeActivation(password);
+      const result = await completeActivation(password, null, legalBody());
       onDone(result);
     } catch (failure) {
+      if (await legalFailure(failure)) return;
       if (failure?.code === 'weak_password' || failure?.code === 'busy') {
         setError(failure.message);
         setPending(false);
         inputRef.current?.focus();
         return;
       }
+      if (failure?.code === 'mfa_required') {
+        // MFA включили, пока ссылка была открыта: пароль не изменён, нужен второй фактор.
+        setFactor({ open: true, methods: failure.payload?.methods || [] });
+        setPending(false);
+        return;
+      }
       onProblem(failure);
     }
   };
+
+  const submitFactor = async (secondFactor) => {
+    try {
+      onDone(await completeActivation(password, secondFactor, legalBody()));
+    } catch (failure) {
+      if (FACTOR_RETRY.has(failure?.code)) throw failure;
+      if (await legalFailure(failure)) return;
+      if (failure?.code === 'weak_password' || failure?.code === 'busy') {
+        backToPassword(failure.message);
+        return;
+      }
+      // Ссылка погашена после пяти неверных кодов.
+      onProblem(failure?.code === 'link_revoked' ? { code: 'mfa_failed' } : failure);
+    }
+  };
+
+  if (factor.open) {
+    return <FactorStep context={context} methods={factor.methods} onSubmit={submitFactor} onBack={() => backToPassword()} />;
+  }
 
   return (
     <form onSubmit={submit} noValidate data-testid="activation-password">
       <Heading focus={false}>{invite ? 'Придумайте пароль' : 'Новый пароль'}</Heading>
       <p className="mt-3 text-[15px] leading-[22px] text-slate-600 dark:text-slate-300">
         С ним вы будете входить в МедКарту по email. Время на этот шаг — до {formatMoscow(context.expiresAt, false)}.
+        {context.mfa?.required ? ' Затем подтвердите смену вторым фактором.' : ''}
       </p>
       <AccountRow email={context.email} name={name} />
       {/* Менеджер паролей сохранит новый пароль под этим адресом. */}
@@ -176,9 +252,26 @@ function PasswordStep({ context, onDone, onProblem }) {
         data-testid="activation-password-input"
       />
       <PasswordRequirements id={requirementsId} password={password} email={context.email} />
+      <PasswordStrength password={password} email={context.email} />
       <div className="mt-4"><FormError id={errorId} message={error} /></div>
+      {legal?.required && (
+        <div className="mt-4">
+          <LegalAcceptance
+            documents={legal.documents}
+            checked={acceptTerms}
+            onChange={(value) => {
+              setAcceptTerms(value);
+              if (value) setLegalError('');
+            }}
+            error={legalError}
+            action={context.mfa?.required ? 'Продолжить' : 'Сохранить пароль и войти'}
+          />
+        </div>
+      )}
       <Motion.div layout="position" className="mt-5">
-        <AuthButton type="submit" icon={LogIn} loading={pending} loadingLabel="Сохраняем…" data-testid="activation-submit">Сохранить пароль и войти</AuthButton>
+        <AuthButton type="submit" icon={LogIn} loading={pending} loadingLabel="Сохраняем…" data-testid="activation-submit">
+          {context.mfa?.required ? 'Продолжить' : 'Сохранить пароль и войти'}
+        </AuthButton>
       </Motion.div>
     </form>
   );

@@ -16,14 +16,14 @@ export const ALLOWED_FIELDS = new Set([
   'request_id', 'requestId', 'session_ref', 'event', 'level', 'ts',
   'decision', 'reason', 'intent', 'action', 'policy_version', 'policyVersion',
   'pii_detected', 'piiDetected', 'redacted_entities', 'redactedEntities',
-  'placeholders', 'redaction_ratio', 'redactionRatio', 'medical_text', 'medicalText',
-  'emergency', 'status', 'code', 'provider', 'kinds', 'error_code', 'errorCode',
+  'placeholders', 'redaction_ratio', 'redactionRatio',
+  'status', 'code', 'provider', 'kinds', 'error_code', 'errorCode',
   'latency_ms', 'latencyMs', 'planner_ms', 'plannerMs', 'stops', 'candidates',
-  'relaxed', 'ambiguous', 'missing_specialties', 'missingSpecialties',
+  'relaxed', 'ambiguous',
   'prompt_tokens', 'promptTokens', 'completion_tokens', 'completionTokens',
   'plan_source', 'planSource', 'rejected', 'rejected_reason', 'rejectedReason',
   'vault_backend', 'vaultBackend', 'routing_provider', 'routingProvider',
-  'specialties', 'constraint_keys', 'constraintKeys', 'steps', 'count',
+  'constraint_keys', 'constraintKeys', 'steps', 'count',
   // Размер графа дорог: числа, к пользователю отношения не имеют.
   'nodes', 'edges', 'memory_mb',
   // Время в пути и аналитика: профиль, потолок, число отброшенных событий.
@@ -37,6 +37,9 @@ const FORBIDDEN_FIELDS = new Set([
   'name', 'doctor', 'doctor_name', 'patient', 'phone', 'email', 'address',
   'lat', 'lng', 'coords', 'location', 'token', 'tokens', 'mapping', 'vault',
   'session_id', 'sessionId', 'ip', 'user_agent', 'userAgent', 'body', 'stack',
+  // Признаки здоровья: строка журнала по времени сопоставима с журналом nginx (IP).
+  'medical_text', 'medicalText', 'emergency', 'specialties', 'specialty', 'missing_specialties',
+  'missingSpecialties', 'symptoms', 'diagnosis',
 ]);
 
 const MAX_STRING = 120;

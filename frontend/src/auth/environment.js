@@ -15,7 +15,8 @@ import { fetchAccount, fetchPublicConfig } from '../services/account';
 export const safeNext = (value) => {
   if (typeof value !== 'string' || value.length > 512) return null;
   if (!/^\/(?![/\\])/u.test(value) || /[\s\\]/u.test(value)) return null;
-  if (value.startsWith('/api/') || value === '/login' || value.startsWith('/login?') || value.startsWith('/activate')) return null;
+  // Страницы входа, регистрации и ссылок из писем — не цель возврата (иначе круг или повторное открытие ссылки).
+  if (value.startsWith('/api/') || /^\/(?:login|activate|register|email\/confirm)(?:[/?#]|$)/u.test(value)) return null;
   return value;
 };
 

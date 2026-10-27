@@ -21,6 +21,7 @@ import {
   AccountError, AUTH_EVENT_LABELS, authEventView, checkEmail, cleanPersonName, fail, maskEmail, moscowDay, sessionView, userLabel,
 } from './service.js';
 import { searchTextOf } from './sqliteStore.js';
+import { emailKey } from './throttle.js';
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -62,6 +63,13 @@ export const AUDIT_ACTIONS = Object.freeze({
   'roles.reset': 'Сброс разрешений роли',
   'settings.update': 'Изменение настроек',
   'account.bootstrap': 'Создание главного администратора',
+  'user.register': 'Регистрация',
+  'user.email_change': 'Смена email пользователем',
+  'user.login_unlock': 'Снятие ограничений входа',
+  'user.mfa_reset': 'Сброс факторов входа',
+  'mfa.enable': 'Добавлен фактор входа',
+  'mfa.disable': 'Удалён фактор входа',
+  'mfa.recovery_codes': 'Новые резервные коды',
 });
 
 /** Московская полночь, с которой начинается день метки ms. */
@@ -82,7 +90,7 @@ const csvCell = (value) => {
  * @param {() => Promise<object>} [deps.systemInfo] состояние компонентов для дашборда
  */
 export const createAdminService = ({
-  store, accounts, invitations = null, onAccountDeleted = async () => {}, systemInfo = async () => null, now = () => Date.now(),
+  store, accounts, invitations = null, onAccountDeleted = async () => {}, systemInfo = async () => null, throttle = null, now = () => Date.now(),
 }) => {
   const settings = accounts.settings;
 
@@ -172,6 +180,11 @@ export const createAdminService = ({
     // Пароль ещё не задан: аккаунт создан администратором и ждёт активации по ссылке.
     pending: !user.demoTemplate && !user.activatedAt,
     activatedAt: iso(user.activatedAt),
+    emailVerified: Boolean(user.emailVerifiedAt),
+    emailVerifiedAt: iso(user.emailVerifiedAt),
+    signupSource: user.signupSource || null,
+    // Второй фактор: только факт и число — ни секретов, ни идентификаторов ключей.
+    mfa: securityView(user),
     blockedUntil: iso(user.blockedUntil),
     blockReason: user.blockReason || null,
     mustChangePassword: user.mustChangePassword,
@@ -189,6 +202,25 @@ export const createAdminService = ({
     isSelf: actor ? actor.id === user.id : false,
   });
 
+  /** MFA и ограничения входа — для списка и карточки. */
+  const securityView = (user) => {
+    if (user.demoTemplate) return { enabled: false, factors: 0, required: false };
+    const factors = store.countActiveFactors ? store.countActiveFactors(user.id) : 0;
+    return { enabled: factors > 0, factors, required: accounts.isStaff ? accounts.isStaff(user) : false };
+  };
+
+  const loginLimitsOf = (user) => {
+    if (!throttle || user.demoTemplate) return null;
+    const status = throttle.accountStatus(emailKey(user.email));
+    return {
+      accountLockedUntil: iso(status.accountLockedUntil),
+      mfaLockedUntil: iso(status.mfaLockedUntil),
+      lockedPlaces: status.lockedPlaces,
+      recentFailures: status.recentFailures,
+      active: Boolean(status.accountLockedUntil || status.mfaLockedUntil || status.lockedPlaces > 0),
+    };
+  };
+
   /** Что actor может сделать с target — для кнопок интерфейса (сервер всё равно проверит). */
   const capabilities = (actor, target) => {
     const manage = !target.demoTemplate && canManage(actor, target);
@@ -198,6 +230,9 @@ export const createAdminService = ({
       changeRole: manage && has(actor, 'roles.assign'),
       assignableRoles: manage && has(actor, 'roles.assign') ? ROLES.filter((role) => canAssign(actor, role)) : [],
       block: manage && has(actor, 'users.block'),
+      unlockLogin: manage && has(actor, 'users.block'),
+      // Сброс второго фактора из панели — только «Пользователям»; сотрудникам — на сервере.
+      mfaReset: manage && has(actor, 'users.password') && !(accounts.isStaff && accounts.isStaff(target)),
       password: manage && has(actor, 'users.password'),
       invite: manage && has(actor, 'users.password') && target.status === 'active',
       sessions: (manage || actor.id === target.id) && has(actor, 'users.sessions'),
@@ -325,7 +360,11 @@ export const createAdminService = ({
       const user = findUser(id);
       const sessions = store.listUserSessions(user.id, now());
       return {
-        user: { ...adminUserView({ ...user, activeSessions: sessions.length }, actor), createdBy: user.createdBy ? userLabel(store.getUserById(user.createdBy)) || 'удалённый пользователь' : null },
+        user: {
+          ...adminUserView({ ...user, activeSessions: sessions.length }, actor),
+          createdBy: user.createdBy ? userLabel(store.getUserById(user.createdBy)) || 'удалённый пользователь' : null,
+          loginLimits: loginLimitsOf(user),
+        },
         can: capabilities(actor, user),
         permissions: permissionsOf(user.role, Object.fromEntries(Object.entries(store.listRoleOverrides()).map(([role, row]) => [role, row.permissions]))),
       };
@@ -400,12 +439,17 @@ export const createAdminService = ({
           searchText: searchTextOf({ firstName: first, lastName: last, email: address, id: target.id }),
         }, { now: now(), expectedVersion: expected });
         if (!updated) fail('conflict', 409, 'Данные пользователя изменились — обновите страницу и повторите.');
-        // Ссылки выданы на прежний адрес — с новым email они не действуют.
-        if (fields.email) store.revokeUserAccessTokens(target.id, 'email_changed', now());
+        // Ссылки выданы на прежний адрес — с новым email они не действуют; новый адрес владелец ещё не подтверждал.
+        if (fields.email) {
+          store.revokeUserAccessTokens(target.id, 'email_changed', now());
+          store.updateUser(target.id, { emailVerifiedAt: null }, { now: now() });
+        }
         const details = { changed: Object.keys(fields) };
         if (fields.email) details.email = { from: maskEmail(target.email), to: maskEmail(address) };
         audit(actor, 'user.update', { target: { ...target, firstName: first, lastName: last, email: address }, details });
       });
+      // Прежний владелец адреса узнаёт о смене (письмо — на старый email).
+      if (fields.email) accounts.__internal?.notify?.(target, 'email_changed', { newEmail: maskEmail(address) });
       return this.getUser(actor, id);
     },
 
@@ -509,7 +553,42 @@ export const createAdminService = ({
       if (!['auto', 'manual'].includes(delivery)) fail('bad_request', 400, 'Способ доставки: auto или manual.');
       const target = manageable(actor, id, 'user.invite');
       const issued = await requireInvitations().issue({ user: target, actor, source: 'admin', delivery, base });
+      // Ссылку для смены пароля администратор передаёт сам — владелец узнаёт об этом письмом (если почта есть).
+      if (issued.link && issued.invitation.purpose === 'reset') accounts.__internal?.notify?.(target, 'reset_link_issued', {});
       return { ...this.getUser(actor, id), invitation: issued.invitation, link: issued.link };
+    },
+
+    /**
+     * Процедура восстановления, если пользователь потерял все факторы входа
+     * и резервные коды: факторы и коды удаляются, все сессии и доверенные
+     * устройства завершаются, владельцу — письмо. Только для аккаунтов
+     * «Пользователь» ниже по роли (сотрудникам — лишь командой mfa-reset на
+     * сервере), только с правом users.password и свежим подтверждением
+     * личности администратора, с вводом email и причиной в журнал. Личность
+     * владельца администратор подтверждает вне системы — порядок в
+     * docs/admin-security-runbook.md. Пароль при этом не меняется.
+     */
+    resetUserMfa(actor, id, body = {}) {
+      requirePermission(actor, 'users.password', { action: 'user.mfa_reset' });
+      const { confirmEmail, reason } = onlyFields(body, ['confirmEmail', 'reason']);
+      const target = manageable(actor, id, 'user.mfa_reset');
+      if (accounts.isStaff?.(target)) {
+        denyChange(actor, 'user.mfa_reset', target, 'Второй фактор сотрудника сбрасывается только на сервере: npm run accounts -- mfa-reset.', 'staff_mfa_reset');
+      }
+      if (typeof confirmEmail !== 'string' || confirmEmail.trim().toLowerCase() !== target.email) fail('confirm_mismatch', 400, 'Введите email пользователя для подтверждения.');
+      const why = typeof reason === 'string' ? reason.trim() : '';
+      if (why.length < 5 || why.length > 300) fail('bad_reason', 400, 'Укажите причину: как подтверждена личность владельца (5–300 символов).');
+      if (!accounts.mfa || !accounts.mfa.hasMfa(target.id)) fail('mfa_not_enabled', 409, 'У пользователя двухфакторная защита не включена.');
+      const removed = store.transaction(() => {
+        const count = accounts.mfa.resetAll(target.id);
+        store.deleteUserSessions(target.id);
+        store.deleteUserDevices(target.id);
+        audit(actor, 'user.mfa_reset', { target, details: { factors: count, reason: why, via: 'admin' } });
+        store.addAuthEvent({ at: now(), type: 'mfa_reset', userId: target.id, reason: 'admin' });
+        return count;
+      });
+      accounts.__internal?.notify?.(target, 'mfa_reset', {});
+      return { ...this.getUser(actor, id), removed };
     },
 
     userInvitations(actor, id) {
@@ -553,13 +632,27 @@ export const createAdminService = ({
       const target = manageable(actor, id, 'user.sessions_revoke');
       const revoked = store.transaction(() => {
         const count = store.deleteUserSessions(target.id);
-        // «Завершить все сессии» — и ссылки для смены пароля: по ним тоже можно войти.
+        // «Завершить все сессии» — и ссылки для смены пароля: по ним тоже можно войти;
+        // и доверенные устройства: их могли «присвоить» при компрометации.
         store.revokeUserAccessTokens(target.id, 'sessions_revoked', now(), { purpose: 'reset' });
+        store.deleteUserDevices?.(target.id);
         audit(actor, 'user.sessions_revoke', { target, details: { count } });
         store.addAuthEvent({ at: now(), type: 'sessions_revoked', userId: target.id, reason: 'admin' });
         return count;
       });
       return { revoked };
+    },
+
+    /** Снять временные ограничения входа (счётчики неудачных попыток) — например, после звонка владельца. */
+    unlockLogin(actor, id) {
+      requirePermission(actor, 'users.block', { action: 'user.login_unlock' });
+      const target = manageable(actor, id, 'user.login_unlock');
+      const cleared = throttle ? throttle.clearAccount(emailKey(target.email)) : 0;
+      store.transaction(() => {
+        audit(actor, 'user.login_unlock', { target, details: { cleared } });
+        store.addAuthEvent({ at: now(), type: 'login_unlocked', userId: target.id, reason: 'admin' });
+      });
+      return this.getUser(actor, id);
     },
 
     /** Отозвать одну сессию: свою — всегда, чужую — если можно управлять её владельцем. */
@@ -587,10 +680,11 @@ export const createAdminService = ({
         fail('confirm_required', 400, 'Для удаления введите email пользователя.');
       }
       guarded(actor, 'user.delete', target, () => {
-        store.deleteUserAuthEvents(target.id);
-        store.deleteUser(target.id);
-        audit(actor, 'user.delete', { target, details: { role: target.role } });
+        accounts.__internal.eraseUser(target, { method: 'admin_deleted' }, () => {
+          audit(actor, 'user.delete', { target, details: { role: target.role } });
+        });
       });
+      accounts.__internal.recordErasure(target.id);
       await onAccountDeleted(target.id);
       return { deleted: true };
     },
