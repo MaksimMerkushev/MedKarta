@@ -32,7 +32,8 @@ export const LEGAL_PREFIX = '/api/legal';
 export const PRIVACY_PREFIX = '/api/privacy';
 
 const MAX_BODY_BYTES = 8 * 1024;
-const defaultLimit = createRateLimiter({ maxPerIp: 120, maxPerInstance: Number.POSITIVE_INFINITY });
+// Документы открывают при входе и регистрации — для зала на одном Wi-Fi лимит умножается из админ-панели.
+const defaultLimit = createRateLimiter({ maxPerIp: 120, maxPerInstance: Number.POSITIVE_INFINITY, scaled: true });
 
 const route = createRouter([
   ['GET', '/api/legal', 'documents'],

@@ -215,6 +215,35 @@ describe('очередь к ассистенту', () => {
   });
 });
 
+describe('защита входа для зала на одном адресе', () => {
+  const failFrom = (throttle, ip, email) => {
+    const parts = { ipKey: throttle.keys.ipKeyOf(ip), accountKey: throttle.keys.emailKey(email), deviceKey: null };
+    throttle.recordFailure(parts);
+    return parts;
+  };
+
+  it('×1: ошибки в 20 разных аккаунтах с одного адреса закрывают адрес', () => {
+    const { throttle } = createAccountContext({ store: createSqliteAccountStore({ DatabaseSync, file: ':memory:' }) });
+    let parts = null;
+    for (let index = 0; index < 20; index += 1) parts = failFrom(throttle, '10.20.0.1', `guest${index}@medkarta.test`);
+    assert.equal(throttle.check(parts).scope, 'ip');
+  });
+
+  it('×20: зал ошибается в паролях — адрес открыт, подбор одного аккаунта по-прежнему останавливается', () => {
+    const { throttle, settings } = createAccountContext({ store: createSqliteAccountStore({ DatabaseSync, file: ':memory:' }) });
+    settings.update({ 'limits.ipScale': 20 }, 'root');
+    let parts = null;
+    for (let index = 0; index < 60; index += 1) parts = failFrom(throttle, '10.20.0.2', `guest${index}@medkarta.test`);
+    assert.equal(throttle.check(parts).allowed, true, '60 человек ошиблись по разу — вход открыт');
+    let target = null;
+    for (let index = 0; index < 5; index += 1) target = failFrom(throttle, '10.20.0.2', 'victim@medkarta.test');
+    assert.equal(throttle.check(target).scope, 'ipacct', 'пара «адрес + аккаунт» множитель не трогает');
+    // Перебор многих аккаунтов всё равно упирается в порог адреса: 20 × 20 разных аккаунтов.
+    for (let index = 60; index < 400; index += 1) parts = failFrom(throttle, '10.20.0.2', `guest${index}@medkarta.test`);
+    assert.equal(throttle.check(parts).scope, 'ip');
+  });
+});
+
 describe('связка с кабинетом', () => {
   it('сохранение в админ-панели сразу меняет лимиты сервера', () => {
     const context = createAccountContext({ store: createSqliteAccountStore({ DatabaseSync, file: ':memory:' }) });

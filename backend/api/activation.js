@@ -37,7 +37,7 @@
 
 import { AccountError, EMAIL_PATTERN, hashToken, normalizeEmail } from '../accounts/service.js';
 import { respondJson } from '../http/request.js';
-import { createRateLimiter, getClientIp } from '../http/rateLimit.js';
+import { createRateLimiter, getClientIp, ipLimitScale } from '../http/rateLimit.js';
 import { logger } from '../observability/safeLogger.js';
 import { metrics } from '../observability/metrics.js';
 import { getAccountContext } from './accountContext.js';
@@ -92,10 +92,12 @@ export const ACTIVATION_PATHS = Object.freeze([...ROUTES.keys()]);
 /*
  * Лимиты: 30 запросов к ссылкам за 15 минут с адреса (токен — 256 бит,
  * перебор бессмыслен, но и пробовать незачем); запрос ссылки на почту —
- * 5 за 15 минут с адреса и 3 в час на один email.
+ * 5 за 15 минут с адреса и 3 в час на один email. Лимиты на адрес умножаются
+ * на «Множитель лимитов на один адрес» из админ-панели (зал на одном Wi-Fi);
+ * лимиты на один email — нет.
  */
-const defaultActivationLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, maxPerIp: 30, maxPerInstance: Number.POSITIVE_INFINITY });
-const defaultRequestLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, maxPerIp: 5, maxPerInstance: Number.POSITIVE_INFINITY });
+const defaultActivationLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, maxPerIp: 30, maxPerInstance: Number.POSITIVE_INFINITY, scaled: true });
+const defaultRequestLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, maxPerIp: 5, maxPerInstance: Number.POSITIVE_INFINITY, scaled: true });
 
 /** Счётчик запросов ссылки по email — одинаковый для существующих и несуществующих адресов. */
 export const createEmailWindow = ({ windowMs = 60 * 60 * 1000, max = 3, maxTracked = 10_000, now = () => Date.now() } = {}) => {
@@ -164,8 +166,9 @@ export const createActivationHandler = ({
     const registerCookie = (value, maxAgeSeconds) => cookie(req, regCookieName, value, maxAgeSeconds, { path: REGISTER_PATH, sameSite: 'Strict' });
     const currentRegistration = () => (cookieCount(req.headers.cookie, regCookieName) === 1 ? parseCookies(req.headers.cookie)[regCookieName] : null);
     const client = clientContext(req);
-    // Постоянный лимит писем с адреса (переживает перезапуск): 10 в час.
-    const sourceAllowed = (prefix) => !throttle || throttle.consume(`${prefix}:${client.ipKey}`, { limit: 10, windowMs: HOUR_MS }).allowed;
+    // Постоянный лимит писем с адреса (переживает перезапуск): 10 в час, с множителем из админ-панели —
+    // для зала на одном Wi-Fi. Лимиты на один email (REGISTRATION_LIMITS) от множителя не зависят.
+    const sourceAllowed = (prefix) => !throttle || throttle.consume(`${prefix}:${client.ipKey}`, { limit: Math.round(10 * ipLimitScale()), windowMs: HOUR_MS }).allowed;
 
     try {
       // Ответ ключа доступа — до нескольких КБ.
