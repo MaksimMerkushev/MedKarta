@@ -36,9 +36,10 @@ const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const MAX_BODY_BYTES = 16 * 1024;
 
 /* Подбор считает время в пути — дороже чтения; запись — реже всего. */
-const defaultSearchLimit = createRateLimiter({ maxPerIp: 120, maxPerInstance: Number.POSITIVE_INFINITY });
-const defaultReadLimit = createRateLimiter({ maxPerIp: 600, maxPerInstance: Number.POSITIVE_INFINITY });
-const defaultWriteLimit = createRateLimiter({ maxPerIp: 60, maxPerInstance: Number.POSITIVE_INFINITY });
+// Лимиты подбора и записи умножаются на «Множитель лимитов на один адрес» из админ-панели.
+const defaultSearchLimit = createRateLimiter({ maxPerIp: 120, maxPerInstance: Number.POSITIVE_INFINITY, scaled: true });
+const defaultReadLimit = createRateLimiter({ maxPerIp: 600, maxPerInstance: Number.POSITIVE_INFINITY, scaled: true });
+const defaultWriteLimit = createRateLimiter({ maxPerIp: 60, maxPerInstance: Number.POSITIVE_INFINITY, scaled: true });
 
 const ROUTES = new Map([
   ['/api/demo/search', { POST: 'search' }],

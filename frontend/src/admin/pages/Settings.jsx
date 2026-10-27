@@ -6,7 +6,7 @@
  * ключей API и секретов здесь нет и не будет.
  */
 import { useMemo, useState } from 'react';
-import { RotateCcw, Save } from 'lucide-react';
+import { Presentation, RotateCcw, Save } from 'lucide-react';
 
 import { api, useApi } from '../api';
 import { Badge, Button, Card, ConfirmDialog, ErrorState, inputClass, Skeleton, Toggle } from '../../ui/kit';
@@ -28,6 +28,21 @@ export default function SettingsPage() {
   const set = (key, next) => {
     setDraft((current) => ({ ...current, [key]: next }));
     setErrors((current) => ({ ...current, [key]: undefined }));
+  };
+  // «Для показа» только поднимает лимиты: значение выше рекомендованного не снижается.
+  const fill = (list, pick) => {
+    setDraft((current) => ({ ...current, ...Object.fromEntries(list.map((item) => [item.key, pick(item)])) }));
+    setErrors((current) => ({ ...current, ...Object.fromEntries(list.map((item) => [item.key, undefined])) }));
+  };
+  const groupActions = (list) => {
+    const presets = list.filter((item) => item.demoValue !== null && item.demoValue !== undefined);
+    if (!editable || presets.length === 0) return null;
+    return (
+      <>
+        <Button icon={Presentation} onClick={() => fill(presets, (item) => Math.max(Number(value(item)) || 0, item.demoValue))} data-testid="settings-demo-preset">Для показа</Button>
+        <Button icon={RotateCcw} onClick={() => fill(presets, (item) => item.defaultValue)} data-testid="settings-default-preset">Обычный режим</Button>
+      </>
+    );
   };
 
   if (error && !data) return <Card><ErrorState error={error} onRetry={reload} /></Card>;
@@ -54,7 +69,7 @@ export default function SettingsPage() {
         <p className="rounded-xl bg-slate-100 px-3 py-2 text-[13px] text-slate-600 dark:bg-slate-900 dark:text-slate-300">Только просмотр: менять настройки может суперадминистратор.</p>
       )}
       {groups.map((group) => (
-        <Card key={group} title={group}>
+        <Card key={group} title={group} actions={groupActions(items.filter((item) => item.group === group))}>
           <div className="divide-y divide-slate-100 dark:divide-slate-800">
             {items.filter((item) => item.group === group).map((item) => (
               <div key={item.key} className="py-3 first:pt-0 last:pb-0" data-testid={`setting-${item.key}`}>

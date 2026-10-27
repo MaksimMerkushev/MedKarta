@@ -14,6 +14,31 @@ const MAX_TRACKED_IPS = 20_000;
 const prune = (list, now, windowMs) => list.filter((timestamp) => now - timestamp < windowMs);
 
 /*
+ * Лимиты, которые меняются из админ-панели без перезапуска («Нагрузка и
+ * лимиты», «ИИ-модель»): сервер при запуске передаёт сюда чтение настроек.
+ * Без кабинета (ACCOUNTS=off, нет node:sqlite) действуют значения по
+ * умолчанию — те же, что и в коде.
+ */
+let readSetting = null;
+export const setLimitSettings = (getter) => {
+  readSetting = typeof getter === 'function' ? getter : null;
+};
+export const liveSetting = (key, fallback) => {
+  try {
+    const value = readSetting?.(key);
+    return Number.isFinite(value) ? value : fallback;
+  } catch {
+    return fallback;
+  }
+};
+/*
+ * Множитель лимитов на один адрес. Весь зал на одном Wi-Fi — один адрес: на
+ * показе ×20 даёт ассистенту 800 сообщений за 5 минут вместо 40. Общий
+ * предохранитель нагрузки (heavyWork) от множителя не зависит.
+ */
+export const ipLimitScale = () => Math.min(50, Math.max(1, liveSetting('limits.ipScale', 1)));
+
+/*
  * При переполнении вытесняются самые давние записи, а не вся карта: иначе
  * запросами с тысяч адресов можно обнулить счётчики всех клиентов, включая
  * свой. Map хранит порядок вставки, активные ключи переставляются в конец.
@@ -51,7 +76,10 @@ export const createRateLimiter = ({
   maxPerIp = MAX_PER_IP,
   maxPerInstance = MAX_PER_INSTANCE,
   maxTrackedIps = MAX_TRACKED_IPS,
+  // true — лимит на адрес умножается на «Множитель лимитов на один адрес» из админ-панели.
+  scaled = false,
 } = {}) => {
+  const limitPerIp = () => (scaled ? Math.round(maxPerIp * ipLimitScale()) : maxPerIp);
   const hits = new Map();
   let instanceHits = [];
   // Общий счётчик ведётся, только если потолок задан: фильтрация десятков
@@ -68,7 +96,8 @@ export const createRateLimiter = ({
     }
 
     const previous = prune(hits.get(ip) || [], now, windowMs);
-    if (previous.length >= maxPerIp) {
+    const perIp = limitPerIp();
+    if (previous.length >= perIp) {
       const retryAfterSeconds = Math.max(1, Math.ceil((windowMs - (now - previous[0])) / 1000));
       touch(hits, ip, previous, maxTrackedIps);
       return { allowed: false, retryAfterSeconds, remaining: 0 };
@@ -78,7 +107,7 @@ export const createRateLimiter = ({
     touch(hits, ip, previous, maxTrackedIps);
     if (instanceCapped) instanceHits.push(now);
 
-    return { allowed: true, retryAfterSeconds: 0, remaining: maxPerIp - previous.length };
+    return { allowed: true, retryAfterSeconds: 0, remaining: perIp - previous.length };
   };
 };
 
@@ -92,13 +121,17 @@ export const createCostLimiter = ({
   capacityMs = 1_500,
   refillMsPerSecond = 50,
   maxTrackedIps = MAX_TRACKED_IPS,
+  scaled = false,
 } = {}) => {
   const buckets = new Map();
+  // С множителем растут и объём «ведра», и скорость пополнения.
+  const scale = () => (scaled ? ipLimitScale() : 1);
 
   const level = (key, now) => {
+    const capacity = capacityMs * scale();
     const bucket = buckets.get(key);
-    if (!bucket) return capacityMs;
-    return Math.min(capacityMs, bucket.level + ((now - bucket.at) / 1000) * refillMsPerSecond);
+    if (!bucket) return capacity;
+    return Math.min(capacity, bucket.level + ((now - bucket.at) / 1000) * refillMsPerSecond * scale());
   };
 
   return Object.freeze({
@@ -106,7 +139,7 @@ export const createCostLimiter = ({
       const key = rateLimitKey(address);
       const available = level(key, now);
       if (available > 0) return { allowed: true, retryAfterSeconds: 0 };
-      return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil(-available / refillMsPerSecond) + 1) };
+      return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil(-available / (refillMsPerSecond * scale())) + 1) };
     },
     charge(address, costMs, now = Date.now()) {
       const key = rateLimitKey(address);
@@ -115,14 +148,14 @@ export const createCostLimiter = ({
   });
 };
 
-export const routeCpuLimiter = createCostLimiter();
+export const routeCpuLimiter = createCostLimiter({ scaled: true });
 
 /*
  * Бюджет процессора ассистента. Обычный запрос разбирается за 5–50 мс, а
  * реплики, подобранные под нечёткий поиск фамилий, — до 0,8 с. Ведро в 3 с
  * с пополнением 30 мс/с пропускает живой диалог и останавливает перебор.
  */
-export const chatCpuLimiter = createCostLimiter({ capacityMs: 3_000, refillMsPerSecond: 30 });
+export const chatCpuLimiter = createCostLimiter({ capacityMs: 3_000, refillMsPerSecond: 30, scaled: true });
 
 /**
  * Общий предохранитель тяжёлой работы на весь процесс: лимиты «на адрес» не
@@ -165,6 +198,7 @@ export const ROUTING_LOAD_SHARE = 0.85;
 // Бюджет маршрутизации шире: расчёт локальный, но идёт при каждом изменении точек.
 export const checkRouteRateLimit = createRateLimiter({
   maxPerIp: 120,
+  scaled: true,
   // Без общего потолка: его выбирали бы несколько адресов, и маршруты
   // переставали бы строиться у всех. Процессор ограничивает routeCpuLimiter.
   maxPerInstance: Number.POSITIVE_INFINITY,
@@ -247,7 +281,7 @@ export const CHAT_MAX_PER_IP = 40;
  *
  * @returns {{ allowed: boolean, retryAfterSeconds: number, remaining: number }}
  */
-export const checkRateLimit = createRateLimiter({ maxPerIp: CHAT_MAX_PER_IP, maxPerInstance: Number.POSITIVE_INFINITY });
+export const checkRateLimit = createRateLimiter({ maxPerIp: CHAT_MAX_PER_IP, maxPerInstance: Number.POSITIVE_INFINITY, scaled: true });
 
 /**
  * Бюджет обращений к внешней модели на процесс. Расходуется, только когда
@@ -256,9 +290,10 @@ export const checkRateLimit = createRateLimiter({ maxPerIp: CHAT_MAX_PER_IP, max
  */
 export const createBudget = ({ windowMs = WINDOW_MS, max = MAX_PER_INSTANCE } = {}) => {
   let taken = [];
+  const limit = typeof max === 'function' ? max : () => max;
   return (now = Date.now()) => {
     taken = prune(taken, now, windowMs);
-    if (taken.length >= max) return false;
+    if (taken.length >= limit()) return false;
     taken.push(now);
     return true;
   };
@@ -271,7 +306,7 @@ export const createBudget = ({ windowMs = WINDOW_MS, max = MAX_PER_INSTANCE } = 
  * расходов стоит включить и в кабинете провайдера модели.
  */
 const DAY_MS = 24 * 60 * 60 * 1000;
-const dailyCallLimit = () => {
+export const dailyCallLimit = () => {
   const value = Number.parseInt(process.env.AI_DAILY_CALL_LIMIT ?? '', 10);
   return Number.isFinite(value) && value >= 0 ? value : 2000;
 };
@@ -288,6 +323,14 @@ export const createExternalBudget = ({ windowMs = WINDOW_MS, max = MAX_PER_INSTA
   };
 };
 
-export const takeExternalBudget = createExternalBudget();
+/*
+ * Значения из админ-панели («ИИ-модель») важнее переменных окружения. Когда
+ * бюджет выбран, ассистент не отказывает — отвечает по локальному плану.
+ */
+export const AI_CALLS_PER_WINDOW = MAX_PER_INSTANCE;
+export const takeExternalBudget = createExternalBudget({
+  max: () => liveSetting('ai.callsPer5Min', AI_CALLS_PER_WINDOW),
+  dailyLimit: () => liveSetting('ai.dailyCallLimit', dailyCallLimit()),
+});
 
 export const RATE_LIMIT_CONFIG = { WINDOW_MS, MAX_PER_IP, MAX_PER_INSTANCE };

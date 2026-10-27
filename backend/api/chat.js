@@ -15,7 +15,7 @@
 
 import { validateChatMessages } from '../../shared/contract.js';
 import { readBody, respondJson, verifyOrigin } from '../http/request.js';
-import { chatCpuLimiter, checkRateLimit, getClientIp, heavyWork, takeExternalBudget } from '../http/rateLimit.js';
+import { chatCpuLimiter, checkRateLimit, getClientIp, heavyWork, liveSetting, takeExternalBudget } from '../http/rateLimit.js';
 import { getDefaultPipeline } from '../pipeline.js';
 import { logger } from '../observability/safeLogger.js';
 import { metrics } from '../observability/metrics.js';
@@ -56,12 +56,14 @@ const readCoarseOrigin = (raw) => {
  * процессора.
  */
 const MAX_ACTIVE = Math.max(1, Number.parseInt(process.env.CHAT_MAX_CONCURRENCY ?? '', 10) || 1);
+// Очередь ожидающих разбора — из админ-панели («Очередь к ассистенту»), по умолчанию 16.
 const MAX_QUEUE = 16;
 const QUEUE_WAIT_MS = 8_000;
 
 export const createCpuQueue = ({ maxActive = MAX_ACTIVE, maxQueue = MAX_QUEUE, waitMs = QUEUE_WAIT_MS } = {}) => {
   let active = 0;
   const queue = [];
+  const queueLimit = typeof maxQueue === 'function' ? maxQueue : () => maxQueue;
 
   const release = () => {
     const next = queue.shift();
@@ -80,7 +82,7 @@ export const createCpuQueue = ({ maxActive = MAX_ACTIVE, maxQueue = MAX_QUEUE, w
         resolve();
         return;
       }
-      if (queue.length >= maxQueue) {
+      if (queue.length >= queueLimit()) {
         reject(Object.assign(new Error('busy'), { code: 'busy' }));
         return;
       }
@@ -108,7 +110,7 @@ export const createCpuQueue = ({ maxActive = MAX_ACTIVE, maxQueue = MAX_QUEUE, w
   });
 };
 
-const cpuQueue = createCpuQueue();
+const cpuQueue = createCpuQueue({ maxQueue: () => liveSetting('limits.chatQueue', MAX_QUEUE) });
 
 const respondBusy = (res) => {
   res.setHeader('Retry-After', String(heavyWork.retryAfterSeconds));

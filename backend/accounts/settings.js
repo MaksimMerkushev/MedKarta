@@ -40,6 +40,15 @@ export const SETTINGS = Object.freeze([
   { key: 'maintenance.message', group: 'Технические работы', label: 'Текст сообщения', type: 'textarea', default: 'Идут технические работы — часть функций может быть недоступна.', public: true, validate: text(280) },
   { key: 'assistant.enabled', group: 'Функции', label: 'ИИ-ассистент включён', type: 'boolean', default: true, public: true, validate: boolean, description: 'Выключение сразу закрывает /api/chat для всех.' },
   { key: 'assistant.requiresAccount', group: 'Функции', label: 'Ассистент только после входа', type: 'boolean', default: null, public: true, validate: boolean, description: 'По умолчанию — как в CHAT_REQUIRES_ACCOUNT (включено).' },
+  /*
+   * Нагрузка. Весь зал на одном Wi-Fi — один адрес: лимиты «на адрес» на
+   * показе делятся на всех. Меняются без перезапуска (http/rateLimit.js).
+   * demoValue — значения кнопки «Для показа» в админ-панели.
+   */
+  { key: 'limits.ipScale', group: 'Нагрузка и лимиты', label: 'Множитель лимитов на один адрес', type: 'number', default: 1, demoValue: 20, validate: integer(1, 50), description: 'Все, кто в одной сети (Wi-Fi в зале), считаются одним адресом. ×1 — обычная работа; для показа на 20–30 человек — ×20. Умножает лимиты ассистента (40 сообщений за 5 минут на адрес), подбора и записи, маршрутов, времени в пути, входа и регистрации. Защита от подбора пароля к одному аккаунту и общий предохранитель от перегрузки сервера работают при любом множителе.' },
+  { key: 'limits.chatQueue', group: 'Нагрузка и лимиты', label: 'Очередь к ассистенту, сообщений', type: 'number', default: 16, demoValue: 64, validate: integer(4, 200), description: 'Сколько сообщений могут ждать разбора одновременно; сверх очереди — «ассистент перегружен, повторите». Больше очередь — меньше отказов, но дольше ожидание в пике.' },
+  { key: 'ai.callsPer5Min', group: 'Нагрузка и лимиты', label: 'Обращений к ИИ-модели за 5 минут', type: 'number', default: 300, demoValue: 600, validate: integer(0, 5000), description: 'На весь сервер. Когда лимит выбран, ассистент не отказывает, а отвечает по локальному плану, без модели. 0 — модель не вызывается совсем.' },
+  { key: 'ai.dailyCallLimit', group: 'Нагрузка и лимиты', label: 'Обращений к ИИ-модели в сутки', type: 'number', default: null, demoValue: 5000, validate: integer(0, 100000), description: 'По умолчанию — AI_DAILY_CALL_LIMIT (2000). После лимита ассистент работает по локальному плану. Каждое обращение стоит денег — жёсткий лимит расходов задайте и в кабинете провайдера модели.' },
   { key: 'sessions.idleDays', group: 'Сессии и вход', label: 'Сессия без активности, дней', type: 'number', default: 14, validate: integer(1, 60), description: 'Каждый запрос продлевает сессию на этот срок.' },
   { key: 'sessions.maxDays', group: 'Сессии и вход', label: 'Предельный срок сессии, дней', type: 'number', default: 30, validate: integer(1, 90), description: 'После него нужен новый вход, даже при активности.' },
   { key: 'sessions.maxPerUser', group: 'Сессии и вход', label: 'Сессий на пользователя', type: 'number', default: 10, validate: integer(1, 50), description: 'Самая старая вытесняется новым входом.' },
@@ -53,7 +62,7 @@ export const SETTINGS = Object.freeze([
   { key: 'auth.emailChangeTtlMinutes', group: 'Приглашения', label: 'Срок ссылки для подтверждения нового email, минут', type: 'number', default: 60, validate: integer(15, 1440) },
   { key: 'retention.authEventsDays', group: 'Хранение журналов', label: 'История входов, дней', type: 'number', default: 90, validate: integer(30, 365) },
   { key: 'retention.auditDays', group: 'Хранение журналов', label: 'Журнал действий, дней', type: 'number', default: 365, validate: integer(90, 1825) },
-].map((item) => Object.freeze({ public: false, description: '', ...item })));
+].map((item) => Object.freeze({ public: false, description: '', demoValue: null, ...item })));
 
 const BY_KEY = new Map(SETTINGS.map((item) => [item.key, item]));
 
@@ -65,8 +74,10 @@ export const settingDefinition = (key) => BY_KEY.get(key) || null;
  * @param {object} [deps.env] для значений по умолчанию из окружения
  */
 export const createSettingsService = ({ store, env = process.env, now = () => Date.now() }) => {
+  const envDaily = Number.parseInt(env.AI_DAILY_CALL_LIMIT ?? '', 10);
   const envDefaults = {
     'assistant.requiresAccount': env.CHAT_REQUIRES_ACCOUNT !== 'off',
+    'ai.dailyCallLimit': Number.isFinite(envDaily) && envDaily >= 0 ? Math.min(envDaily, 100000) : 2000,
   };
   let cache = null;
   const load = () => {
@@ -109,6 +120,7 @@ export const createSettingsService = ({ store, env = process.env, now = () => Da
           public: definition.public,
           value: stored ? stored.value : defaultOf(definition),
           defaultValue: defaultOf(definition),
+          demoValue: definition.demoValue ?? null,
           customized: Boolean(stored),
           updatedAt: stored?.updatedAt ? new Date(stored.updatedAt).toISOString() : null,
           updatedBy: stored?.updatedBy || null,

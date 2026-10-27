@@ -67,6 +67,21 @@ export const createLoginThrottle = ({ store, settings = null, now = () => Date.n
         // Настройки недоступны — порог по умолчанию.
       }
     }
+    /*
+     * Зал на одном Wi-Fi — один адрес: «Множитель лимитов на один адрес» из
+     * админ-панели поднимает и порог адреса. Пара «адрес + аккаунт», аккаунт,
+     * устройство и второй фактор от множителя не зависят — подбор пароля к
+     * одному аккаунту останавливается так же.
+     */
+    if (scope === 'ip' && settings && !rules.ip) {
+      try {
+        const scale = Math.min(50, Math.max(1, Number(settings.get('limits.ipScale')) || 1));
+        rule.threshold *= scale;
+        rule.distinctAccounts *= scale;
+      } catch {
+        // Настройки недоступны — порог по умолчанию.
+      }
+    }
     return rule;
   };
 
@@ -103,7 +118,8 @@ export const createLoginThrottle = ({ store, settings = null, now = () => Date.n
     if (distinct) {
       const seen = new Set(data?.seen || []);
       seen.add(distinct.slice(0, 12));
-      data = { seen: [...seen].slice(-50) };
+      // С множителем порог разных аккаунтов бывает больше 50 — храним столько, сколько нужно для него.
+      data = { seen: [...seen].slice(-Math.max(50, rule.distinctAccounts || 0)) };
     }
     const distinctHit = scope === 'ip' && (data?.seen?.length || 0) >= rule.distinctAccounts;
     if (!lockedUntil && (failures >= rule.threshold || distinctHit)) {

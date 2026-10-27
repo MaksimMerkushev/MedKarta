@@ -36,6 +36,7 @@ import { createAccountService } from '../accounts/service.js';
 import { createSettingsService } from '../accounts/settings.js';
 import { createSqliteAccountStore, loadSqlite } from '../accounts/sqliteStore.js';
 import { createLoginThrottle } from '../accounts/throttle.js';
+import { setLimitSettings } from '../http/rateLimit.js';
 import { getLegalDocuments } from '../legal/documents.js';
 import { createMailer } from '../mail/outbox.js';
 import { logger } from '../observability/safeLogger.js';
@@ -196,6 +197,8 @@ export const getAccountContext = async () => {
       logger.error('account.store_failed', error);
       return null;
     }
+    // Лимиты нагрузки и бюджет модели из админ-панели — без перезапуска.
+    setLimitSettings((key) => context.settings.get(key));
     await startupBootstrap({ store: context.store });
     const timer = setInterval(() => {
       try {
