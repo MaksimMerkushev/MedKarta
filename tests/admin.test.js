@@ -605,6 +605,14 @@ describe('Админ-панель: сценарии', { skip: !DatabaseSync && '
     assert.equal((await root.call('/api/chat', { method: 'POST', body: { messages: [] } })).body.code, 'assistant_disabled');
     await root.call('/api/admin/settings', { method: 'PATCH', body: { values: { 'assistant.enabled': true } } });
     assert.equal((await root.call('/api/chat', { method: 'POST', body: { messages: [] } })).status, 200);
+    // Нагрузка: множитель и очередь — с проверкой границ и рекомендованными значениями для показа.
+    const load = list.body.items.filter((item) => item.group === 'Нагрузка и лимиты');
+    assert.deepEqual(load.map((item) => [item.key, item.demoValue]), [['limits.ipScale', 20], ['limits.chatQueue', 64], ['ai.callsPer5Min', 600], ['ai.dailyCallLimit', 5000]]);
+    assert.equal((await root.call('/api/admin/settings', { method: 'PATCH', body: { values: { 'limits.ipScale': 0 } } })).status, 400);
+    const demo = await root.call('/api/admin/settings', { method: 'PATCH', body: { values: { 'limits.ipScale': 20, 'limits.chatQueue': 64 } } });
+    assert.equal(demo.status, 200);
+    assert.equal(demo.body.items.find((item) => item.key === 'limits.ipScale').value, 20);
+    await root.call('/api/admin/settings', { method: 'PATCH', body: { values: { 'limits.ipScale': 1, 'limits.chatQueue': 16 } } });
     const admin = browserFor(base);
     await admin.login('admin@medkarta.test', 'Постоянный-пароль-1');
     assert.equal((await admin.call('/api/admin/settings')).status, 200, 'админ видит настройки');

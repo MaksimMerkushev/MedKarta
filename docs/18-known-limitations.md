@@ -133,6 +133,13 @@
 - Лимит ассистента — 40 запросов за 5 минут с адреса (`CHAT_MAX_PER_IP` в
   [rateLimit.js](../backend/http/rateLimit.js)); в [05-backend.md](05-backend.md)
   и [06-ai-assistant.md](06-ai-assistant.md) указано 20.
+- Лимиты на адрес, очередь ассистента и бюджет модели меняются из
+  админ-панели без перезапуска — группа «Нагрузка и лимиты» (`limits.ipScale`,
+  `limits.chatQueue`, `ai.callsPer5Min`, `ai.dailyCallLimit`) с кнопками
+  «Для показа» и «Обычный режим»; порядок для показа в зале — в
+  [deployment.md](deployment.md#показ-в-зале-много-людей-с-одного-wi-fi).
+  Таблица механизмов в [05-backend.md](05-backend.md) этого не описывает;
+  добавлен `tests/load-settings.test.js`.
 - Тесты: добавлен `tests/dialog-context.test.js` (113 тестов), в
   `booking-fuzz.test.js` — третий прогон, с посторонними репликами между
   условиями. Всего 954 теста без графа дорог и 962 с графом, 157 наборов;

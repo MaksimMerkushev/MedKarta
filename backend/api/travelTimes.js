@@ -38,7 +38,7 @@ const isCoordinate = (lat, lng) =>
  * Фильтр пересчитывается при смене точки, режима и потолка — десятки запросов
  * за сеанс, а не сотни. Нагрузку на процессор держит routeCpuLimiter.
  */
-const checkTravelRateLimit = createRateLimiter({ maxPerIp: 90, maxPerInstance: Number.POSITIVE_INFINITY });
+const checkTravelRateLimit = createRateLimiter({ maxPerIp: 90, maxPerInstance: Number.POSITIVE_INFINITY, scaled: true });
 
 // Точка назначения вне региона не ломает запрос: для неё нет времени (null),
 // как для недоступной.

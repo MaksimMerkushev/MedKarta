@@ -21,6 +21,7 @@ import { createInvitationService } from '../accounts/invitations.js';
 import { createAccountService } from '../accounts/service.js';
 import { createSettingsService } from '../accounts/settings.js';
 import { createSqliteAccountStore, loadSqlite } from '../accounts/sqliteStore.js';
+import { setLimitSettings } from '../http/rateLimit.js';
 import { logger } from '../observability/safeLogger.js';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
@@ -84,6 +85,8 @@ export const getAccountContext = async () => {
       logger.error('account.store_failed', error);
       return null;
     }
+    // Лимиты нагрузки и бюджет модели из админ-панели — без перезапуска.
+    setLimitSettings((key) => context.settings.get(key));
     if (process.env.ADMIN_BOOTSTRAP_PASSWORD) {
       try {
         const result = await bootstrapSuperadmin({

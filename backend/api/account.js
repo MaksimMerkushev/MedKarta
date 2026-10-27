@@ -41,8 +41,9 @@ const MAX_BODY_BYTES = 64 * 1024;
  * Подбор паролей: 20 попыток входа за 15 минут с адреса.
  * Обычные запросы кабинета — 300 за 5 минут: это сотни нажатий на сердечко.
  */
-const defaultAuthLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, maxPerIp: 20, maxPerInstance: Number.POSITIVE_INFINITY });
-const defaultApiLimit = createRateLimiter({ maxPerIp: 300, maxPerInstance: Number.POSITIVE_INFINITY });
+// Множитель из админ-панели касается и входа (зал за одним NAT); лимит неудач на один email (auth.maxFailedPerEmail) от него не зависит.
+const defaultAuthLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, maxPerIp: 20, maxPerInstance: Number.POSITIVE_INFINITY, scaled: true });
+const defaultApiLimit = createRateLimiter({ maxPerIp: 300, maxPerInstance: Number.POSITIVE_INFINITY, scaled: true });
 // Демо-вход без пароля и без scrypt: зал за одним NAT на питче не должен упираться в лимит входа.
 
 /** Ассистент только для вошедших; CHAT_REQUIRES_ACCOUNT=off открывает его гостям (если не задано в настройках). */

@@ -32,7 +32,7 @@ const MAX_BODY_BYTES = 16 * 1024;
 // Аватар до 256 КБ в base64 — с запасом на кодирование.
 const MAX_AVATAR_BODY_BYTES = 400 * 1024;
 
-const defaultApiLimit = createRateLimiter({ maxPerIp: 300, maxPerInstance: Number.POSITIVE_INFINITY });
+const defaultApiLimit = createRateLimiter({ maxPerIp: 300, maxPerInstance: Number.POSITIVE_INFINITY, scaled: true });
 // Смена пароля проверяет текущий — это тот же подбор, что и вход.
 const defaultPasswordLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, maxPerIp: 10, maxPerInstance: Number.POSITIVE_INFINITY });
 
