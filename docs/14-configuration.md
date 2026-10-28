@@ -32,6 +32,8 @@
 | `OPENROUTER_API_KEY` или `AI_API_KEY` | — | ключ; без него — только локальный планировщик | [pipeline.js](../backend/pipeline.js) |
 | `AI_UPSTREAM_URL` | `https://modelhub.my/v1/chat/completions` | адрес OpenAI-совместимого `chat/completions`; только `https://` (или `http://localhost`) | [pipeline.js](../backend/pipeline.js), [client.js](../backend/planner/client.js) |
 | `AI_MODEL` | `gpt-5.4-mini` | имя модели | [pipeline.js](../backend/pipeline.js) |
+| `AI_SYMPTOM_TRIAGE` | включён | `off` — жалобы только локально: модель-триаж (врач по симптомам и уточняющий вопрос) не вызывается | [policies.js](../backend/privacy/policies.js), [triage.js](../backend/planner/triage.js) |
+| `AI_TRIAGE_MODEL` | `AI_MODEL` | модель для триажа жалоб | [pipeline.js](../backend/pipeline.js) |
 | `AI_REASONING_EFFORT` | не отправляется | `none`, `minimal`, `low`, `medium`, `high` | [client.js](../backend/planner/client.js) |
 | `AI_PROXY_URL` | — | `login:password@host:port`, `host:port:login:password` или `socks5://…`; ошибка в адресе выключает внешнюю модель | [proxyFetch.js](../backend/planner/proxyFetch.js) |
 | `AI_DAILY_CALL_LIMIT` | `2000` | вызовов модели в сутки на процесс; значение из админ-панели («Обращений к ИИ-модели в сутки») важнее | [rateLimit.js](../backend/http/rateLimit.js) |

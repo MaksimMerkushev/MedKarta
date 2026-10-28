@@ -582,6 +582,8 @@ export const createPrivacyGateway = ({
       classification = {
         emergency: lastTurn.emergency || rawEmergency,
         hasMedicalText: perTurn.some((item) => item.hasMedicalText),
+        // Сколько реплик после первой жалобы — столько раз ассистент уже мог переспросить.
+        answeredAfterComplaint: Math.max(0, perTurn.length - 1 - Math.max(0, perTurn.findIndex((item) => item.hasMedicalText))),
         isChild: perTurn.some((item) => item.isChild),
         confidence: Math.max(...perTurn.map((item) => item.confidence), 0),
         specialties: [...new Set(perTurn.flatMap((item) => item.specialties))],
@@ -941,8 +943,28 @@ export const createPrivacyGateway = ({
       },
     };
 
+    /*
+     * Жалоба для триажа (planner/triage.js): реплики пользователя после
+     * редактуры — метки вместо ФИО, телефонов, адресов. Остаточное «имя»
+     * проверяется во всех репликах, а не только в последней: модели уходит
+     * вся история. Поле неперечислимое — случайная сериализация контекста
+     * (журнал, ответ) его не вытащит. Нужен ли триаж, решает pipeline.
+     */
+    const triage = Boolean(decision.triage)
+      && redactedTurns.every((turn) => countResidualNameLike(turn.text, streetWords) <= POLICY.maxResidualNameLike);
+    if (triage) {
+      Object.defineProperty(context, 'triageTurns', {
+        value: Object.freeze(redactedTurns.map((turn) => turn.text.replace(/\s+/gu, ' ').trim()).filter(Boolean)),
+        enumerable: false,
+      });
+      Object.defineProperty(context, 'triageTokens', {
+        value: Object.freeze([...placeholders.map((item) => item.token), ...locationTokens]),
+        enumerable: false,
+      });
+    }
+
     if (decision.decision !== GATEWAY_DECISION.ALLOW_EXTERNAL) {
-      return { ...decision, request: null, requestId, sessionId: session, context };
+      return { ...decision, triage, request: null, requestId, sessionId: session, context };
     }
 
     /*
@@ -1000,7 +1022,7 @@ export const createPrivacyGateway = ({
       locale: 'ru-RU',
     });
 
-    return { ...decision, request, requestId, sessionId: session, context };
+    return { ...decision, triage, request, requestId, sessionId: session, context };
   };
 
   return Object.freeze({ process, policyVersion: POLICY_VERSION, policy: POLICY });

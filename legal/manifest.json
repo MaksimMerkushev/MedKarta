@@ -1,7 +1,7 @@
 {
   "documents": {
     "privacy_policy": {
-      "current": "2026-10-26",
+      "current": "2026-10-28",
       "status": "published",
       "versions": [
         {
@@ -9,6 +9,12 @@
           "file": "privacy-policy/2026-10-26.md",
           "sha256": "239b1bdb0e95aa30ed37deecda240e7851ea7caadf12d548b7c38cb133cf33f1",
           "publishedAt": "2026-10-26"
+        },
+        {
+          "version": "2026-10-28",
+          "file": "privacy-policy/2026-10-28.md",
+          "sha256": "af26666985896662f960232aa383847a90836ef502042db15901be941e594e3a",
+          "publishedAt": "2026-10-28"
         }
       ]
     },

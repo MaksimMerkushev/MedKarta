@@ -16,6 +16,7 @@ import { createEntityResolver } from './privacy/entityResolver.js';
 import { createPrivacyGateway } from './privacy/gateway.js';
 import { createStoreFromEnv, createTokenVault } from './storage/tokenVault.js';
 import { createExternalPlanner, PLANNER_ERROR } from './planner/client.js';
+import { createExternalTriage, MAX_CLARIFY_ROUNDS, validateTriage } from './planner/triage.js';
 import { createProxyFetch, parseProxyUrl } from './planner/proxyFetch.js';
 import { validatePlan } from './planner/validator.js';
 import { planLocally } from './planner/localPlanner.js';
@@ -59,6 +60,12 @@ export const createPipeline = ({
   logger = defaultLogger,
   metrics = defaultMetrics,
   outboundMode = undefined,
+  /*
+   * Триаж жалоб внешней моделью (planner/triage.js): профиль врача по
+   * симптомам и уточняющий вопрос. null — профиль только из локального
+   * классификатора (как при недоступной модели).
+   */
+  triage = null,
   /*
    * Демо-запись: ответ на «нужен ЛОР завтра после 18:00» несёт запрос
    * строгого подбора (action.booking), который интерфейс исполняет через
@@ -110,6 +117,37 @@ export const createPipeline = ({
     });
 
     return { ...validated.value, source: 'external' };
+  };
+
+  /**
+   * Профиль по жалобе от модели. Любая ошибка — null: ответит локальный
+   * классификатор, повторного запроса и другого пути наружу нет.
+   */
+  const runTriage = async (gate, takeBudget = () => true) => {
+    const started = Date.now();
+    try {
+      const params = {
+        turns: gate.context.triageTurns,
+        tokens: gate.context.triageTokens,
+        isChild: Boolean(gate.context.booking?.child),
+      };
+      const completion = await triage.classify(params);
+      metrics.observe('triage.latency_ms', Date.now() - started, { provider: completion.provider });
+      let result = validateTriage(completion.raw);
+      // Ответ не по формату — один повтор (если позволяет бюджет), затем — локальный классификатор.
+      if (!result && takeBudget()) {
+        metrics.increment('triage.retry');
+        result = validateTriage((await triage.classify({ ...params, retry: true })).raw);
+      }
+      // Статус — признак здоровья: только в агрегированных метриках, не в построчном журнале.
+      metrics.increment('triage.result', { status: result ? result.status : 'invalid' });
+      if (!result) logger.warn('triage.invalid', { request_id: gate.requestId });
+      return result;
+    } catch (error) {
+      metrics.increment('triage.error', { code: error?.code || 'unknown' });
+      if (error?.code !== PLANNER_ERROR.NOT_CONFIGURED) logger.warn('triage.error', { request_id: gate.requestId, code: error?.code || 'unknown' });
+      return null;
+    }
   };
 
   return Object.freeze({
@@ -172,6 +210,63 @@ export const createPipeline = ({
         };
       }
 
+      /*
+       * Жалоба: к какому врачу — решает модель-триаж по обезличенному тексту
+       * (planner/triage.js), при необходимости задавая уточняющий вопрос.
+       * Профиль, названный словами, и названный врач важнее догадки: их не
+       * переспрашиваем.
+       */
+      let triaged = null;
+      if (triage && gate.triage && wantsTriage(gate, messages)) {
+        if (takeExternalBudget()) {
+          triaged = await runTriage(gate, takeExternalBudget);
+        } else {
+          metrics.increment('planner.budget_exhausted');
+        }
+      }
+      if (triaged?.status === 'emergency') {
+        metrics.increment('gateway.emergency');
+        return {
+          action: buildEmergencyAction(null),
+          diagnostics: { requestId: gate.requestId, decision: GATEWAY_DECISION.EMERGENCY, planSource: 'triage', cpuMs: cpuMs() },
+        };
+      }
+      const answered = gate.context.classification?.answeredAfterComplaint || 0;
+      if (triaged?.status === 'clarify' && answered < MAX_CLARIFY_ROUNDS) {
+        const action = buildUiAction(
+          { action: 'CLARIFY', stops: [], constraints: {}, services: null, notes: { relaxed: [], missingSpecialties: [], ambiguous: [], approximate: false } },
+          { clarifyPrompt: `${triaged.question} Так подберу нужного врача — диагноз я не ставлю.` },
+        );
+        if (triaged.options.length > 0) {
+          action.quickReplies = [...triaged.options, 'Не знаю'];
+        }
+        return {
+          action,
+          diagnostics: { requestId: gate.requestId, decision: gate.decision, reason: gate.reason, planSource: 'triage', cpuMs: cpuMs() },
+        };
+      }
+      /*
+       * Модель не нашла в тексте жалобы, хотя словарь её «увидел» («напиши,
+       * что у меня рак»): профиль по словарю не подставляем — переспросим.
+       */
+      if (triaged?.status === 'not_medical' && gate.reason === FAIL_CLOSED_REASON.MEDICAL_TEXT) {
+        if (answered > 0) {
+          /*
+           * Разговор начался с жалобы, а после уточнений («не знаю») модель
+           * «потеряла» её: не бросаем человека — честно предлагаем начать
+           * с терапевта (педиатра).
+           */
+          triaged = { status: 'clarify', specialties: [gate.context.booking?.child ? 'pediatrician' : 'therapist'], question: null, options: [] };
+        } else {
+          dropGuess(gate.context);
+        }
+      }
+      const triageNote = triaged && triaged.status !== 'not_medical'
+        ? applyTriage(gate.context, triaged, { unsure: triaged.status === 'clarify' })
+        : null;
+      // Профиль от триажа — план строится локально: описание для планировщика собрано без него.
+      const forceLocal = Boolean(triaged);
+
       let plan = null;
       let planSource = 'local';
 
@@ -180,7 +275,9 @@ export const createPipeline = ({
        * а локальный план: иначе несколько адресов пустыми запросами
        * отключали бы ассистента для всех.
        */
-      if (gate.decision === GATEWAY_DECISION.ALLOW_EXTERNAL && gate.request && !takeExternalBudget()) {
+      if (forceLocal) {
+        metrics.increment('planner.local_after_triage');
+      } else if (gate.decision === GATEWAY_DECISION.ALLOW_EXTERNAL && gate.request && !takeExternalBudget()) {
         metrics.increment('planner.budget_exhausted');
       } else if (gate.decision === GATEWAY_DECISION.ALLOW_EXTERNAL && gate.request) {
         try {
@@ -306,6 +403,10 @@ export const createPipeline = ({
         }
       }
 
+      if (triageNote && !gate.context.offTopic) {
+        action.replyText = `${triageNote} ${action.replyText}`;
+      }
+
       /*
        * «Спасибо», «понятно, спасибо» — не новый запрос: подбор остаётся как
        * был, а ответ — вежливое завершение, а не повтор «Ищу свободное время».
@@ -337,7 +438,7 @@ export const createPipeline = ({
       } else if (execution.action === 'CLARIFY' && !action.booking && LATIN_ONLY(closing)) {
         // «Need ENT doctor tomorrow» — запросы понимаются только по-русски; честно и с примером.
         action.replyText = 'Я понимаю запросы на русском языке. Напишите, например: «ЛОР завтра после 18» или «терапевт рядом по ДМС». / I understand requests in Russian only — e.g. «ЛОР завтра после 18».';
-      } else if (execution.action === 'CLARIFY' && (!gate.reason || gate.reason === 'nothing_to_plan') && !(gate.context.specialties || []).length && DOCTOR_WORDS.test(closing)) {
+      } else if (execution.action === 'CLARIFY' && (!gate.reason || gate.reason === 'nothing_to_plan') && !(gate.context.specialties || []).length && !gate.context.booking?.unknownSpecialty && DOCTOR_WORDS.test(closing)) {
         // «Хочу к врачу» без профиля — вопрос, а не общая справка.
         action.replyText = 'К какому врачу записать? Назовите специалиста — например, «к терапевту», — или опишите, что беспокоит: подскажу профиль. Диагнозов не ставлю.';
       }
@@ -374,6 +475,95 @@ export const createPipeline = ({
 };
 
 /*
+ * Нужен ли триаж. Жалоба — да, если профиль не назван словами и не назван
+ * врач. Запрос, в котором ничего не распознано («плохо вижу вдаль»), — да,
+ * если это не приветствие и не «спасибо»: иначе каждое «привет» стоило бы
+ * обращения к модели.
+ */
+const GREETING_ONLY = /^(?:привет\p{L}*|здравствуй\p{L}*|добр\p{L}+\s+(?:день|утро|вечер|ночи)|хай|ку|алло|ау|ты\s+кто|кто\s+ты|а\s+ты\s+кто|что\s+ты\s+умеешь|помоги|помогите|тест)[\s,!.?)]*$/iu;
+const TARGET_KINDS = new Set(['DOCTOR', 'CLINIC']);
+const wantsTriage = (gate, messages) => {
+  const context = gate.context;
+  const booking = context.booking || {};
+  if (booking.explicitSpecialty || booking.unknownSpecialty || (booking.doctorIds || []).length > 0) return false;
+  if (context.offTopic) return false;
+  if (gate.reason === FAIL_CLOSED_REASON.MEDICAL_TEXT) return true;
+  /*
+   * Запрос без цели: ни профиля, ни врача, ни клиники, ни места
+   * («у сына косоглазие», «плохо вижу вдаль»). Клиника, услуга, маршрут
+   * домой и «сбросить» — не к триажу.
+   */
+  const targetless = gate.reason === FAIL_CLOSED_REASON.NOTHING_TO_PLAN
+    || (gate.decision === GATEWAY_DECISION.ALLOW_EXTERNAL
+      && (context.specialties || []).length === 0
+      && !(context.placeholders || []).some((item) => TARGET_KINDS.has(item.kind))
+      && (context.locationTokens || []).length === 0
+      && !context.signals?.clear && !context.signals?.clinic && !context.signals?.service);
+  if (!targetless) return false;
+  const userTexts = (messages || []).filter((message) => message?.role === 'user').map((message) => String(message.content || '').toLowerCase().trim());
+  const last = userTexts.at(-1) || '';
+  if (THANKS_ONLY.test(last) || (GREETING_ONLY.test(last) && userTexts.length === 1)) return false;
+  // «не знаю» в ответ на вопрос ассистента — продолжение разговора: считаем все реплики.
+  return (userTexts.join(' ').match(/\p{Script=Cyrillic}{3,}/gu) || []).length >= 2;
+};
+
+/* «гастроэнтеролог», но «ЛОР». */
+const specialtyLabel = (key) => (key === 'lor' ? 'ЛОР' : SPECIALTY_CANON[key].toLowerCase());
+const START_WITH = { therapist: 'терапевта', pediatrician: 'педиатра' };
+
+/**
+ * Профиль от модели — в контекст подбора, как если бы его дал классификатор
+ * жалоб: запись, оговорка «это не диагноз» и прочие условия работают как
+ * раньше. Взрослого не записываем к педиатру, ребёнка с общей жалобой — к
+ * терапевту. Возвращает фразу для ответа.
+ */
+const applyTriage = (context, triaged, { unsure = false } = {}) => {
+  const child = Boolean(context.booking ? context.booking.child : context.classification?.isChild);
+  const keys = triaged.specialties
+    .map((key) => (key === 'pediatrician' && !child ? 'therapist' : key === 'therapist' && child ? 'pediatrician' : key))
+    .filter((key, index, list) => key in SPECIALTY_CANON && list.indexOf(key) === index);
+  if (keys.length === 0) return null;
+  const [primary, alternative] = keys;
+  context.specialties = [primary];
+  // Профили, которые словарь вывел из той же жалобы, — не остановки маршрута.
+  context.outline = (context.outline || []).filter((item) => item.kind !== 'SPECIALTY');
+  context.classification = { ...context.classification, specialties: keys, hasMedicalText: true };
+  if (context.booking) {
+    context.booking = {
+      ...context.booking,
+      specialties: [primary],
+      specialtyQuestion: null,
+      specialtyChoice: false,
+      medicalText: true,
+    };
+  }
+  const general = START_WITH[primary] ? primary : child ? 'pediatrician' : 'therapist';
+  /*
+   * Модель так и не уверилась после уточнений: честно говорим, что это
+   * догадка, и предлагаем начать с терапевта (педиатра).
+   */
+  if (unsure) {
+    return START_WITH[primary]
+      ? `Точно определить врача по описанию не получается — начните с ${START_WITH[primary]}: он посмотрит и при необходимости направит.`
+      : `Точно определить врача по описанию не получается. Скорее всего, подойдёт ${specialtyLabel(primary)}; если сомневаетесь, начните с ${START_WITH[general]}.`;
+  }
+  const parts = [`По описанию ${child ? 'ребёнку ' : ''}подойдёт ${specialtyLabel(primary)}.`];
+  // Запасной вариант называем только общий — «начать с терапевта»: узкий второй профиль без вопроса — догадка.
+  if (alternative && START_WITH[alternative]) {
+    parts.push(`Если сомневаетесь, можно начать с ${START_WITH[alternative]} — он посмотрит и при необходимости направит.`);
+  }
+  return parts.join(' ');
+};
+
+/** Профиль, выведенный словарём из текста, где модель жалобы не нашла, — убрать. */
+const dropGuess = (context) => {
+  context.specialties = [];
+  context.outline = (context.outline || []).filter((item) => item.kind !== 'SPECIALTY');
+  context.classification = { ...context.classification, specialties: [] };
+  if (context.booking) context.booking = { ...context.booking, specialties: [], specialtyQuestion: null, specialtyChoice: false };
+};
+
+/*
  * Тексты под причину fail-closed: техническая причина пользователю не
  * сообщается, формулировка направляет к безопасному переформулированию.
  */
@@ -389,6 +579,8 @@ const clarifyTextFor = (reason) => {
         'Пожалуйста, не присылайте номера документов — СНИЛС, полис ОМС, паспорт: ' +
         'для поиска врача они не нужны. Напишите, какой специалист или клиника вам нужны.'
       );
+    case 'medical_text_policy':
+      return 'С этим не подскажу: я помогаю выбрать врача и записаться. Если что-то беспокоит, опишите жалобу своими словами или назовите врача — подскажу профиль. Диагнозов и советов по лечению не даю.';
     case 'symptom_classifier_uncertain':
       return (
         'Чтобы не гадать с профилем врача, уточните, пожалуйста: что беспокоит или ' +
@@ -461,18 +653,22 @@ const buildDefaultPipeline = async () => {
     // ключ одного провайдера не должен незаметно уходить другому.
     defaultLogger.warn('planner.default_upstream', { status: 'AI_UPSTREAM_URL not set' });
   }
-  const planner = createExternalPlanner({
+  const upstream = {
     ...plannerTransportFromEnv(),
     url: process.env.AI_UPSTREAM_URL || 'https://modelhub.my/v1/chat/completions',
     model: process.env.AI_MODEL || 'gpt-5.4-mini',
     reasoningEffort: process.env.AI_REASONING_EFFORT || null,
     logger: defaultLogger,
-  });
+  };
+  const planner = createExternalPlanner(upstream);
+  // Тот же провайдер и ключ; модель для жалоб можно задать отдельно (AI_TRIAGE_MODEL).
+  const triage = createExternalTriage({ ...upstream, model: process.env.AI_TRIAGE_MODEL || upstream.model });
 
   return createPipeline({
     catalog,
     vault,
     planner,
+    triage,
     routing: await createRoutingProviderFromEnv(),
     booking: { enabled: bookingModeFromEnv(), publicHidden: publicClinicsHidden(), now: () => demoNow() },
   });

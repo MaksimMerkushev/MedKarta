@@ -41,7 +41,7 @@ import { PROCESSING_REGISTRY } from '../backend/legal/processing.js';
 import { renderMail } from '../backend/mail/templates.js';
 import { createSafeLogger } from '../backend/observability/safeLogger.js';
 import { GATEWAY_DECISION } from '../backend/privacy/models.js';
-import { POLICY } from '../backend/privacy/policies.js';
+import { medicalTextModeFromEnv, POLICY } from '../backend/privacy/policies.js';
 import { createMemoryStore, createStoreFromEnv } from '../backend/storage/tokenVault.js';
 import { CONSENT_PURPOSES, LEGAL_PLACEHOLDER, SIGNUP_PURPOSES } from '../shared/legal.js';
 import { browserFor, capture, linkIn, softAuthenticator, startAuthServer, TEST_ORIGIN, tokenOfLink } from './helpers/authKit.js';
@@ -596,8 +596,16 @@ describe('152-ФЗ: сведения о здоровье', () => {
     'после химиотерапии слабость, к терапевту',
   ];
 
-  it('политика: сведения о здоровье — только локально, режима ослабления нет', () => {
-    assert.equal(POLICY.medicalTextMode, 'local_only');
+  /*
+   * С политики 2026-10-28.1 профиль врача по жалобе выбирает модель-триаж
+   * (tests/symptom-triage.test.js) — отдельным вызовом, по обезличенному
+   * тексту. Планировщику маршрута и записи жалоба по-прежнему не уходит
+   * (проверки ниже: триаж здесь не подключён). AI_SYMPTOM_TRIAGE=off
+   * возвращает режим «только локально».
+   */
+  it('политика: жалоба — триажу модели, планировщику — ничего; триаж выключается', () => {
+    assert.equal(POLICY.medicalTextMode, 'external_triage');
+    assert.equal(medicalTextModeFromEnv({ AI_SYMPTOM_TRIAGE: 'off' }), 'local_only');
   });
 
   for (const text of COMPLAINTS) {

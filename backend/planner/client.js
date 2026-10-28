@@ -133,6 +133,88 @@ export const buildPlannerBody = ({ model, messages, reasoningEffort = null }) =>
 };
 
 /**
+ * POST к OpenAI-совместимому chat/completions: тайм-аут, без редиректов,
+ * ответ с потолком размера, тело ошибки не читается и не логируется.
+ * Общий для планировщика и триажа (planner/triage.js): проверки исходящего
+ * текста делает вызывающий — у каждого свои.
+ *
+ * @returns {Promise<{raw: string, provider: string, usage: object}>}
+ */
+export const requestCompletion = async ({
+  url,
+  apiKey,
+  body,
+  fetchImpl = fetch,
+  timeoutMs = 20_000,
+  logger = null,
+  provider = 'external',
+}) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetchImpl(url, {
+      method: 'POST',
+      signal: controller.signal,
+      // Без редиректов: на 307 fetch повторил бы POST с телом и ключом на другой хост.
+      redirect: 'error',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      // Тело ошибки не логируется и не пересылается: провайдеры часто
+      // возвращают в нём фрагмент запроса.
+      logger?.event('planner.upstream_error', { status: response.status, provider });
+      // Непрочитанное тело держит сокет: после серии 429 копятся соединения.
+      try {
+        await response.body?.cancel();
+      } catch {
+        // тело уже закрыто
+      }
+      throw new PlannerError(`upstream ${response.status}`, PLANNER_ERROR.UPSTREAM);
+    }
+
+    const payload = await readJsonLimited(response, MAX_RESPONSE_BYTES);
+    const content = payload?.choices?.[0]?.message?.content;
+    const raw = typeof content === 'string'
+      ? content
+      : Array.isArray(content)
+        ? content.map((part) => (typeof part === 'string' ? part : part?.text || '')).join('')
+        : '';
+
+    if (!raw.trim()) {
+      throw new PlannerError('empty completion', PLANNER_ERROR.EMPTY);
+    }
+
+    return {
+      raw: raw.trim(),
+      provider,
+      usage: {
+        promptTokens: payload?.usage?.prompt_tokens ?? null,
+        completionTokens: payload?.usage?.completion_tokens ?? null,
+      },
+    };
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new PlannerError('planner timeout', PLANNER_ERROR.TIMEOUT);
+    }
+    if (error instanceof PlannerError) {
+      throw error;
+    }
+    // Код транспорта (proxy_auth, proxy_timeout, tls…) — без сообщения: в нём бывают адреса.
+    const code = typeof error?.code === 'string' && /^[a-z_]{2,32}$/i.test(error.code) ? error.code : 'unknown';
+    logger?.event('planner.transport_error', { provider, code });
+    throw new PlannerError('planner transport error', PLANNER_ERROR.UPSTREAM);
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+/**
  * Клиент внешнего провайдера (OpenRouter-совместимый chat/completions).
  *
  * @param {object} config
@@ -178,8 +260,6 @@ export const createExternalPlanner = ({
 
     const body = buildPlannerBody({ model, messages, reasoningEffort });
 
-    const serialized = JSON.stringify(body);
-
     // Проверяем только пользовательскую часть: системный промпт содержит
     // слова «телефон», «адрес» и примеры формата, но не данные.
     const payloadUnderTest = JSON.stringify(
@@ -202,69 +282,7 @@ export const createExternalPlanner = ({
       );
     }
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-    try {
-      const response = await fetchImpl(url, {
-        method: 'POST',
-        signal: controller.signal,
-        // Без редиректов: на 307 fetch повторил бы POST с телом и ключом на другой хост.
-        redirect: 'error',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: serialized,
-      });
-
-      if (!response.ok) {
-        // Тело ошибки не логируется и не пересылается: провайдеры часто
-        // возвращают в нём фрагмент запроса.
-        logger?.event('planner.upstream_error', { status: response.status, provider: name });
-        // Непрочитанное тело держит сокет: после серии 429 копятся соединения.
-        try {
-          await response.body?.cancel();
-        } catch {
-          // тело уже закрыто
-        }
-        throw new PlannerError(`upstream ${response.status}`, PLANNER_ERROR.UPSTREAM);
-      }
-
-      const payload = await readJsonLimited(response, MAX_RESPONSE_BYTES);
-      const content = payload?.choices?.[0]?.message?.content;
-      const raw = typeof content === 'string'
-        ? content
-        : Array.isArray(content)
-          ? content.map((part) => (typeof part === 'string' ? part : part?.text || '')).join('')
-          : '';
-
-      if (!raw.trim()) {
-        throw new PlannerError('empty completion', PLANNER_ERROR.EMPTY);
-      }
-
-      return {
-        raw: raw.trim(),
-        provider: name,
-        usage: {
-          promptTokens: payload?.usage?.prompt_tokens ?? null,
-          completionTokens: payload?.usage?.completion_tokens ?? null,
-        },
-      };
-    } catch (error) {
-      if (error?.name === 'AbortError') {
-        throw new PlannerError('planner timeout', PLANNER_ERROR.TIMEOUT);
-      }
-      if (error instanceof PlannerError) {
-        throw error;
-      }
-      // Код транспорта (proxy_auth, proxy_timeout, tls…) — без сообщения: в нём бывают адреса.
-      const code = typeof error?.code === 'string' && /^[a-z_]{2,32}$/i.test(error.code) ? error.code : 'unknown';
-      logger?.event('planner.transport_error', { provider: name, code });
-      throw new PlannerError('planner transport error', PLANNER_ERROR.UPSTREAM);
-    } finally {
-      clearTimeout(timer);
-    }
+    return requestCompletion({ url, apiKey, body, fetchImpl, timeoutMs, logger, provider: name });
   };
 
   return Object.freeze({ name, generate });

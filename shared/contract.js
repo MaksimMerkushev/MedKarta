@@ -19,6 +19,8 @@ export const LIMITS = {
   MAX_STOPS: 5,
   MAX_SERVICES: 6,
   MAX_BODY_BYTES: 32 * 1024,
+  MAX_QUICK_REPLIES: 5,
+  MAX_QUICK_REPLY_CHARS: 48,
 };
 
 export const OWNERSHIPS = ['Государственная', 'Частная'];
@@ -197,9 +199,21 @@ export const sanitizeAiAction = (raw) => {
       : null,
     dmsOnly: triState(source.dmsOnly) === true,
     booking: sanitizeBooking(source.booking),
+    quickReplies: normalizeQuickReplies(source.quickReplies),
 
     replyText: cleanMultilineText(source.replyText, LIMITS.MAX_REPLY_CHARS) || DEFAULT_REPLY,
   };
+};
+
+/**
+ * Готовые ответы на уточняющий вопрос ассистента — кнопки под репликой; нажатие
+ * отправляет текст кнопки как реплику пользователя. Не больше пяти коротких строк.
+ */
+export const normalizeQuickReplies = (value) => {
+  if (!Array.isArray(value)) return null;
+  const items = [...new Set(value.map((item) => cleanText(item, LIMITS.MAX_QUICK_REPLY_CHARS)).filter(Boolean))]
+    .slice(0, LIMITS.MAX_QUICK_REPLIES);
+  return items.length > 0 ? items : null;
 };
 
 /**

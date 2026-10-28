@@ -91,13 +91,13 @@ const friendlyError = (error) => {
 
 /**
  * Что происходит с запросом (152-ФЗ): не сохраняется и не связывается с
- * аккаунтом; жалобы на здоровье разбираются на сервере МедКарты и внешней
- * модели не передаются (docs/privacy/04-health-data.md).
+ * аккаунтом; жалоба уходит внешней модели без ФИО, телефонов и адресов —
+ * только чтобы подобрать врача (docs/privacy/04-health-data.md).
  */
 function PrivacyNote({ className = '' }) {
   return (
     <p className={`leading-snug text-slate-400 dark:text-slate-500 ${className}`} data-testid="ai-privacy-note">
-      Запросы не сохраняются и не связываются с аккаунтом; жалобы на здоровье внешнему ИИ не передаются. Не указывайте ФИО и номера документов.{' '}
+      Запросы не сохраняются и не связываются с аккаунтом. Чтобы подобрать врача, жалоба без ФИО и контактов передаётся внешнему ИИ. Не указывайте ФИО и номера документов.{' '}
       <a href="/legal/privacy" target="_blank" rel="noopener" className="underline underline-offset-2 hover:text-slate-600 dark:hover:text-slate-300">Подробнее</a>
     </p>
   );
@@ -225,7 +225,7 @@ export default function AIAssistant({
       }
 
       const messageId = bumpId(nextIdRef);
-      setMessages((prev) => [...prev, { id: messageId, role: 'assistant', content: result.replyText }]);
+      setMessages((prev) => [...prev, { id: messageId, role: 'assistant', content: result.replyText, quickReplies: result.quickReplies || null }]);
       onApplyTriage?.(result, { messageId });
     } catch (error) {
       if (controller.signal.aborted) {
@@ -263,6 +263,22 @@ export default function AIAssistant({
               {msg.content}
             </div>
           </div>
+          {/* Ответы на уточняющий вопрос — кнопками, только под последней репликой. */}
+          {msg.role === 'assistant' && msg.quickReplies?.length > 0 && msg.id === messages[messages.length - 1]?.id && (
+            <div className="mt-2 flex flex-wrap gap-2 pl-1" role="group" aria-label="Варианты ответа">
+              {msg.quickReplies.map((label) => (
+                <button
+                  key={label}
+                  type="button"
+                  disabled={isLoading}
+                  onClick={() => sendText(label)}
+                  className="rounded-full border border-violet-200 bg-white px-3 py-1.5 text-[13px] font-medium text-violet-700 shadow-sm transition-colors hover:bg-violet-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-not-allowed disabled:opacity-50 dark:border-violet-500/40 dark:bg-slate-800 dark:text-violet-200 dark:hover:bg-slate-700"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
           {msg.role === 'assistant' && bookings?.[msg.id] && (
             <DemoOffers
               booking={bookings[msg.id]}

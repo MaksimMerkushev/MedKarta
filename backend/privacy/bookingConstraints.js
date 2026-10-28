@@ -115,8 +115,12 @@ const DATE_PATTERNS = [
     pattern: /(?<![\p{L}\p{N}.:])(\d{1,2})\.(\d{1,2})\.(20\d{2}|\d{2})(?![\d.:])/u,
     value: (match) => ({ kind: 'date', month: Number(match[2]), dayOfMonth: Number(match[1]), year: match[3].length === 2 ? 2000 + Number(match[3]) : Number(match[3]) }),
   },
-  // «Вчера», «позавчера» — день уже прошёл: вопрос, а не «любой день» молча.
-  { pattern: new RegExp(`(?<!${WORD})(?:вчера|позавчера|вчерашн\\p{L}*)(?!${WORD})`, 'u'), value: { kind: 'past' } },
+  /*
+   * «Вчера», «позавчера» — день уже прошёл: вопрос, а не «любой день» молча.
+   * Но «вчера сильно порезался», «позавчера заболел» — когда началась
+   * жалоба, а не день приёма: глагол прошедшего времени рядом.
+   */
+  { pattern: new RegExp(`(?<!${WORD})(?:вчера|позавчера|вчерашн\\p{L}*)(?!${WORD})(?!\\s+(?:\\p{L}+\\s+){0,2}\\p{L}{2,}(?:л|ла|ло|ли|лся|лась|лось|лись)(?!\\p{L}))`, 'u'), value: { kind: 'past' } },
   {
     // «Через 3 недели», «через месяц» — дальше окна расписания: подбор скажет, что так далеко его нет.
     pattern: new RegExp(`(?<!${WORD})через\\s+(\\d|два|две|три|четыре|пару)\\s+недел\\p{L}*|(?<!${WORD})через\\s+(месяц)(?!${WORD})`, 'u'),
@@ -475,7 +479,9 @@ const spokenTimes = (text) => {
     if (digits && !dayPart && !hoursWord && kind !== 'around') continue;
     // «До 2 часов езды» — время в пути, а не часы приёма.
     if (hoursWord && /^\s*(?:езды|пути|в\s+пути|ехать|дороги|на\s+машине|на\s+такси|пешком|ходьбы)/u.test(text.slice(match.index + match[0].length))) continue;
-    if (!digits && !dayPart && !hoursWord && !['after', 'before', 'around'].includes(kind)) continue;
+    // «Часов в пять» — «час…» перед предлогом: это время приёма (около пяти), а не «в пять раз».
+    const hoursBefore = /час\p{L}*\s+$/u.test(text.slice(Math.max(0, match.index - 8), match.index));
+    if (!digits && !dayPart && !hoursWord && !hoursBefore && !['after', 'before', 'around'].includes(kind)) continue;
     let hour = digits ? Number(hourText) : hourFromWord(hourText);
     if (hour === null || hour > 23 || dayPart === 'ночи') continue;
     if ((dayPart === 'вечера' && hour < 12) || (dayPart === 'дня' && hour >= 1 && hour <= 6)) hour += 12;
