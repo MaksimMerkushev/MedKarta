@@ -42,7 +42,7 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
 
 - пути: `/api/chat`, `/api/route`, `/api/travel-times`, `/api/events`,
   `/api/config`, `/api/account`, `/api/auth`, `/api/me`, `/api/admin`,
-  `/api/demo`;
+  `/api/booking` и прежний `/api/demo`;
 - переменные из `.env` переносятся в `process.env` только для сервера
   (список ключей задан в плагине);
 - **демо-режим включён по умолчанию**, если `DEMO_DATA` не задан;
@@ -134,7 +134,7 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
 | [services/ai.js](../frontend/src/services/ai.js) | `POST /api/chat` | 30 с, действует до конца чтения тела |
 | [services/travelTimes.js](../frontend/src/services/travelTimes.js) | `POST /api/travel-times` | 12 с |
 | [App.jsx](../frontend/src/App.jsx) | `POST /api/route` | — |
-| [services/demoBooking.js](../frontend/src/services/demoBooking.js) | `/api/demo/*` | 15 с |
+| [services/demoBooking.js](../frontend/src/services/demoBooking.js) | `/api/booking/*` | 15 с |
 | [services/account.js](../frontend/src/services/account.js) | `/api/account`, `/api/auth/*`, `/api/me/*` | — |
 | [admin/api.js](../frontend/src/admin/api.js) | `/api/admin/*`; ответ `401` возвращает панель к форме входа | — |
 | [services/analytics.js](../frontend/src/services/analytics.js) | `POST /api/events` | — |
