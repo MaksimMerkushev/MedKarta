@@ -119,8 +119,14 @@
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | порт 465 для `tls`, 587 для `starttls` | то же по отдельности, если `SMTP_URL` не задан | [smtp.js](../backend/mail/smtp.js) |
 | `SMTP_SECURE` | `starttls` | `tls` (сразу TLS, порт 465), `starttls` (обязательный STARTTLS) или `none` (без шифрования — пароль не отправляется) | [smtp.js](../backend/mail/smtp.js) |
 | `SMTP_ALLOW_INSECURE` | — | `on` — без TLS, **только** для `localhost` (учебный SMTP-сервер в тестах) | [smtp.js](../backend/mail/smtp.js) |
+| `SMTP_TIMEOUT` | `20` | сколько секунд ждать ответа SMTP-сервера, 5–120 | [smtp.js](../backend/mail/smtp.js) |
+| `SMTP_REPLY_TO` | — | адрес для ответов (`support@navimed.tech`), только когда ящик принимает письма; неверный — письма без Reply-To и предупреждение | [delivery.js](../backend/accounts/delivery.js) |
+| `MAIL_DAILY_LIMIT` | `200` | не больше писем за 24 часа (квота Postbox); `0` — без потолка | [delivery.js](../backend/accounts/delivery.js), [outbox.js](../backend/mail/outbox.js) |
+| `MAIL_MIN_INTERVAL_MS` | `1000` для SMTP | пауза между письмами (Postbox — не больше одного в секунду) | [outbox.js](../backend/mail/outbox.js) |
+| `MAIL_TEST_RECIPIENTS` | — | только для `npm run mail:check -- --send`: свои адреса через запятую | [mail-check.mjs](../scripts/mail-check.mjs) |
 
-Сертификат почтового сервера проверяется всегда; вход (AUTH) без TLS
+Настройка Yandex Cloud Postbox и проверка — [mail-setup.md](mail-setup.md).
+Сертификат почтового сервера проверяется всегда (TLS не ниже 1.2); вход (AUTH) без TLS
 запрещён. Пароль SMTP — секрет: только в `.env` или в окружении сервиса, не
 в git и не в админ-панели.
 
