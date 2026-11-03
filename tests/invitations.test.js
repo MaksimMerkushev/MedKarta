@@ -283,6 +283,29 @@ describe('Приглашения: сценарии через HTTP', { skip: !Da
     }
   });
 
+  it('истёкшая ссылка восстановления пароля не открывается, прежний пароль не меняется', async () => {
+    const { token } = await invite('forgot@medkarta.test');
+    const owner = browserFor(base);
+    assert.equal((await owner.start(token)).status, 200);
+    assert.equal((await owner.complete('Помню-пока-помню-2026')).status, 200);
+    const before = outbox.length;
+    assert.equal((await browserFor(base).call('/api/auth/access-link', { method: 'POST', body: { email: 'forgot@medkarta.test' } })).status, 202);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await context.mailer.drain();
+    const letter = outbox.slice(before).find((item) => item.to === 'forgot@medkarta.test');
+    assert.match(letter.subject, /Восстановление пароля/);
+    const reset = tokenOfLink(linkOf(letter));
+    clock += 31 * 60 * 1000;
+    try {
+      const expired = await browserFor(base).start(reset);
+      assert.equal(expired.status, 410);
+      assert.equal(expired.body.code, 'link_expired');
+      assert.equal((await browserFor(base).login('forgot@medkarta.test', 'Помню-пока-помню-2026')).status, 200, 'прежний пароль работает');
+    } finally {
+      clock -= 31 * 60 * 1000;
+    }
+  });
+
   it('повторное использование: второй переход и второй пароль — отказ; после активации ссылка мертва', async () => {
     const { token } = await invite('twice@medkarta.test');
     const first = browserFor(base);
