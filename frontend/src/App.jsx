@@ -1464,7 +1464,7 @@ export default function App() {
   const [assistantPicks, setAssistantPicks] = useState({});
   /*
    * Демо-запись под ответами ассистента: id реплики → запрос строгого
-   * подбора. Подбор исполняет сервер (DemoOffers → /api/demo/search).
+   * подбора. Подбор исполняет сервер (DemoOffers → /api/booking/search).
    */
   const [assistantBookings, setAssistantBookings] = useState({});
   const bookingEnabledRef = useRef(false);
