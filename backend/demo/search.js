@@ -228,7 +228,8 @@ export const coverageOf = (index, planId, { doctor, branchId, serviceId, patient
 /**
  * @param {object} deps
  * @param {object} deps.index индекс демо-набора
- * @param {object} deps.store хранилище слотов (bookingStore)
+ * @param {object} deps.store источник свободных слотов: freeSlots() у bookingStore
+ *   или у слоя коннекторов (backend/booking/slotCache.js), можно асинхронный
  * @param {Function} [deps.getEngine] async () => движок маршрутов или null
  * @param {Function} [deps.now]
  */
@@ -365,7 +366,7 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
     const windows = timeWindows(request);
     let free = new Map();
     if (candidates.length > 0 && days.length > 0) {
-      free = store.freeSlots({
+      free = await store.freeSlots({
         pairs: candidates.map((item) => ({ doctorId: item.doctor.id, branchId: item.branchId })),
         fromDay: days[0],
         toDay: days[days.length - 1],

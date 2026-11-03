@@ -24,7 +24,7 @@ import privacyHandler, { LEGAL_PREFIX, PRIVACY_PREFIX } from './api/privacy.js';
 import chatHandler from './api/chat.js';
 import { withChatAccess } from './api/chatAccess.js';
 import configHandler from './api/config.js';
-import demoBookingHandler, { DEMO_BOOKING_PATHS } from './api/demoBooking.js';
+import demoBookingHandler, { BOOKING_PATHS } from './api/demoBooking.js';
 import eventsHandler from './api/events.js';
 import routeHandler from './api/route.js';
 import travelTimesHandler from './api/travelTimes.js';
@@ -205,8 +205,8 @@ const API_HANDLERS = new Map([
   ...ACCOUNT_PATHS.map((apiPath) => [apiPath, accountHandler]),
   // Приглашения, активация аккаунта и ссылки для смены пароля (backend/api/activation.js).
   ...ACTIVATION_PATHS.map((apiPath) => [apiPath, activationHandler]),
-  // Демо-запись (только DEMO_DATA=on): подбор, слоты, запись, отмена.
-  ...DEMO_BOOKING_PATHS.map((apiPath) => [apiPath, demoBookingHandler]),
+  // Запись (пока только демо, DEMO_DATA=on): подбор, слоты, запись, отмена; /api/booking/* и прежние /api/demo/*.
+  ...BOOKING_PATHS.map((apiPath) => [apiPath, demoBookingHandler]),
 ]);
 
 const apiPathOf = (url) => {
