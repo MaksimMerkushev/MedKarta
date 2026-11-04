@@ -12,7 +12,8 @@ import assert from 'node:assert/strict';
 import { loadCatalog, __resetCatalogCache } from '../backend/privacy/catalog.js';
 import { moscowMoment } from '../backend/demo/time.js';
 import { POLICY, medicalTextModeFromEnv } from '../backend/privacy/policies.js';
-import { createExternalTriage, validateTriage, cleanModelText, MAX_CLARIFY_ROUNDS } from '../backend/planner/triage.js';
+import { createExternalTriage, validateTriage, cleanModelText, MAX_CLARIFY_ROUNDS, TRIAGE_SYSTEM_PROMPT } from '../backend/planner/triage.js';
+import { classifySymptoms } from '../backend/privacy/symptoms.js';
 import { sanitizeAiAction } from '../shared/contract.js';
 import { makeTestPipeline, TEST_SESSION } from './helpers.js';
 
@@ -292,6 +293,95 @@ describe('Триаж: разбор ответа модели', () => {
     assert.equal(cleanModelText('Температура выше 38?', 160), 'Температура выше 38?');
     for (const bad of ['Пишите на test@mail.ru?', 'Смотрите http://evil.example?', 'Call me?', 'Звоните 88005553535?', '<b>Где болит?</b>']) {
       assert.equal(cleanModelText(bad, 160), null, bad);
+    }
+  });
+});
+
+describe('Триаж: новая жалоба важнее названного раньше врача', () => {
+  it('жалоба на другое: прежний запрос модели не уходит, выбирает она', async () => {
+    const { action, calls } = await chat(['кардиолог', 'болит в коленке'], specialist('orthopedist', 'traumatologist'));
+    assert.match(calls[0].text, /1\. болит в коленке/);
+    assert.doesNotMatch(calls[0].text, /кардиолог/);
+    assert.equal(action.booking.request.specialty, 'orthopedist');
+    assert.match(action.replyText, /ортопед/);
+  });
+
+  it('то же с уверенной жалобой: раньше модель получала «кардиолог» и выбирала его', async () => {
+    const { action, calls } = await chat(['кардиолог', 'болит зуб'], ({ text }) => (/кардиолог/.test(text) ? specialist('cardiologist') : specialist('dentist')));
+    assert.doesNotMatch(calls[0].text, /кардиолог/);
+    assert.equal(action.booking.request.specialty, 'dentist');
+  });
+
+  it('модель недоступна — новый запрос всё равно отрабатывает: профиль из локального разбора', async () => {
+    const { action } = await chat(['кардиолог', 'болит в коленке'], new Error('down'));
+    assert.equal(action.booking.request.specialty, 'traumatologist');
+  });
+
+  it('следующая реплика остаётся в новом запросе и не возвращает прежнего врача', async () => {
+    const { action, calls } = await chat(['кардиолог', 'болит колено', 'завтра вечером'], specialist('traumatologist'));
+    assert.match(calls[0].text, /1\. болит колено\n2\. завтра вечером/);
+    assert.doesNotMatch(calls[0].text, /кардиолог/);
+    assert.equal(action.booking.request.specialty, 'traumatologist');
+    assert.equal(action.booking.request.date.kind, 'tomorrow');
+  });
+
+  it('уточняющий вопрос по новой жалобе и счёт уточнений — с неё, а не с начала разговора', async () => {
+    const question = clarify('Была травма?', ['Да, была травма', 'Давно болит'], ['traumatologist', 'orthopedist']);
+    const { action } = await chat(['болит живот', 'кардиолог', 'болит колено'], question);
+    assert.deepEqual(action.quickReplies, ['Да, была травма', 'Давно болит', 'Не знаю']);
+  });
+
+  it('жалоба подходит врачу: модель видит обе реплики', async () => {
+    const { action, calls } = await chat(['кардиолог', 'болит сердце'], specialist('cardiologist'));
+    assert.match(calls[0].text, /1\. кардиолог\n2\. болит сердце/);
+    assert.equal(action.booking.request.specialty, 'cardiologist');
+  });
+
+  it('расплывчатая жалоба после врача: решает модель, видя и врача, и жалобу', async () => {
+    const moved = await chat(['кардиолог', 'колет в боку'], specialist('therapist'));
+    assert.match(moved.calls[0].text, /1\. кардиолог\n2\. колет в боку/);
+    assert.equal(moved.action.booking.request.specialty, 'therapist');
+    const kept = await chat(['кардиолог', 'колет в боку'], specialist('cardiologist'));
+    assert.equal(kept.action.booking.request.specialty, 'cardiologist');
+    const asked = await chat(['кардиолог', 'колет в боку'], clarify('Где колет?', ['Справа', 'Слева']));
+    assert.ok(asked.action.quickReplies?.length > 0, 'модель может спросить');
+    const answered = await chat(['кардиолог', 'колет в боку', 'справа'], specialist('gastroenterologist'));
+    assert.match(answered.calls[0].text, /3\. справа/);
+    assert.equal(answered.action.booking.request.specialty, 'gastroenterologist');
+  });
+
+  it('модель не помогла — остаётся названный врач, а не пустой ответ', async () => {
+    assert.equal((await chat(['кардиолог', 'колет в боку'], new Error('down'))).action.booking.request.specialty, 'cardiologist');
+    assert.equal((await chat(['кардиолог', 'колет в боку'], 'не JSON')).action.booking.request.specialty, 'cardiologist');
+    assert.equal((await chat(['кардиолог', 'колет в боку'], { status: 'not_medical', specialties: [] })).action.booking.request.specialty, 'cardiologist');
+  });
+
+  it('уточнение без жалобы и названный врач модели не уходят', async () => {
+    for (const turns of [['кардиолог', 'завтра вечером'], ['кардиолог', 'а подешевле?'], ['кардиолог'], ['болит колено', 'нужен кардиолог'], ['кардиолог', 'после операции']]) {
+      const { action, calls } = await chat(turns, specialist('therapist'));
+      assert.equal(calls.length, 0, turns.join(' → '));
+      assert.equal(action.booking.request.specialty, 'cardiologist', turns.join(' → '));
+    }
+  });
+
+  it('промпт: последняя реплика важнее, контекст остаётся', () => {
+    assert.match(TRIAGE_SYSTEM_PROMPT, /Последняя реплика важнее прежних/);
+    assert.match(TRIAGE_SYSTEM_PROMPT, /подробности той же проблемы учитывай вместе/);
+    assert.doesNotMatch(TRIAGE_SYSTEM_PROMPT, /в одной из реплик пользователь сам назвал врача/);
+  });
+
+  it('локальный разбор: жалоба отличается от случайного слова', () => {
+    for (const text of ['болит в коленке', 'колено', 'спина', 'у меня мигрень', 'болят суставы', 'колет в боку', 'плохо себя чувствую', 'у сына ушиб']) {
+      assert.equal(classifySymptoms(text).complaint, true, text);
+    }
+    for (const text of ['после операции', 'завтра вечером', 'а просто консультация?', 'а подешевле?', 'сломался сайт', 'руководитель клиники']) {
+      assert.equal(classifySymptoms(text).complaint, false, text);
+    }
+    for (const text of ['сломал руку', 'болит нога', 'рука болит', 'подвернул ногу', 'болит палец']) {
+      assert.equal(classifySymptoms(text).specialties[0], 'traumatologist', text);
+    }
+    for (const text of ['сломался сайт', 'руководитель клиники', 'новый костюм']) {
+      assert.equal(classifySymptoms(text).hasMedicalText, false, text);
     }
   });
 });

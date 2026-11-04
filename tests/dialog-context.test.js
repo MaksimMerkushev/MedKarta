@@ -641,6 +641,143 @@ describe('Сложные диалоги: контекст через 10+ реп�
   });
 });
 
+/*
+ * Контекст и новый запрос. [реплики, ожидаемый профиль]. Сравнивается при
+ * недоступной модели и при модели, которая послушно ищет по описанию: новый
+ * запрос не должен зависеть от того, ответила ли она.
+ */
+const NEW_REQUESTS = [
+  [['кардиолог', 'болит в коленке'], 'traumatologist'],
+  [['нужен кардиолог', 'у меня болит колено'], 'traumatologist'],
+  [['запиши к кардиологу', 'коленка болит, что делать?'], 'traumatologist'],
+  [['кардиолог', 'колено'], 'traumatologist'],
+  [['кардиолог', 'болят суставы'], 'traumatologist'],
+  [['кардиолог', 'сломал руку'], 'traumatologist'],
+  [['кардиолог', 'болит нога'], 'traumatologist'],
+  [['кардиолог', 'болит голова'], 'neurologist'],
+  [['кардиолог', 'у меня мигрень'], 'neurologist'],
+  [['кардиолог', 'болит спина'], 'neurologist'],
+  [['кардиолог', 'болит живот'], 'gastroenterologist'],
+  [['кардиолог', 'болит зуб'], 'dentist'],
+  [['кардиолог', 'болит ухо'], 'lor'],
+  [['кардиолог', 'температура и кашель'], 'therapist'],
+  [['лор', 'болит сердце'], 'cardiologist'],
+  [['дерматолог', 'болит колено'], 'traumatologist'],
+  // Подряд несколько запросов — всегда по последнему.
+  [['кардиолог', 'лор', 'болит колено'], 'traumatologist'],
+  [['кардиолог', 'болит колено', 'болит зуб'], 'dentist'],
+  [['кардиолог', 'болит колено', 'нужен лор'], 'lor'],
+  [['кардиолог', 'болит колено', 'нет, всё-таки кардиолог'], 'cardiologist'],
+  [['болит колено', 'нужен кардиолог'], 'cardiologist'],
+  [['болит колено', 'болит зуб'], 'dentist'],
+  [['болит зуб', 'лор'], 'lor'],
+  [['кардиолог', 'лучше лор'], 'lor'],
+  [['кардиолог', 'а теперь нужен стоматолог'], 'dentist'],
+  [['где сделать МРТ', 'нужен кардиолог'], 'cardiologist'],
+];
+
+/* Реплика продолжает разговор: профиль прежний, условия накапливаются. */
+const CONTINUATIONS = [
+  [['кардиолог', 'завтра вечером'], { specialty: 'cardiologist', date: { kind: 'tomorrow' }, evening: true }],
+  [['кардиолог', 'а подешевле?'], { specialty: 'cardiologist' }],
+  [['кардиолог', 'женщина'], { specialty: 'cardiologist', doctorGender: 'female' }],
+  [['кардиолог завтра после 18', 'до 3000'], { specialty: 'cardiologist', date: { kind: 'tomorrow' }, timeFrom: '18:00', maxPrice: 3000 }],
+  [['дерматолог', 'а просто консультация?'], { specialty: 'dermatologist' }],
+  // Жалоба подходит названному врачу или ни о чём не спорит — он и остаётся.
+  [['кардиолог', 'болит сердце'], { specialty: 'cardiologist' }],
+  [['кардиолог', 'давление скачет'], { specialty: 'cardiologist' }],
+  [['кардиолог', 'слабость'], { specialty: 'cardiologist' }],
+  [['кардиолог', 'после операции'], { specialty: 'cardiologist' }],
+  [['кардиолог', 'колет в боку'], { specialty: 'cardiologist' }],
+  [['кардиолог', 'плохо себя чувствую'], { specialty: 'cardiologist' }],
+  [['терапевт', 'болит голова'], { specialty: 'therapist' }],
+  [['невролог', 'болит спина'], { specialty: 'neurologist' }],
+  [['ортопед', 'болит колено'], { specialty: 'orthopedist' }],
+  // Новый врач — условия остаются: это контекст, а не прошлый запрос.
+  [['кардиолог завтра после 18 до 3000', 'болит колено'], { specialty: 'traumatologist', date: { kind: 'tomorrow' }, timeFrom: '18:00', maxPrice: 3000 }],
+  [['кардиолог в Советском районе', 'болит зуб'], { specialty: 'dentist', districts: ['Советский'] }],
+  [['кардиолог', 'болит колено', 'завтра вечером'], { specialty: 'traumatologist', date: { kind: 'tomorrow' }, evening: true }],
+  [['кардиолог для сына', 'болит колено'], { specialty: 'traumatologist', patient: 'child' }],
+];
+
+describe('Контекст есть, но новый запрос важнее', needsSqlite, () => {
+  for (const [turns, specialty] of NEW_REQUESTS) {
+    it(`новый запрос: ${turns.join(' → ')}`, async () => {
+      for (const model of ['модель недоступна', 'модель ищет врача']) {
+        const request = await requestOf(turns, MODELS[model]);
+        assert.equal(request?.specialty, specialty, model);
+      }
+    });
+  }
+
+  for (const [turns, expected] of CONTINUATIONS) {
+    it(`контекст: ${turns.join(' → ')}`, async () => {
+      for (const model of ['модель недоступна', 'модель ищет врача']) {
+        const request = await requestOf(turns, MODELS[model]);
+        for (const [field, value] of Object.entries(expected)) {
+          const actual = request?.[field];
+          if (field === 'date') assert.equal(actual?.kind, value.kind, `${model}: ${field}`);
+          else assert.deepEqual(actual, value, `${model}: ${field}`);
+        }
+      }
+    });
+  }
+
+  it('врач по фамилии — контекст: своя жалоба его не меняет, чужая — новый запрос', async () => {
+    const pavlova = 'demo-doc-pavlova-zulfiya';
+    assert.deepEqual((await requestOf(['к Павловой', 'завтра вечером'])).doctorIds, [pavlova]);
+    assert.deepEqual((await requestOf(['к Павловой', 'болит сердце'])).doctorIds, [pavlova]);
+    const switched = await requestOf(['к Павловой', 'болит колено']);
+    assert.deepEqual(switched.doctorIds, [], 'кардиолог Павлова к травматологу не относится');
+    assert.equal(switched.specialty, 'traumatologist');
+    assert.deepEqual((await requestOf(['к Гимадиеву', 'болит горло'])).doctorIds, ['demo-doc-gimadiev-lenar']);
+    assert.deepEqual((await requestOf(['кардиолог', 'к Гимадиеву', 'болит горло'])).doctorIds, ['demo-doc-gimadiev-lenar']);
+    const replaced = await requestOf(['кардиолог Павлова', 'нужен лор']);
+    assert.deepEqual(replaced.doctorIds, []);
+    assert.equal(replaced.specialty, 'lor');
+    // Однофамильца уточняет профиль — это не новый запрос.
+    assert.deepEqual((await requestOf(['к Ефимова', 'к лору'])).doctorIds, ['demo-doc-efimov-timur']);
+  });
+
+  it('услуга не остаётся за новым врачом, а уточнение к ней — остаётся', async () => {
+    const replaced = await requestOf(['ЛОР на приём первичный завтра', 'а лучше кардиолог']);
+    assert.equal(replaced.specialty, 'cardiologist');
+    assert.equal(replaced.date.kind, 'tomorrow');
+    const glasses = await requestOf(['подбор очков', 'офтальмолог']);
+    assert.equal(glasses.specialty, 'ophthalmologist');
+    assert.ok(glasses.serviceId, 'процедура — того же врача');
+  });
+
+  it('маршрут не тянется за новой жалобой; смена врача маршрута его сохраняет', async () => {
+    const complaint = await chat(['маршрут к кардиологу', 'болит колено']);
+    assert.equal(complaint.action.booking.request.specialty, 'traumatologist');
+    assert.doesNotMatch(complaint.action.replyText, /Построил маршрут/);
+    const same = await chat(['маршрут к терапевту', 'нет, к лору']);
+    assert.match(same.action.replyText, /Построил маршрут: ЛОР/);
+  });
+
+  it('срочное состояние важнее любого контекста', async () => {
+    const { action } = await chat(['лор завтра', 'болит в груди']);
+    assert.equal(action.booking ?? null, null);
+    assert.match(action.replyText, /103|112/);
+  });
+
+  it('модель получает только текущую цель: прежняя услуга или врач в описание не попадают', async () => {
+    const respond = clarify();
+    const structured = { outboundMode: 'structured' };
+    const toService = await chat(['кардиолог', 'где сделать МРТ'], respond, structured);
+    assert.match(toService.sent[0].serialized, /service/);
+    assert.doesNotMatch(toService.sent[0].serialized, /cardiologist/);
+    assert.deepEqual(toService.sent[0].hints.specialties, []);
+    const toDoctor = await chat(['где сделать МРТ', 'нужен кардиолог'], respond, structured);
+    assert.match(toDoctor.sent[0].serialized, /cardiologist/);
+    assert.doesNotMatch(toDoctor.sent[0].serialized, /service/);
+    // Способ остаётся: новый врач в разговоре о маршруте — по-прежнему маршрут.
+    const route = await chat(['маршрут к терапевту', 'нет, к лору'], respond, structured);
+    assert.match(route.sent[0].serialized, /route/);
+  });
+});
+
 describe('Лимит чата под диалог с уточнениями', () => {
   it('40 реплик за 5 минут с адреса — кнопки уточнений тоже реплики', async () => {
     const { checkRateLimit, CHAT_MAX_PER_IP } = await import('../backend/http/rateLimit.js');

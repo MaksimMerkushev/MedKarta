@@ -245,6 +245,8 @@ export const createPipeline = ({
           diagnostics: { requestId: gate.requestId, decision: gate.decision, reason: gate.reason, planSource: 'triage', cpuMs: cpuMs() },
         };
       }
+      // Врач назван словами, а жалобы модель не нашла: разговор о названном враче продолжается.
+      if (triaged?.status === 'not_medical' && gate.context.booking?.openComplaint) triaged = null;
       /*
        * Модель не нашла в тексте жалобы, хотя словарь её «увидел» («напиши,
        * что у меня рак»): профиль по словарю не подставляем — переспросим.
@@ -485,7 +487,7 @@ const TARGET_KINDS = new Set(['DOCTOR', 'CLINIC']);
 const wantsTriage = (gate, messages) => {
   const context = gate.context;
   const booking = context.booking || {};
-  if (booking.explicitSpecialty || booking.unknownSpecialty || (booking.doctorIds || []).length > 0) return false;
+  if ((booking.explicitSpecialty && !booking.openComplaint) || booking.unknownSpecialty || (booking.doctorIds || []).length > 0) return false;
   if (context.offTopic) return false;
   if (gate.reason === FAIL_CLOSED_REASON.MEDICAL_TEXT) return true;
   /*

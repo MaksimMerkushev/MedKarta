@@ -170,9 +170,21 @@ const RULES = [
   { id: 'reproductive', weight: 3, stems: ['аборт', 'выкидыш', 'бесплоди', 'эко', 'импотенц', 'эрекци', 'климакс'], specialties: ['gynecologist', 'urologist'] },
 ];
 
+/*
+ * Рука и нога только вместе с жалобой: основа «рук» — это и «руководитель»,
+ * «ног» — и «ногти», а «сломал» — и «сломался сайт».
+ */
+const LIMB = '(?:рук|ног|пал[ье]ц|пальц|стоп|лодыж|локот|локт|запясть|кист|голен|бедр|ключиц|ребр|кост)\\p{L}*';
+const LIMB_HURT = '(?:болит|болят|ноет|ноют|сломал\\p{L}*|подвернул\\p{L}*|вывихнул\\p{L}*|ушиб\\p{L}*|растянул\\p{L}*)';
+
 const PHRASE_RULES = [
   { id: 'gyneco_phrase', specialty: 'gynecologist', pattern: /(?<!\p{L})(?:по\s+)?женск\p{L}*\s+(?:дел|част|проблем|болезн)\p{L}*/u },
   { id: 'uro_phrase', specialty: 'urologist', pattern: /(?<!\p{L})(?:по\s+)?мужск\p{L}*\s+(?:дел|част|проблем|болезн)\p{L}*/u },
+  {
+    id: 'limb_phrase',
+    specialty: 'traumatologist',
+    pattern: new RegExp(`(?<!\\p{L})(?:${LIMB_HURT}\\s+(?:(?:в|на|у)\\s+)?${LIMB}|${LIMB}\\s+${LIMB_HURT})(?!\\p{L})`, 'u'),
+  },
 ];
 
 /*
@@ -185,9 +197,17 @@ const NOT_A_COMPLAINT = /^(?:травмпункт|травм[ао]толог|э�
 
 const CHILD_STEMS = ['ребенок', 'ребенк', 'дет', 'малыш', 'грудничк', 'сын', 'доч', 'подростк', 'младенц'];
 
+/*
+ * Реплика описывает состояние, а не просто содержит слово из правила: «после
+ * операции» при разговоре о кардиологе — подробность, «болит колено» или
+ * «у меня мигрень» — новая жалоба. Определяет, сменилась ли тема разговора.
+ */
+const COMPLAINT_STEMS = ['перелом', 'вывих', 'ушиб', 'растяжени', 'мигрен', 'тошнот', 'тошнит', 'рвот', 'понос', 'диаре', 'изжог', 'кашел', 'насморк', 'ангин', 'сып', 'зуд', 'опух', 'отек'];
+const COMPLAINT_OWNER = /(?:^| )у (?:меня|него|нее|сына|дочери|дочки|ребенка|мужа|жены|мамы|папы)(?: |$)/u;
+
 /** Лексика, выдающая описание состояния здоровья независимо от специальности. */
 const MEDICAL_MARKERS = [
-  'болит', 'больно', 'боль', 'беспокоит', 'мучает', 'чувствую', 'самочувств',
+  'болит', 'болят', 'болел', 'больно', 'боль', 'беспокоит', 'мучает', 'чувствую', 'самочувств',
   'симптом', 'болею', 'заболел', 'ноет', 'колет', 'тянет', 'ломит',
   'приступ', 'обострени', 'хроническ', 'диагноз',
   'нехорошо', 'дурно', 'тошно', 'кружится', 'знобит', 'температур', 'давлени',
@@ -205,6 +225,7 @@ const compactPhrase = (value) =>
 
 const PRECOMPILED = RULES.map((rule) => ({ ...rule, stems: rule.stems.map((stem) => normalizeRu(stem)) }));
 const CHILD_NORMALIZED = CHILD_STEMS.map((stem) => normalizeRu(stem));
+const COMPLAINT_NORMALIZED = COMPLAINT_STEMS.map((stem) => normalizeRu(stem));
 /*
  * Маркер ищется с начала слова, а продолжения «больше», «больница»,
  * «больничный» исключены: иначе «рейтинг больше 4.5» считается жалобой.
@@ -274,6 +295,7 @@ const matchesStem = (tokenStems, ruleStem) =>
  * @returns {{
  *   emergency: null | {id: string},
  *   hasMedicalText: boolean,
+ *   complaint: boolean,
  *   specialties: string[],
  *   confidence: number,
  *   isChild: boolean,
@@ -334,6 +356,11 @@ export const classifySymptoms = (text) => {
     hasMarker(normalized) ||
     Boolean(emergency);
 
+  // Одно слово из правила («колено», «спина») — тоже жалоба: больше в реплике ничего нет.
+  const complaint = hasMarker(normalized)
+    || COMPLAINT_NORMALIZED.some((stem) => matchesStem(tokenStems, stem))
+    || (matchedRules.length > 0 && (tokens.length === 1 || COMPLAINT_OWNER.test(normalized)));
+
   /*
    * Уверенность — из двух независимых величин:
    *   strength  — насколько специфичны сработавшие слова («зуб» против
@@ -358,6 +385,7 @@ export const classifySymptoms = (text) => {
   return {
     emergency: emergency ? { id: emergency.id } : null,
     hasMedicalText,
+    complaint,
     specialties: ranked.slice(0, 3).map(([specialty]) => specialty),
     confidence,
     isChild,
