@@ -1150,6 +1150,7 @@ describe('Длинная фраза со всеми условиями', () => {
     assert.deepEqual(request.preferWindow, { from: '17:30', to: null });
     assert.equal(request.maxPrice, 2500);
     assert.equal(request.travel.maxMinutes, 20);
+    assert.equal(request.travel.nearest, false, '«я нахожусь рядом» — не просьба «поближе»');
     assert.equal(request.originPlace, 'tukay');
     assert.equal(request.originConfirmed, true);
     assert.deepEqual(request.origin, TUKAY);
@@ -1160,6 +1161,8 @@ describe('Длинная фраза со всеми условиями', () => {
     if (!HAS_REAL_GRAPH) return;
     assert.equal(result.status, 'ok');
     assert.deepEqual(result.request.origin, TUKAY, 'названное место важнее точки браузера');
+    const starts = result.options.map((option) => Date.parse(option.nextSlot.startAt));
+    assert.deepEqual(starts, [...starts].sort((left, right) => left - right), 'сначала самое раннее время: сегодня, затем завтра');
     for (const option of result.options) {
       assert.ok(option.price <= 2500);
       assert.ok(option.travel.minutes <= 20);
@@ -1212,6 +1215,17 @@ describe('Длинная фраза со всеми условиями', () => {
       assert.equal(request.originHint, hint);
       assert.equal(request.originPlace, null);
       assert.equal(request.originConfirmed, false);
+    });
+  }
+
+  for (const [text, nearest] of [
+    ['я на площади Тукая, лор поближе', true],
+    ['я на площади Тукая, найди ближайшего лора', true],
+    ['лор рядом с Кремлём', true],
+    ['я на площади Тукая, лор в ближайшее время', false],
+  ]) {
+    it(`«поближе» только по просьбе: «${text}»`, async () => {
+      assert.equal((await requestOf(text)).travel.nearest, nearest);
     });
   }
 

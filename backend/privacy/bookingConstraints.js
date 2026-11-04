@@ -1015,6 +1015,12 @@ const namedPlace = (text) => {
   }
   return best;
 };
+/*
+ * «Я нахожусь рядом с площадью Тукая» — где человек, а не просьба «поближе»:
+ * порядок вариантов остаётся по ближайшему времени. «Найди поближе» — просьба.
+ */
+const SELF_HERE = new RegExp(`(?<!${WORD})(?:нахожусь|находимся|(?:я|мы)\\s+(?:сейчас\\s+|уже\\s+|тут\\s+|здесь\\s+)?(?:на|у|возле|около|рядом))(?!${WORD})`, 'u');
+const ASKS_NEARER = new RegExp(`(?<!${WORD})(?:(?:по)?ближе(?!${WORD})|ближайш\\p{L}*\\s+(?!дн|день|дат|врем|час|недел|сутк|\\d|два|две|три|четыре|пять|шесть|семь|пару|свободн))`, 'u');
 /* «Не дальше 20 минут от центра» — лимит пути, а не отрицание места. */
 const LIMIT_NEGATION = new RegExp(`(?<!${WORD})не\\s+(?:дальше|дольше|далее|более|больше)(?:\\s+чем)?(?!${WORD})`, 'gu');
 
@@ -1365,6 +1371,7 @@ export const extractBookingConstraints = (text, { nested = false } = {}) => {
     if (knownPlace && (!origin || origin.value === 'place' || knownPlace.index >= origin.index)) {
       result.originHint = 'place';
       result.originPlace = knownPlace.id;
+      if (SELF_HERE.test(originText) && !ASKS_NEARER.test(lower)) result.selfAtPlace = true;
     } else if (origin) result.originHint = origin.value;
     // «Живу на Азино, найдите поближе»: поближе — к дому, а не к текущей геолокации.
     else if (self.home || self.work) result.originHint = self.home ? 'home' : 'work';
@@ -2288,7 +2295,7 @@ export const mergeBookingTurns = (turns) => {
     if (Number.isInteger(constraints.maxTravelMinutes)) merged.maxTravelMinutes = constraints.maxTravelMinutes;
     else if (Number.isInteger(booking.maxTravelMinutes)) merged.maxTravelMinutes = booking.maxTravelMinutes;
     if (constraints.travelMode) merged.travelMode = constraints.travelMode;
-    if (constraints.selection === 'nearest' && !booking.nearestIsTime) merged.nearest = true;
+    if (constraints.selection === 'nearest' && !booking.nearestIsTime && !booking.selfAtPlace) merged.nearest = true;
   }
 
   return merged;
