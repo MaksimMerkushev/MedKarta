@@ -235,7 +235,7 @@ try {
     await admin.waitForFunction(() => /30 дней/.test(document.querySelector('[data-testid=stats-period]')?.textContent || ''));
     const total = await admin.textContent('[data-testid=stats-total]');
     expect(/\d/.test(total) && !/Запросов к серверу0/.test(total), `запросы не посчитаны: ${total}`);
-    await admin.waitForSelector('[data-testid=stats-endpoints] >> text=/api/admin/stats');
+    await admin.waitForSelector('[data-testid=stats-endpoints] >> text="GET /api/admin/stats"');
     await shot(admin, '02a-stats-requests');
     for (const tab of ['Ассистент', 'Поиск и карта', 'Пользователи', 'Запись', 'Письма']) {
       await admin.click(`[role=tab] >> text=${tab}`);
