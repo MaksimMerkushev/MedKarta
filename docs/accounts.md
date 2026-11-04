@@ -47,7 +47,7 @@ email не подтвердить. Временных паролей не выд
 | `superadmin` — Суперадминистратор | 3 | всё |
 
 Разрешения ([rbac.js](../backend/accounts/rbac.js)): `admin.access`,
-`dashboard.view`, `users.view`, `users.create`, `users.edit`, `users.block`,
+`dashboard.view`, `stats.view` (только суперадминистратор), `users.view`, `users.create`, `users.edit`, `users.block`,
 `users.password`, `users.sessions`, `users.archive`, `users.delete`,
 `users.export`, `roles.assign`, `roles.manage`, `audit.view`, `system.view`,
 `settings.view`, `settings.edit`. Набор для `admin` и `moderator`
@@ -531,7 +531,8 @@ SMTP, SPF, DKIM и DMARC — [mail-setup.md](mail-setup.md).
 | Роли и права | `roles.assign` или `roles.manage`; правка — `roles.manage` | матрица разрешений, зависимости, сброс |
 | Сессии | `users.sessions` | все активные сессии с отзывом |
 | Журнал действий | `audit.view` | поиск, фильтры, детали |
-| Система | `system.view` | компоненты, версия, Node, память, счётчики запросов |
+| Статистика | `stats.view` (только суперадминистратор) | запросы, ассистент, поиск и карта, пользователи, письма, запись за выбранный период — [stats.md](stats.md) |
+| Система | `system.view` | компоненты, версия, Node, память, счётчики запросов с момента запуска |
 | Настройки | `settings.view`; правка — `settings.edit` | название, контакты, ассистент, нагрузка и лимиты (множитель лимитов на адрес, очередь к ассистенту, обращения к модели за 5 минут и в сутки; кнопки «Для показа» и «Обычный режим»), сроки сессий (в том числе сотрудников), порог неудачных входов, срок подтверждения личности, сроки ссылок, хранение журналов |
 
 Первый вход сотрудника в панель — экран «Включите двухфакторную защиту»:
