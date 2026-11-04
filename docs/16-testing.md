@@ -215,6 +215,7 @@ STARTTLS на учебном сервере [tests/fixtures/smtpServer.js](../te
 | Файл | Тестов | Область |
 |---|---:|---|
 | [accounts.test.js](../tests/accounts.test.js) | 35 | кабинет: scrypt, сессии, лимиты входа, CSRF, cookie, демо-аккаунты (на коммите аудита; сейчас 42, см. выше) |
+| [admin-stats.test.js](../tests/admin-stats.test.js) | 32 | статистика: период, обезличивание адресов, счётчики, сводки, журнал за период, права (добавлен после аудита) |
 | [analytics.test.js](../tests/analytics.test.js) | 26 | закрытый словарь событий, журнал, квоты, отчёт |
 | [best-picks.test.js](../tests/best-picks.test.js) | 15 | «три лучших варианта» |
 | [booking-api.test.js](../tests/booking-api.test.js) | 5 | `/api/booking/*` и прежние `/api/demo/*`, внешний коннектор через кэш, `not_supported` (добавлен после аудита) |

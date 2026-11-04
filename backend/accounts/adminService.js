@@ -22,6 +22,8 @@ import {
 } from './service.js';
 import { searchTextOf } from './sqliteStore.js';
 import { emailKey } from './throttle.js';
+import { PERIOD_PRESETS, PeriodError } from '../stats/period.js';
+import { buildAccountsSection, buildBookingSection, buildMailSection } from '../stats/sections.js';
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -91,6 +93,7 @@ const csvCell = (value) => {
  */
 export const createAdminService = ({
   store, accounts, invitations = null, onAccountDeleted = async () => {}, systemInfo = async () => null, throttle = null, now = () => Date.now(),
+  collectStats = async () => null, bookingRows = async () => null, mailKeepDays = 30,
 }) => {
   const settings = accounts.settings;
 
@@ -870,6 +873,61 @@ export const createAdminService = ({
       if (result.errors) fail('bad_setting', 400, Object.values(result.errors)[0], { errors: result.errors });
       if (Object.keys(result.changes).length > 0) audit(actor, 'settings.update', { targetLabel: 'Настройки', details: { changes: result.changes } });
       return { ...this.settings(actor), changed: Object.keys(result.changes) };
+    },
+
+    /* ----------------------------- статистика ------------------------------- */
+
+    /**
+     * Подробная статистика за период — только суперадминистратору: сводные
+     * числа без людей. Обращения к ассистенту не разбиваются по пользователям
+     * намеренно: ассистент не связан с аккаунтом, жалоба — сведения о здоровье.
+     */
+    async stats(actor, query = {}) {
+      requirePermission(actor, 'stats.view');
+      const stamp = now();
+      let base;
+      try {
+        base = await collectStats({
+          query: { preset: query.preset, from: query.from, to: query.to, bucket: query.bucket },
+          now: stamp,
+          dailyLimit: settings.get('ai.dailyCallLimit'),
+        });
+      } catch (error) {
+        if (error instanceof PeriodError) fail('bad_period', 400, error.message);
+        throw error;
+      }
+      const { period } = base;
+      const range = { since: period.from, until: period.to };
+      const authTypes = Object.entries(AUTH_EVENT_LABELS);
+      return {
+        generatedAt: iso(stamp),
+        timezone: 'Europe/Moscow',
+        presets: PERIOD_PRESETS,
+        period: {
+          key: period.key,
+          label: period.label,
+          from: iso(period.from),
+          to: iso(period.to),
+          previousFrom: iso(period.previous.from),
+          previousTo: iso(period.previous.to),
+          bucket: period.bucket,
+          bucketAdjusted: period.bucketAdjusted,
+          buckets: period.buckets.map(iso),
+          days: period.days,
+        },
+        requests: base.requests,
+        assistant: base.assistant,
+        product: base.product,
+        coverage: { ...base.coverage, authEventsDays: settings.get('retention.authEventsDays'), auditDays: settings.get('retention.auditDays'), mailKeepDays },
+        accounts: buildAccountsSection({
+          period,
+          store,
+          authTypes,
+          previousCount: store.countUsersCreated({ since: period.previous.from, until: period.previous.to }),
+        }),
+        mail: buildMailSection({ period, rows: store.mailReport(range), keepDays: mailKeepDays }),
+        booking: buildBookingSection({ period, rows: await bookingRows(range).catch(() => null), now: stamp }),
+      };
     },
 
     /* ------------------------------ дашборд -------------------------------- */

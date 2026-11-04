@@ -321,6 +321,13 @@ CREATE INDEX bookings_account ON bookings(account_id, created_at) WHERE account_
 базы кабинета, без email и имени. При удалении аккаунта он обнуляется.
 Время — миллисекунды Unix.
 
+## SQLite: статистика
+
+Отдельный файл (`stats.sqlite` рядом с базой аккаунтов или `STATS_DB_PATH`):
+счётчики не требуют миграции схемы аккаунтов, и откат выкладки безопасен.
+Таблицы `http_hourly`, `metric_daily`, `product_daily`, срок хранения —
+400 дней. Людей здесь нет. Подробно — [stats.md](stats.md).
+
 ## Граф дорог
 
 Бинарный файл `data/graph/kazan.graph` (вне git) — формат `GMK1` версии 1,

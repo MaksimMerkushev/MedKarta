@@ -33,6 +33,7 @@ import { rateLimitKey, validateTrustProxy } from './http/rateLimit.js';
 import { getDefaultRoutingEngine } from './routing/engine.js';
 import { logger } from './observability/safeLogger.js';
 import { requestStats } from './observability/requestStats.js';
+import { startStats, statsCollector } from './stats/index.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const DIST = path.join(ROOT, 'dist');
@@ -237,7 +238,10 @@ const handleRequest = async (req, res) => {
   // Счётчики для мониторинга: группа маршрута, код и время ответа — без адресов и параметров.
   const started = process.hrtime.bigint();
   res.once('finish', () => {
-    requestStats.record(apiPathOf(req.url), res.statusCode, Number(process.hrtime.bigint() - started) / 1e6);
+    const milliseconds = Number(process.hrtime.bigint() - started) / 1e6;
+    requestStats.record(apiPathOf(req.url), res.statusCode, milliseconds);
+    // История запросов для раздела «Статистика»: только метод, обезличенный адрес, код и время.
+    statsCollector.recordRequest(req.method, apiPathOf(req.url), res.statusCode, milliseconds);
   });
 
   const apiHandler = handlerFor(apiPathOf(req.url));
@@ -376,6 +380,7 @@ server.listen(PORT, HOST, async () => {
   const engine = await getDefaultRoutingEngine();
   // Кабинет открывается сразу: миграции базы и первый суперадминистратор — при запуске, а не при первом входе.
   const accounts = await getAccountContext();
+  await startStats();
   logger.event('server.started', {
     status: SERVE_STATIC ? 'api+static' : 'api-only',
     routing_provider: engine ? 'local' : 'none',

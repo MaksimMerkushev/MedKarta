@@ -444,6 +444,12 @@ export const createBookingStore = ({ DatabaseSync, file, index, now = () => Date
 
   const stats = () => Object.fromEntries(statements.countByStatus.all().map((row) => [row.status, row.count]));
 
+  /** Записи за период для статистики: врач, филиал и услуга слота, программа ДМС — да/нет. Без аккаунтов и токенов. */
+  const report = ({ since, until }) => db.prepare(`SELECT b.status, b.created_at AS createdAt, b.cancelled_at AS cancelledAt, b.plan_id IS NOT NULL AS withPlan,
+      b.account_id IS NOT NULL AS withAccount, s.doctor_id AS doctorId, s.branch_id AS branchId, s.clinic_id AS clinicId, s.service_id AS serviceId, s.start_at AS startAt
+    FROM bookings b JOIN slots s ON s.id = b.slot_id
+    WHERE (b.created_at >= ? AND b.created_at < ?) OR (b.cancelled_at >= ? AND b.cancelled_at < ?)`).all(since, until, since, until);
+
   return Object.freeze({
     kind: 'sqlite',
     ensureWindow,
@@ -460,6 +466,7 @@ export const createBookingStore = ({ DatabaseSync, file, index, now = () => Date
     accountBookings,
     forgetAccount,
     stats,
+    report,
     close: () => db.close(),
   });
 };

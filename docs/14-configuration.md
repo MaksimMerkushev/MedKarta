@@ -134,6 +134,8 @@
 
 | Переменная | По умолчанию | Что делает | Где |
 |---|---|---|---|
+| `STATS` | включено | `off` — не считать запросы для раздела «Статистика» | [stats/index.js](../backend/stats/index.js) |
+| `STATS_DB_PATH` | `stats.sqlite` рядом с базой аккаунтов | база статистики ([stats.md](stats.md)) | [stats/index.js](../backend/stats/index.js) |
 | `ANALYTICS` | включено | `off` — не писать события | [events.js](../backend/api/events.js) |
 | `ANALYTICS_DIR` | `var/analytics` | каталог журнала | [events.js](../backend/api/events.js) |
 | `ANALYTICS_MAX_EVENTS_PER_DAY` | `50000` | потолок записей в сутки | [eventStore.js](../backend/analytics/eventStore.js) |

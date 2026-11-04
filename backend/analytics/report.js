@@ -27,9 +27,10 @@ const sortedEntries = (map, limit = Infinity) =>
 
 /**
  * @param {object[]} events события в порядке записи
+ * @param {{topLimit?: number}} [options] сколько строк в списках «топ» (для свода по суткам — все)
  * @returns {object}
  */
-export const buildReport = (events) => {
+export const buildReport = (events, { topLimit = 10 } = {}) => {
   const byType = new Map();
   const sessions = new Map();
 
@@ -153,8 +154,8 @@ export const buildReport = (events) => {
       }),
     bySource: [...bySource.entries()].map(([source, row]) => ({ source, ...row, successRate: share(row.successful, row.searches) })),
     zeroResults: {
-      bySpecialty: Object.fromEntries(sortedEntries(zeroBySpecialty, 10)),
-      byFilter: Object.fromEntries(sortedEntries(zeroByFilter, 10)),
+      bySpecialty: Object.fromEntries(sortedEntries(zeroBySpecialty, topLimit)),
+      byFilter: Object.fromEntries(sortedEntries(zeroByFilter, topLimit)),
     },
     feedback: {
       yes: feedback.yes,
@@ -165,13 +166,13 @@ export const buildReport = (events) => {
     },
     contacts: {
       byChannel: Object.fromEntries(sortedEntries(contacts)),
-      topPlaces: Object.fromEntries(sortedEntries(contactPlaces, 10)),
+      topPlaces: Object.fromEntries(sortedEntries(contactPlaces, topLimit)),
     },
     externalMaps: Object.fromEntries(sortedEntries(externalMaps)),
     routes,
     dataReports: {
       byReason: Object.fromEntries(sortedEntries(dataReports)),
-      topPlaces: Object.fromEntries(sortedEntries(dataReportPlaces, 10)),
+      topPlaces: Object.fromEntries(sortedEntries(dataReportPlaces, topLimit)),
     },
   };
 };

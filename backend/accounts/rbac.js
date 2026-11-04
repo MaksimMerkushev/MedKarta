@@ -30,6 +30,7 @@ export const ROLE_INFO = Object.freeze({
 export const PERMISSIONS = Object.freeze([
   { key: 'admin.access', group: 'Панель', label: 'Вход в админ-панель' },
   { key: 'dashboard.view', group: 'Панель', label: 'Дашборд и статистика' },
+  { key: 'stats.view', group: 'Панель', label: 'Подробная статистика: запросы, ассистент, поиск', superadminOnly: true },
   { key: 'users.view', group: 'Пользователи', label: 'Просмотр пользователей' },
   { key: 'users.create', group: 'Пользователи', label: 'Создание пользователей', requires: ['users.view'] },
   { key: 'users.edit', group: 'Пользователи', label: 'Изменение имени и email', requires: ['users.view'] },

@@ -87,6 +87,13 @@ export const createPipeline = ({
   const executor = createExecutor({ repository, routing });
   let warnedNotConfigured = false;
 
+  /** Токены модели — для раздела «Статистика»: только число, по суткам. */
+  const countTokens = (completion) => {
+    for (const [kind, value] of [['prompt', completion.usage?.promptTokens], ['completion', completion.usage?.completionTokens]]) {
+      if (Number.isFinite(value) && value > 0) metrics.increment('planner.tokens', { kind }, value);
+    }
+  };
+
   const planExternally = async (request) => {
     const started = Date.now();
     const completion = await planner.generate(request);
@@ -108,6 +115,7 @@ export const createPipeline = ({
     }
 
     metrics.increment('planner.usage', { provider: completion.provider });
+    countTokens(completion);
     logger.event('planner.usage', {
       request_id: request.requestId,
       provider: completion.provider,
@@ -133,11 +141,14 @@ export const createPipeline = ({
       };
       const completion = await triage.classify(params);
       metrics.observe('triage.latency_ms', Date.now() - started, { provider: completion.provider });
+      countTokens(completion);
       let result = validateTriage(completion.raw);
       // Ответ не по формату — один повтор (если позволяет бюджет), затем — локальный классификатор.
       if (!result && takeBudget()) {
         metrics.increment('triage.retry');
-        result = validateTriage((await triage.classify({ ...params, retry: true })).raw);
+        const retried = await triage.classify({ ...params, retry: true });
+        countTokens(retried);
+        result = validateTriage(retried.raw);
       }
       // Статус — признак здоровья: только в агрегированных метриках, не в построчном журнале.
       metrics.increment('triage.result', { status: result ? result.status : 'invalid' });

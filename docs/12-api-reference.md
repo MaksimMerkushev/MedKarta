@@ -553,6 +553,7 @@ Set-Cookie: __Host-mk_sid=<token>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-A
 |---|---|---|---|
 | `GET /api/admin/me` | `admin.access` | — | `{user, permissions, roles, mail: {enabled}}` |
 | `GET /api/admin/dashboard` | `dashboard.view` | `?period=24h\|7d\|30d\|90d` | счётчики, ряды для графиков, последние пользователи и действия, состояние компонентов |
+| `GET /api/admin/stats` | `stats.view` (только суперадминистратор) | `?preset=today\|yesterday\|24h\|7d\|30d\|90d\|month\|prev_month\|year` или `?from=ГГГГ-ММ-ДД[ТЧЧ:ММ]&to=…`, `&bucket=hour\|day\|week\|month`; неверный период — `400 bad_period` | запросы, ассистент, поиск и карта, пользователи, письма, запись за период — [stats.md](stats.md) |
 | `GET /api/admin/users` | `users.view` | `?q&role&status=active\|pending\|blocked\|archived&kind=real\|demo\|all&sort&dir&page&pageSize=10\|25\|50\|100` | `{items, total, page, pageSize, sort, dir}`; у каждого `pending` — ждёт ли активации |
 | `POST /api/admin/users` | `users.create` (роль выше `user` — и `roles.assign`) | `{email, firstName, lastName, role, delivery: "auto"\|"manual"}` | `201 {user, invitation, link}` — аккаунт без пароля («ожидает активации»); `link` — только при ручной передаче или если письмо не ушло, **один раз** |
 | `GET /api/admin/users/export` | `users.export` | те же фильтры или `?ids=a,b` | CSV (UTF-8 с BOM, `;`), до 10 000 строк |
