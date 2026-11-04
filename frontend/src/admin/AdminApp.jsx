@@ -8,7 +8,7 @@
  */
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity, ArrowLeft, FileClock, Gauge, Inbox, KeyRound, LayoutDashboard, LogOut, Menu, MonitorSmartphone, Settings, ShieldCheck, UserRound, Users, X,
+  Activity, ArrowLeft, BarChart3, FileClock, Gauge, Inbox, KeyRound, LayoutDashboard, LogOut, Menu, MonitorSmartphone, Settings, ShieldCheck, UserRound, Users, X,
 } from 'lucide-react';
 
 import { logoutAccount } from '../services/account';
@@ -23,6 +23,7 @@ import { api, AUTH_EVENT, setReauthHandler } from './api';
 import { AdminContext } from './model';
 
 const Dashboard = lazy(() => import('./pages/Dashboard'));
+const StatsPage = lazy(() => import('./pages/Stats'));
 const UsersPage = lazy(() => import('./pages/Users'));
 const UserDetail = lazy(() => import('./pages/UserDetail'));
 const RolesPage = lazy(() => import('./pages/Roles'));
@@ -34,6 +35,7 @@ const PrivacyRequestsPage = lazy(() => import('./pages/PrivacyRequests'));
 
 const NAV = [
   { path: '/admin', label: 'Дашборд', icon: Gauge, permission: 'dashboard.view', page: Dashboard },
+  { path: '/admin/stats', label: 'Статистика', icon: BarChart3, permission: 'stats.view', page: StatsPage },
   { path: '/admin/users', label: 'Пользователи', icon: Users, permission: 'users.view', page: UsersPage },
   { path: '/admin/roles', label: 'Роли и права', icon: ShieldCheck, permission: ['roles.manage', 'roles.assign'], page: RolesPage },
   { path: '/admin/sessions', label: 'Сессии', icon: MonitorSmartphone, permission: 'users.sessions', page: SessionsPage },
