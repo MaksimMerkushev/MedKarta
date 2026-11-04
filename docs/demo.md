@@ -129,10 +129,10 @@ DEMO_DATA=on DEMO_NOW=2026-10-12T12:00:00+03:00 npm start
    ├─ планировщик (модель или локальный) выбирает действие
    └─ backend/demo/chatBridge.js → action.booking.request (запрос подбора)
 
-браузер: DemoOffers → POST /api/demo/search  (+ точка отправления и программа ДМС —
+браузер: DemoOffers → POST /api/booking/search  (+ точка отправления и программа ДМС —
                                               только здесь, в /api/chat их нет)
-         BookingDialog → GET /api/demo/slots → POST /api/demo/hold
-                       → POST /api/demo/bookings → «Демонстрационная запись подтверждена»
+         BookingDialog → GET /api/booking/slots → POST /api/booking/hold
+                       → POST /api/booking/bookings → «Демонстрационная запись подтверждена»
                        → маршрут тем же движком, что и обычный
 ```
 
@@ -348,16 +348,17 @@ DEMO_DATA=on DEMO_NOW=2026-10-12T12:00:00+03:00 npm start
 
 | Метод | Путь | |
 |---|---|---|
-| POST | `/api/demo/search` | строгий подбор |
-| GET | `/api/demo/slots?doctorId=&branchId=&from=&days=&planId=&patient=` | расписание врача со статусами и покрытием ДМС |
-| POST | `/api/demo/hold`, `/api/demo/release` | удержать / отпустить слот |
-| POST | `/api/demo/bookings` | записаться (`slotId`, `holdToken?`, `idempotencyKey`, `planId?`) |
-| POST | `/api/demo/bookings/cancel` | отменить (`number`, `cancelToken`) |
-| POST | `/api/demo/bookings/lookup` | статусы своих записей |
-| GET | `/api/demo/bookings/mine` | записи вошедшего пользователя (гость — `401`) |
+| POST | `/api/booking/search` | строгий подбор |
+| GET | `/api/booking/slots?doctorId=&branchId=&from=&days=&planId=&patient=` | расписание врача со статусами и покрытием ДМС |
+| POST | `/api/booking/hold`, `/api/booking/release` | удержать / отпустить слот |
+| POST | `/api/booking/bookings` | записаться (`slotId`, `holdToken?`, `idempotencyKey`, `planId?`) |
+| POST | `/api/booking/bookings/cancel` | отменить (`number`, `cancelToken`) |
+| POST | `/api/booking/bookings/lookup` | статусы своих записей |
+| GET | `/api/booking/bookings/mine` | записи вошедшего пользователя (гость — `401`) |
 
 Записи — только JSON с того же Origin (`Sec-Fetch-Site`), лимиты запросов,
-потолок тела 16 КБ. При выключенном демо — `404 demo_disabled`.
+потолок тела 16 КБ. При выключенном демо — `404 demo_disabled`. Прежние пути
+`/api/demo/*` отвечают так же — для вкладок, открытых со старой сборкой.
 
 ## Интерфейс
 
@@ -376,7 +377,7 @@ DEMO_DATA=on DEMO_NOW=2026-10-12T12:00:00+03:00 npm start
   ДМС, удержание с обратным отсчётом, подтверждение, номер, маршрут, отмена.
 - «Мои демо-записи» (иконка календаря в шапке): у гостя номер и токен отмены
   хранятся только в этом браузере (`medkarta.demo-bookings`), у вошедшего
-  пользователя — в его кабинете (`/api/demo/bookings/mine`); статус
+  пользователя — в его кабинете (`/api/booking/bookings/mine`); статус
   спрашивается у сервера. Демо-аккаунт у каждого браузера свой
   ([accounts.md](accounts.md)).
 - Вход и выход очищают переписку с ассистентом и начинают новый диалог.

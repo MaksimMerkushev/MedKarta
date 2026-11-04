@@ -15,7 +15,7 @@ charset=utf-8`); ответы API не кешируются (`Cache-Control: no-
 `<cancelToken>`, `<token>`. Врачи в примерах — **вымышленные демо-врачи**,
 в том числе в реальной клинике «Будь здоров» ([demo.md](demo.md)).
 
-OpenAPI-спецификация не приводится: запросы `/api/chat` и `/api/demo/search`
+OpenAPI-спецификация не приводится: запросы `/api/chat` и `/api/booking/search`
 определяются функциями нормализации с десятками условных полей
 ([shared/contract.js](../shared/contract.js), [shared/demoSearch.js](../shared/demoSearch.js)),
 и вручную написанная схема быстро разошлась бы с кодом. Источник истины —
@@ -42,11 +42,11 @@ OpenAPI-спецификация не приводится: запросы `/api
 | GET, POST | `/api/auth/activation`, `/api/auth/activation/peek`, `/start`, `/complete` | приглашение и ссылка для смены пароля: проверить, принять, задать пароль | [activation.js](../backend/api/activation.js) |
 | GET, PATCH, POST, PUT, DELETE | `/api/me/*` | свой профиль, пароль, безопасность (факторы входа, резервные коды, email, подтверждение личности), сессии, события, аватар | [me.js](../backend/api/me.js) |
 | GET, POST, PATCH, PUT, DELETE | `/api/admin/*` | админ-панель (по разрешениям роли, только со вторым фактором) | [admin.js](../backend/api/admin.js) |
-| POST | `/api/demo/search` | строгий подбор | [demoBooking.js](../backend/api/demoBooking.js) |
-| GET | `/api/demo/slots` | расписание демо-врача | [demoBooking.js](../backend/api/demoBooking.js) |
-| POST | `/api/demo/hold`, `/api/demo/release` | удержание слота | [demoBooking.js](../backend/api/demoBooking.js) |
-| POST | `/api/demo/bookings`, `/api/demo/bookings/cancel`, `/api/demo/bookings/lookup` | запись, отмена, статус | [demoBooking.js](../backend/api/demoBooking.js) |
-| GET | `/api/demo/bookings/mine` | записи вошедшего пользователя | [demoBooking.js](../backend/api/demoBooking.js) |
+| POST | `/api/booking/search` | строгий подбор | [demoBooking.js](../backend/api/demoBooking.js) |
+| GET | `/api/booking/slots` | расписание демо-врача | [demoBooking.js](../backend/api/demoBooking.js) |
+| POST | `/api/booking/hold`, `/api/booking/release` | удержание слота | [demoBooking.js](../backend/api/demoBooking.js) |
+| POST | `/api/booking/bookings`, `/api/booking/bookings/cancel`, `/api/booking/bookings/lookup` | запись, отмена, статус | [demoBooking.js](../backend/api/demoBooking.js) |
+| GET | `/api/booking/bookings/mine` | записи вошедшего пользователя | [demoBooking.js](../backend/api/demoBooking.js) |
 
 Неизвестный путь под `/api/` — `404 {"error":"Not found"}`. `/api/me/*` и
 `/api/admin/*` — единственные маршруты с параметрами в пути (`:id` —
@@ -621,12 +621,17 @@ Set-Cookie: __Host-mk_sid=<token>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-A
 
 ---
 
-## Демо-запись: /api/demo/*
+## Запись: /api/booking/*
 
-Только при `DEMO_DATA=on`, иначе `404 {"error":"Демо-запись выключена.","code":"demo_disabled"}`.
+Пока единственный коннектор записи — демо, поэтому API работает только при
+`DEMO_DATA=on`, иначе `404 {"error":"Демо-запись выключена.","code":"demo_disabled"}`.
 Тело — до 16 КБ. Логика — [11-demo-booking.md](11-demo-booking.md).
 
-### POST /api/demo/search
+Прежние пути `/api/demo/*` (`/api/demo/search`, `/api/demo/bookings` и т. д.)
+отвечают так же, с теми же лимитами: ими пользуются вкладки, открытые со
+старой сборкой. Интерфейс ходит в `/api/booking/*`.
+
+### POST /api/booking/search
 
 **Тело:** `{"request": {…}}` или сам запрос. Поля запроса — таблица
 «Запрос подбора» в [11-demo-booking.md](11-demo-booking.md); точка
@@ -722,7 +727,7 @@ Set-Cookie: __Host-mk_sid=<token>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-A
   "message": "Уточните, к какому специалисту нужно записаться.", "…": "…" }
 ```
 
-### GET /api/demo/slots
+### GET /api/booking/slots
 
 Параметры строки запроса: `doctorId` (обязательно), `branchId`, `from`
 (`ГГГГ-ММ-ДД`, не раньше сегодня), `days` (1–14, по умолчанию 7), `planId`,
@@ -731,7 +736,7 @@ Set-Cookie: __Host-mk_sid=<token>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-A
 `services[]`, `prices{}`, `coverage{}` (при `planId`), `slots[]`,
 `absences[]`. Ошибки: `404 doctor_not_found`, `404 branch_not_found`.
 
-### POST /api/demo/hold
+### POST /api/booking/hold
 
 ```json
 {"slotId":"demo-doc-gimadiev-lenar--demo-real-budzdorov-narimanova--20261013-1800"}
@@ -746,11 +751,11 @@ Set-Cookie: __Host-mk_sid=<token>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-A
 }
 ```
 
-### POST /api/demo/release
+### POST /api/booking/release
 
 `{slotId, holdToken}` → `{"released": true | false}`.
 
-### POST /api/demo/bookings
+### POST /api/booking/bookings
 
 **Тело:** `slotId`, `idempotencyKey` (16–80 символов `[A-Za-z0-9_-]`),
 `holdToken` (если слот удержан), `planId` (необязательно, только из
@@ -783,21 +788,22 @@ Set-Cookie: __Host-mk_sid=<token>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-A
 `owned: true` — запись сделана после входа и привязана к аккаунту; иначе
 номер и `cancelToken` хранит браузер.
 
-### POST /api/demo/bookings/cancel
+### POST /api/booking/bookings/cancel
 
 `{number, cancelToken}` → `{booking, slotReleased, alreadyCancelled}`;
 неверный номер или токен — `404 booking_not_found`.
 
-### POST /api/demo/bookings/lookup
+### POST /api/booking/bookings/lookup
 
 `{items: [{number, cancelToken}, …]}` (до 20) → `{bookings: [...]}`; для
 неизвестной пары — `{number, found: false}`.
 
-### GET /api/demo/bookings/mine
+### GET /api/booking/bookings/mine
 
 Записи вошедшего пользователя, новые сверху, до 50: `{bookings: [...]}` в том
 же виде, что ответ записи, с `cancelToken`. Без входа — `401`.
 
 **Коды ошибок записи** (`{error, code}`): `bad_request` 400;
 `slot_not_found`, `booking_not_found` 404; `slot_taken`, `slot_held`,
-`slot_unavailable`, `slot_past`, `slot_conflict`, `idempotency_conflict` 409.
+`slot_unavailable`, `slot_past`, `slot_conflict`, `idempotency_conflict` 409;
+`not_supported` 409 — коннектор клиники этого не умеет (у демо не бывает).

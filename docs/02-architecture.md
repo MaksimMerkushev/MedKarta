@@ -132,6 +132,7 @@ flowchart LR
     subgraph domain["Предметные модули"]
         engine["routing/engine.js<br/>граф, A*, Дейкстра"]
         search["demo/search.js<br/>строгий подбор"]
+        connectors["booking/connectors<br/>демо, позже МИС"]
         store["demo/bookingStore.js"]
         accounts["accounts/service.js"]
         analytics["analytics/eventStore.js"]
@@ -156,9 +157,10 @@ flowchart LR
     route --> engine
     tt --> engine
     demoapi --> search
-    demoapi --> store
+    demoapi --> connectors
     search --> engine
-    search --> store
+    search --> connectors
+    connectors --> store
     account --> accounts
     events --> analytics
     chat --> limits
@@ -175,6 +177,7 @@ flowchart LR
 | Validator и Policy Engine | строгая проверка JSON-плана; авторизация токенов в сессии, бюджет сложности | [06-ai-assistant.md](06-ai-assistant.md), [08-security.md](08-security.md) |
 | Executor и Result Builder | исполнение плана по справочнику, выбор ближайшего, шаблонный ответ | [06-ai-assistant.md](06-ai-assistant.md) |
 | chatBridge и строгий подбор | превращение понятых условий в запрос подбора; исполнение подбора по демо-набору | [11-demo-booking.md](11-demo-booking.md) |
+| Коннекторы записи | единый интерфейс к источнику слотов и записи (пока демо), кэш слотов для внешних МИС | [11-demo-booking.md](11-demo-booking.md) |
 | Движок маршрутизации | граф в типизированных массивах, A*, «один ко многим», привязка к дороге | [09-routing-engine.md](09-routing-engine.md) |
 | Кабинет | сессии в cookie, scrypt, SQLite | [accounts.md](accounts.md) |
 | Наблюдаемость | журнал по белому списку полей, метрики с перечислимыми метками | [17-performance-and-observability.md](17-performance-and-observability.md) |
@@ -195,7 +198,7 @@ sequenceDiagram
     participant PE as Validator + Policy Engine
     participant EX as Executor + Result Builder
     participant BR as chatBridge
-    participant DS as /api/demo/search
+    participant DS as /api/booking/search
     participant BS as bookingStore (SQLite)
     participant RT as /api/route
 
@@ -217,7 +220,7 @@ sequenceDiagram
     SPA->>DS: booking.request + точка отправления + программа ДМС
     DS-->>SPA: status ok, варианты со слотами
     U->>SPA: выбирает время
-    SPA->>BS: POST /api/demo/hold, затем /api/demo/bookings
+    SPA->>BS: POST /api/booking/hold, затем /api/booking/bookings
     BS-->>SPA: номер записи, токен отмены
     SPA->>RT: POST waypoints, profile
     RT-->>SPA: геометрия маршрута по дорогам
@@ -230,7 +233,7 @@ sequenceDiagram
 - условия записи («завтра», «после 18:00», «до 3000 ₽») берутся из
   детерминированного разбора текста, а не из ответа модели — модель не может
   их потерять или ослабить ([chatBridge.js](../backend/demo/chatBridge.js));
-- точка отправления и программа ДМС уходят только в `/api/demo/search`, в
+- точка отправления и программа ДМС уходят только в `/api/booking/search`, в
   `/api/chat` их нет ([services/demoBooking.js](../frontend/src/services/demoBooking.js),
   [services/ai.js](../frontend/src/services/ai.js));
 - запись — симуляция: ничего не отправляется в клиники, страховые и МИС.
@@ -260,9 +263,9 @@ flowchart LR
     text -->|"/api/chat"| gw
     gw -->|"только перечислимые значения и метки"| llm
     llm -->|"JSON-план"| exec
-    geo -->|"/api/route, /api/travel-times,<br/>/api/demo/search"| routing
+    geo -->|"/api/route, /api/travel-times,<br/>/api/booking/search"| routing
     geo --> demo
-    plan -->|"/api/demo/search"| demo
+    plan -->|"/api/booking/search"| demo
     plan -->|"после входа"| accdb
     fav -->|"после входа"| accdb
     gw --> log
@@ -273,7 +276,7 @@ flowchart LR
 |---|---|---|
 | Текст реплик | сервер (разбор в памяти) | не пишется в журнал; в режиме `structured` не уходит модели ни одним словом |
 | Координаты пользователя | сервер — маршрут, время в пути, строгий подбор | не пишутся в журнал, не уходят модели; в `/api/chat` клиент их не отправляет |
-| Программа ДМС | `localStorage`; `/api/demo/search`; кабинет после входа | не уходит в `/api/chat` |
+| Программа ДМС | `localStorage`; `/api/booking/search`; кабинет после входа | не уходит в `/api/chat` |
 | Email, имя, хэш пароля | SQLite кабинета | не связаны с ассистентом |
 | События аналитики | файлы JSON Lines | без текста поиска, координат, IP |
 

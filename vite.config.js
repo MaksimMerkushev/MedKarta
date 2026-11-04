@@ -81,6 +81,8 @@ const devApiPlugin = (env) => ({
       ['/api/admin', ADMIN_HANDLER_URL, 'админ-панели', true],
       ['/api/legal', PRIVACY_HANDLER_URL, 'документов', true],
       ['/api/privacy', PRIVACY_HANDLER_URL, 'персональных данных', true],
+      // Запись: новые пути и прежние — один модуль, одна база.
+      ['/api/booking', DEMO_BOOKING_HANDLER_URL, 'записи', true],
       ['/api/demo', DEMO_BOOKING_HANDLER_URL, 'демо-записи', true],
     ]) {
       try {

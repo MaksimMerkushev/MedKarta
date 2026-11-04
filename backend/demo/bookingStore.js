@@ -34,6 +34,7 @@ import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { BookingError } from '../booking/errors.js';
 import { DEMO_VERSION, generateDaySlots, SLOT_WINDOW_DAYS, windowDays } from './generator.js';
 import { addDays, moscowDay, moscowMoment, moscowParts } from './time.js';
 
@@ -42,13 +43,8 @@ export const HOLD_TTL_MS = 5 * 60 * 1000;
 /** Сколько дней после даты приёма демо-запись связана с аккаунтом. */
 export const OWNER_RETENTION_DAYS = 30;
 
-export class BookingError extends Error {
-  constructor(code, message) {
-    super(message);
-    this.name = 'BookingError';
-    this.code = code;
-  }
-}
+// Класс отказа общий для всех коннекторов; отсюда — для прежних импортов.
+export { BookingError };
 
 const SCHEMA_VERSION = 2;
 const MIGRATIONS = [

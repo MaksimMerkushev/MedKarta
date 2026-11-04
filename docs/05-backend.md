@@ -146,9 +146,9 @@ N-е значение с конца `X-Forwarded-For`. IPv6 считается �
 | `POST /api/route` | 120 за 5 мин | ведро 1500 мс, +50 мс/с; предохранитель 85 % | 32 КБ |
 | `POST /api/travel-times` | 90 за 5 мин | то же ведро, что у маршрутов; 85 % | 32 КБ |
 | `POST /api/events` | 120 за 5 мин; 1500 событий в сутки | — | 8 КБ, до 20 событий |
-| `/api/demo/search` | 120 за 5 мин | — | 16 КБ |
-| `/api/demo/slots`, `/api/demo/bookings/lookup`, `/api/demo/bookings/mine` | 600 за 5 мин | — | 16 КБ |
-| прочие `/api/demo/*` | 60 за 5 мин | — | 16 КБ |
+| `/api/booking/search` (и прежние `/api/demo/*` — с теми же лимитами) | 120 за 5 мин | — | 16 КБ |
+| `/api/booking/slots`, `/api/booking/bookings/lookup`, `/api/booking/bookings/mine` | 600 за 5 мин | — | 16 КБ |
+| прочие `/api/booking/*` | 60 за 5 мин | — | 16 КБ |
 | `/api/auth/login`, `/api/auth/mfa/verify` | 20 за 15 мин в памяти; счётчики подбора в базе — адрес, адрес + аккаунт, аккаунт для незнакомых устройств (`auth.maxFailedPerEmail`), второй фактор ([throttle.js](../backend/accounts/throttle.js)) | scrypt: 2 расчёта одновременно, очередь 32 | 64 КБ; второй шаг — 16 КБ |
 | `/api/auth/register`, `/api/auth/access-link` | 5 за 15 мин; 10 писем в час с адреса (в базе); 3 в час на email | — | 4 КБ |
 | `/api/auth/activation*`, `/register/*`, `/email-change/*` | 30 за 15 мин | scrypt — та же очередь | 4 КБ |
@@ -180,6 +180,6 @@ N-е значение с конца `X-Forwarded-For`. IPv6 считается �
 | Конвейер ассистента: [pipeline.js](../backend/pipeline.js) | [06-ai-assistant.md](06-ai-assistant.md) |
 | Privacy Gateway и Token Vault | [07-privacy.md](07-privacy.md) |
 | Движок маршрутизации | [09-routing-engine.md](09-routing-engine.md) |
-| Строгий подбор и хранилище записи | [11-demo-booking.md](11-demo-booking.md) |
+| Строгий подбор, слой коннекторов записи ([booking/](../backend/booking)) и хранилище записи | [11-demo-booking.md](11-demo-booking.md) |
 | Аккаунты, роли, админ-панель | [accounts.md](accounts.md) |
 | Аналитика | [analytics.md](analytics.md), [17-performance-and-observability.md](17-performance-and-observability.md) |

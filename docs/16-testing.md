@@ -217,6 +217,8 @@ STARTTLS на учебном сервере [tests/fixtures/smtpServer.js](../te
 | [accounts.test.js](../tests/accounts.test.js) | 35 | кабинет: scrypt, сессии, лимиты входа, CSRF, cookie, демо-аккаунты (на коммите аудита; сейчас 42, см. выше) |
 | [analytics.test.js](../tests/analytics.test.js) | 26 | закрытый словарь событий, журнал, квоты, отчёт |
 | [best-picks.test.js](../tests/best-picks.test.js) | 15 | «три лучших варианта» |
+| [booking-api.test.js](../tests/booking-api.test.js) | 5 | `/api/booking/*` и прежние `/api/demo/*`, внешний коннектор через кэш, `not_supported` (добавлен после аудита) |
+| [booking-connectors.test.js](../tests/booking-connectors.test.js) | 16 | контракт коннектора, демо-коннектор, кэш слотов (добавлен после аудита) |
 | [booking-constraints.test.js](../tests/booking-constraints.test.js) | 188 | разбор условий записи из текста: дни, часы, цена, ДМС, район, пол, стаж, согласия |
 | [booking-fuzz.test.js](../tests/booking-fuzz.test.js) | 2 | генеративная проверка: 60 сочетаний одной фразой и 60 диалогом, фиксированное зерно |
 | [boundary.test.js](../tests/boundary.test.js) | 8 | граница доверия по исходникам, заголовки безопасности, статика вне `dist/` |
