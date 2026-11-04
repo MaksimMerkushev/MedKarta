@@ -85,7 +85,7 @@ sequenceDiagram
 | `maxPrice`, `preferCheap` | 100–100 000 ₽; «подешевле» без суммы |
 | `dms` | `{required, planId, prefer}` |
 | `travel` | `{maxMinutes: 5–120, mode: driving / foot / bike, nearest}` |
-| `origin`, `originHint`, `originConfirmed` | точка от клиента; «от дома / от работы / от места»; подтверждение «я там» |
+| `origin`, `originHint`, `originPlace`, `originConfirmed` | точка от клиента; «от дома / от работы / от места»; известное место из [kazanPlaces.js](../shared/kazanPlaces.js) («рядом с площадью Тукая») — точка без вопроса; подтверждение «я там» |
 | `city` | Казань или населённый пункт вне покрытия (Иннополис, Москва и др.) |
 | `unsupported`, `fallbacks` | условия, которых в демо нет, и заранее данные согласия на замену |
 | `wheelchair`, `parking` | свойства филиала |
