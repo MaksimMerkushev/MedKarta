@@ -1534,6 +1534,12 @@ export default function App() {
     searchSourceRef.current = { source: 'assistant', at: Date.now() };
     // Режим записи: вместо «топ-3» по справочнику — строгий подбор свободного времени.
     const bookingMode = Boolean(result.booking) && bookingEnabledRef.current && Number.isInteger(meta.messageId);
+    // «Рядом с площадью Тукая»: точка отправления на карте — та же, от которой считается время в пути.
+    const namedOrigin = result.booking?.request?.originPlace ? result.booking.request.origin : null;
+    if (bookingMode && namedOrigin) {
+      setCustomOrigin([namedOrigin.lat, namedOrigin.lng]);
+      setIsManualOrigin(true);
+    }
     if (bookingMode) {
       setAssistantBookings((current) => {
         const kept = Object.entries(current).slice(-19);

@@ -8,6 +8,7 @@
 
 import { SPECIALTY_KEYS } from './specialties.js';
 import { SERVICE_BY_ID } from './services.js';
+import { KAZAN_PLACES } from './kazanPlaces.js';
 
 export const VISIT_KINDS = Object.freeze(['first', 'repeat', 'procedure', 'any']);
 // past — «вчера», «1 января 2020»: день уже прошёл, подбор спросит другой.
@@ -178,9 +179,11 @@ export const normalizeSearchRequest = (raw = {}) => {
   const preferExperience = input.preferExperience === true;
   // «Подешевле», «недорого» без суммы — дешёвые первыми, потолок цены не выдумывается.
   const preferCheap = input.preferCheap === true;
-  const originHint = Object.hasOwn(ORIGIN_HINTS, input.originHint) ? input.originHint : null;
+  // Известное место («рядом с площадью Тукая»): точка задана самим запросом, браузер её не подменяет.
+  const originPlace = Object.hasOwn(KAZAN_PLACES, input.originPlace) ? input.originPlace : null;
+  const originHint = originPlace ? 'place' : Object.hasOwn(ORIGIN_HINTS, input.originHint) ? input.originHint : null;
   // Точку для названного места пользователь подтвердил сам (поставил на карте / «я там»).
-  const originConfirmed = input.originConfirmed === true;
+  const originConfirmed = Boolean(originPlace) || input.originConfirmed === true;
   /*
    * Конкретная процедура или обследование («подбор очков», «ЭКГ»): запись
    * только на эту услугу. Неизвестная услуга — ошибка, а не «первичный приём».
@@ -272,9 +275,12 @@ export const normalizeSearchRequest = (raw = {}) => {
     nearest: travelInput.nearest === true,
   };
 
-  const origin = input.origin && isCoordinate(input.origin.lat) && isCoordinate(input.origin.lng)
-    ? { lat: input.origin.lat, lng: input.origin.lng }
-    : null;
+  const knownPlace = originPlace ? KAZAN_PLACES[originPlace] : null;
+  const origin = knownPlace
+    ? { lat: knownPlace.lat, lng: knownPlace.lng }
+    : input.origin && isCoordinate(input.origin.lat) && isCoordinate(input.origin.lng)
+      ? { lat: input.origin.lat, lng: input.origin.lng }
+      : null;
 
   const city = typeof input.city === 'string' && Object.hasOwn(LOCALITIES, input.city) ? input.city : null;
   const limit = Number.isInteger(input.limit) ? Math.min(Math.max(input.limit, 1), MAX_RESULTS) : MAX_RESULTS;
@@ -283,7 +289,7 @@ export const normalizeSearchRequest = (raw = {}) => {
     request: {
       specialty, specialtyAny, doctorIds, excludeDoctorIds, branchIds, excludeBranchIds, districts, preferDistricts, excludeDistricts, serviceId, visit, patient,
       minExperience, preferMinExperience, doctorGender, preferGender, preferExperience, preferCheap, excludeWeekdays, excludeDates, preferTime, preferWindow, wheelchair, parking, fallbacks,
-      date, timeFrom: timeWindows.length > 0 ? null : timeFrom, timeTo: timeWindows.length > 0 ? null : timeTo, timeWindows, timeChoice, evening, weekend, workdays, maxPrice, dms, travel, origin, originHint, originConfirmed, city, unsupported, limit,
+      date, timeFrom: timeWindows.length > 0 ? null : timeFrom, timeTo: timeWindows.length > 0 ? null : timeTo, timeWindows, timeChoice, evening, weekend, workdays, maxPrice, dms, travel, origin, originHint, originPlace, originConfirmed, city, unsupported, limit,
     },
     errors,
   };
@@ -456,7 +462,8 @@ export const describeRequest = (request, {
   } else if (request.travel?.nearest) {
     parts.push('поближе');
   }
-  if (request.originHint) parts.push(ORIGIN_HINTS[request.originHint]);
+  if (request.originPlace) parts.push(KAZAN_PLACES[request.originPlace].from);
+  else if (request.originHint) parts.push(ORIGIN_HINTS[request.originHint]);
   if (request.city && request.city !== 'kazan') parts.push(LOCALITIES[request.city]?.name || request.city);
   for (const key of request.unsupported || []) parts.push(UNSUPPORTED_CONDITIONS[key]);
   for (const key of request.fallbacks || []) parts.push(CONSENTED_FALLBACKS[key]);

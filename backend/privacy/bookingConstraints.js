@@ -12,6 +12,7 @@
  * «а лучше послезавтра» → послезавтра. null — «условие снято».
  */
 
+import { KAZAN_PLACES } from '../../shared/kazanPlaces.js';
 import { findTrigger, fixCommonTypos, isNegatedBefore, rewriteNegatedTimeBounds } from './normalize.js';
 import { CONSENTED_FALLBACKS, withoutDayWindow } from '../../shared/demoSearch.js';
 
@@ -297,9 +298,9 @@ const dateRange = (text) => {
   return null;
 };
 
-/* «В ближайшие 3 дня», «в течение недели» — несколько дней от сегодняшнего. */
+/* «В ближайшие 3 дня», «на ближайшие два дня», «в течение недели» — несколько дней от сегодняшнего. */
 const NEXT_DAYS = new RegExp(
-  `(?<!${WORD})(?:в\\s+(?:ближайш\\p{L}*|следующ\\p{L}*)|в\\s+течение|за)\\s+(?:(\\d{1,2}|два|две|три|четыре|пять|шесть|семь|пару)\\s+(?:дн\\p{L}*|день|суток)|(недел\\p{L}*))(?!${WORD})`,
+  `(?<!${WORD})(?:(?:в|на)\\s+ближайш\\p{L}*|в\\s+следующ\\p{L}*|в\\s+течение|за)\\s+(?:(\\d{1,2}|два|две|три|четыре|пять|шесть|семь|пару)\\s+(?:дн\\p{L}*|день|суток)|(недел\\p{L}*))(?!${WORD})`,
   'u',
 );
 const NEXT_DAYS_WORDS = { два: 2, две: 2, пару: 2, три: 3, четыре: 4, пять: 5, шесть: 6, семь: 7 };
@@ -544,7 +545,7 @@ const BARE_AT = new RegExp(
  * Несколько окон через «или»: «с 10 до 12 или после 18», «до 8 утра или
  * после 15:00» — все окна, а не одно и не «с 15:00 до 08:00».
  */
-const TIME_TOKEN = `(\\d{1,2}(?::\\d{2})?|${HOUR_WORD})(?:\\s+час(?:а|ов)?)?(?:\\s+(утра|дня|вечера))?(?!\\s*(?:тысяч|тыс|руб|₽|лет|год|мин|км|${MONTHS.join('|')}|числа|-?го\\b))(?![\\d.:])`;
+const TIME_TOKEN = `(\\d{1,2}(?::\\d{2})?|${HOUR_WORD})(?:\\s+час(?:а|ов)?)?(?:\\s+(утра|дня|вечера))?(?!\\s*(?:тысяч|тыс|руб|₽|лет|год|мин|км|${MONTHS.join('|')}|числа|-?го\\b|\\d{3}))(?![\\d:]|\\.\\d)`;
 const WINDOW_FORMS = [
   ['between', new RegExp(`(?<!${WORD})(?:с|со)\\s+${TIME_TOKEN}\\s*(?:до|по|[-–—])\\s*${TIME_TOKEN}`, 'gu')],
   ['after', new RegExp(`(?<!${WORD})(?:после|(?<!не\\s)позже|не\\s+раньше|не\\s+ранее)\\s+${TIME_TOKEN}`, 'gu')],
@@ -995,6 +996,29 @@ const ORIGIN_PATTERNS = [
 ];
 
 /*
+ * Известное место: «рядом с площадью Тукая», «от Кремля», «я на вокзале» —
+ * точка без вопроса (shared/kazanPlaces.js). Незнакомое остаётся вопросом.
+ */
+const SELF_AT = '(?:(?:я|мы)\\s+(?:сейчас\\s+|уже\\s+|тут\\s+|здесь\\s+)?(?:нахожусь\\s+|находимся\\s+)?|нахожусь\\s+(?:сейчас\\s+)?|находимся\\s+(?:сейчас\\s+)?)(?:на|у|в\\s+районе)';
+const LEAVE_FROM = '(?:еду|поеду|выезжаю|выезд|ехать|добираться|добраться|доехать)\\s+с(?:о)?';
+const PLACE_PREFIX = '(?:(?:станци\\p{L}*\\s+)?метро\\s+|станци\\p{L}*\\s+)?[«"]?';
+const KNOWN_PLACES = Object.entries(KAZAN_PLACES).map(([id, { pattern }]) => ({
+  id,
+  regex: new RegExp(`(?<!${WORD})(?:${FROM}|${SELF_AT}|${LEAVE_FROM})\\s+${PLACE_PREFIX}(?:${pattern})(?!${WORD})`, 'gu'),
+}));
+const namedPlace = (text) => {
+  let best = null;
+  for (const { id, regex } of KNOWN_PLACES) {
+    for (const match of text.matchAll(regex)) {
+      if (!isNegatedBefore(text, match.index) && (!best || match.index > best.index)) best = { id, index: match.index };
+    }
+  }
+  return best;
+};
+/* «Не дальше 20 минут от центра» — лимит пути, а не отрицание места. */
+const LIMIT_NEGATION = new RegExp(`(?<!${WORD})не\\s+(?:дальше|дольше|далее|более|больше)(?:\\s+чем)?(?!${WORD})`, 'gu');
+
+/*
  * «Работаю в центре до 18:00, живу на Азино» — рассказ о себе: место не
  * становится ни районом, ни точкой отправления (а «работаю … до 18:00» —
  * по-прежнему «после 18:00»). Если при этом просят «поближе», точка — дом
@@ -1334,9 +1358,14 @@ export const extractBookingConstraints = (text, { nested = false } = {}) => {
   const planId = lastAffirmed(lower, PLAN_PATTERNS);
   if (planId) result.planId = planId;
 
-  if (TRAVEL_CONTEXT.test(self.masked)) {
-    const originHint = lastAffirmed(self.masked, ORIGIN_PATTERNS);
-    if (originHint) result.originHint = originHint;
+  const originText = self.masked.replace(LIMIT_NEGATION, 'до');
+  const knownPlace = namedPlace(originText);
+  if (TRAVEL_CONTEXT.test(self.masked) || knownPlace) {
+    const origin = lastAffirmedEntry(originText, ORIGIN_PATTERNS);
+    if (knownPlace && (!origin || origin.value === 'place' || knownPlace.index >= origin.index)) {
+      result.originHint = 'place';
+      result.originPlace = knownPlace.id;
+    } else if (origin) result.originHint = origin.value;
     // «Живу на Азино, найдите поближе»: поближе — к дому, а не к текущей геолокации.
     else if (self.home || self.work) result.originHint = self.home ? 'home' : 'work';
   }
@@ -1395,6 +1424,10 @@ export const extractBookingConstraints = (text, { nested = false } = {}) => {
       result.preferWindow = after ? { from: clock, to: null } : { from: null, to: clock };
       if (after && result.spokenAfter === clock) delete result.spokenAfter;
       if (!after && result.spokenBefore === clock) delete result.spokenBefore;
+      // «После 18:00, желательно после 19:00»: строгая граница той же реплики остаётся условием.
+      const hard = clauseWindow(lower.replace(soft[0], ' '));
+      if (hard?.from) result.hardAfter = hard.from;
+      if (hard?.to) result.hardBefore = hard.to;
     }
   }
   // «После работы» — вечер; в понятых условиях это так и видно.
@@ -1499,17 +1532,28 @@ export const extractBookingConstraints = (text, { nested = false } = {}) => {
       const second = extractBookingConstraints(partB, { nested: true }).date;
       const SIMPLE = ['today', 'tomorrow', 'after_tomorrow', 'weekday', 'date'];
       const flat = (value) => (value?.kind === 'any_of' ? value.options : value && SIMPLE.includes(value.kind) ? [value] : []);
-      // «Сегодня, а если никого — завтра с утра»: утро — только для завтра.
-      const [windowA, windowB] = [clauseWindow(partA), clauseWindow(partB)];
+      // «Если на сегодня не будет, то на завтра»: первый день назван в самом условии.
+      const namedFirst = flat(first).length > 0;
+      const firstDays = namedFirst ? flat(first) : flat(extractBookingConstraints(split[0], { nested: true }).date);
+      // «Сегодня, а если никого — завтра с утра»: утро — только для завтра. «Желательно после 17:30» — пожелание, а не окно дня.
+      const [windowA, windowB] = [clauseWindow(soft && !correction ? partA.replace(soft[0], ' ') : partA), clauseWindow(partB)];
       const separate = JSON.stringify(windowA) !== JSON.stringify(windowB);
       const withWindow = (window) => (value) => (separate && window ? { ...value, from: window.from, to: window.to } : value);
-      const options = [...flat(first).map(withWindow(windowA)), ...flat(second).map(withWindow(windowB))];
-      if (separate && flat(first).length > 0 && flat(second).length > 0) result.dayWindows = true;
+      const options = [...firstDays.map(withWindow(windowA)), ...flat(second).map(withWindow(windowB))];
       const seen = new Set();
-      const unique = options.filter((value) => !seen.has(JSON.stringify(value)) && seen.add(JSON.stringify(value)));
-      if (flat(first).length > 0 && flat(second).length > 0 && unique.length > 1) result.date = { kind: 'any_of', options: unique.slice(0, 7) };
-      // «А если сегодня никого — то завтра» отдельной репликой: запасной день к прежнему.
-      else if (flat(first).length === 0 && flat(second).length > 0) result.dateFallback = true;
+      const unique = options.filter((value) => !seen.has(JSON.stringify(value)) && seen.add(JSON.stringify(value))).slice(0, 7);
+      const bothDays = firstDays.length > 0 && flat(second).length > 0 && unique.length > 1;
+      if (bothDays && (namedFirst || /\p{L}/u.test(partA))) {
+        result.date = { kind: 'any_of', options: unique };
+        if (separate) result.dayWindows = true;
+      } else if (flat(first).length === 0 && flat(second).length > 0) {
+        // «А если сегодня никого — то завтра» отдельной репликой: запасной день к прежнему.
+        result.dateFallback = true;
+        if (bothDays) {
+          result.fallbackOptions = unique;
+          result.fallbackWindows = separate;
+        }
+      }
     }
   }
   const dayWindows = perDayWindows(lower, { excludeWeekdays: result.excludeWeekdays || [], excludeDays: result.excludeDays || [] });
@@ -1719,6 +1763,7 @@ export const mergeBookingTurns = (turns) => {
     unsupported: [],
     planId: null,
     originHint: null,
+    originPlace: null,
     doctorIds: [],
     branchIds: [],
     clinicChoice: false,
@@ -1868,11 +1913,21 @@ export const mergeBookingTurns = (turns) => {
     if (booking.originHere && merged.originHint && !merged.originConfirmed) answered = true;
     if (booking.planAnswer && merged.dms === true && !merged.planId) answered = true;
     merged.answered = answered;
-    // «Желательно до 12»: строгая граница gateway из той же реплики снимается — остаётся пожелание.
+    // «Если сегодня не будет, то завтра» первой репликой: прежнего дня нет — оба дня из этой реплики.
+    if (booking.fallbackOptions && !merged.date) {
+      booking = { ...booking, date: { kind: 'any_of', options: booking.fallbackOptions }, dateFallback: false, ...(booking.fallbackWindows ? { dayWindows: true } : {}) };
+    }
+    // «Желательно до 12»: своя граница gateway снимается — остаётся пожелание; другая строгая остаётся.
     if (booking.preferWindow) {
       constraints = { ...constraints };
-      if (booking.preferWindow.from) delete constraints.availableAfter;
-      if (booking.preferWindow.to) delete constraints.availableBefore;
+      if (booking.preferWindow.from) {
+        if (booking.hardAfter) constraints.availableAfter = booking.hardAfter;
+        else delete constraints.availableAfter;
+      }
+      if (booking.preferWindow.to) {
+        if (booking.hardBefore) constraints.availableBefore = booking.hardBefore;
+        else delete constraints.availableBefore;
+      }
     }
     const SIMPLE_KINDS = ['today', 'tomorrow', 'after_tomorrow', 'weekday', 'date'];
     // «Или на 14:00» после «на 13:30» — оба времени.
@@ -2013,7 +2068,9 @@ export const mergeBookingTurns = (turns) => {
     if (booking.planId) merged.planId = booking.planId;
     if (booking.originHint) {
       merged.originHint = booking.originHint;
-      merged.originConfirmed = false;
+      merged.originPlace = booking.originPlace || null;
+      // Известное место — точка уже понятна, переспрашивать незачем.
+      merged.originConfirmed = Boolean(booking.originPlace);
     }
     if (booking.originHere) merged.originConfirmed = true;
     if (booking.planAnswer) merged.planId = booking.planAnswer;
@@ -2226,6 +2283,7 @@ export const mergeBookingTurns = (turns) => {
       merged.maxTravelMinutes = null;
       merged.nearest = false;
       merged.originHint = null;
+      merged.originPlace = null;
     }
     if (Number.isInteger(constraints.maxTravelMinutes)) merged.maxTravelMinutes = constraints.maxTravelMinutes;
     else if (Number.isInteger(booking.maxTravelMinutes)) merged.maxTravelMinutes = booking.maxTravelMinutes;
