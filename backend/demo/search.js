@@ -178,6 +178,17 @@ const timeWindows = (request) => (request.timeWindows?.length
   : [timeWindow(request)]);
 const inWindows = (windows, start) => windows.some(([from, to]) => start >= from && start < to);
 
+const inPreferredWindow = (window) => (slot) => (!window.from || slot.start >= window.from) && (!window.to || slot.start < window.to);
+/*
+ * «Желательно после 17:30»: если у врача есть такое время, показываем только его.
+ * Иначе — всё свободное с пометкой: пожелание не условие, но молчать о нём нельзя.
+ */
+const withPreferredSlots = (request) => (item) => {
+  if (!request.preferWindow) return item;
+  const fit = item.slots.filter(inPreferredWindow(request.preferWindow));
+  return fit.length > 0 ? { ...item, slots: fit } : { ...item, outsidePreference: true };
+};
+
 const serviceFor = (doctor, visit, serviceId = null) => {
   if (serviceId) return doctor.serviceIds.includes(serviceId) ? [serviceId] : [];
   const first = `consult.${doctor.specialtyKey}.first`;
@@ -423,6 +434,7 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
       travel: item.travel ? { minutes: item.travel.minutes, distanceKm: item.travel.distanceKm, mode: request.travel.mode } : null,
       nextSlot: first,
       slots: item.slots.slice(0, 6),
+      outsidePreference: Boolean(item.outsidePreference),
       today,
     };
   };
@@ -442,7 +454,7 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
     }
     // «Желательно до 12»: у кого есть время в этом окне — первыми.
     if (request.preferWindow) {
-      const inWindow = (item) => Number(item.slots.some((slot) => (!request.preferWindow.from || slot.start >= request.preferWindow.from) && (!request.preferWindow.to || slot.start < request.preferWindow.to)));
+      const inWindow = (item) => Number(item.slots.some(inPreferredWindow(request.preferWindow)));
       const byWindow = inWindow(right) - inWindow(left);
       if (byWindow !== 0) return byWindow;
     }
@@ -567,7 +579,7 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
         needs: ['origin_place'],
         originHint: request.originHint,
         message: 'Точку отправления вы назвали словами — по названию я её не определяю, а подставлять текущее местоположение без вашего подтверждения не буду. Поставьте точку на карте или подтвердите, что вы сейчас там.',
-        relax: [{ key: 'origin', label: 'Искать без учёта местоположения', say: RELAX_SAY.travel, patch: { originHint: null, origin: null, travel: { ...request.travel, maxMinutes: null, nearest: false } } }],
+        relax: [{ key: 'origin', label: 'Искать без учёта местоположения', say: RELAX_SAY.travel, patch: { originHint: null, originPlace: null, origin: null, travel: { ...request.travel, maxMinutes: null, nearest: false } } }],
       };
     }
     if ((request.travel.maxMinutes || request.travel.nearest) && !request.origin) {
@@ -664,7 +676,7 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
     const result = await run(request, { at, today, travelCache });
 
     const travelRequired = Boolean(request.travel.maxMinutes || request.travel.nearest);
-    const withoutOrigin = { origin: null, travel: { ...request.travel, maxMinutes: null, nearest: false } };
+    const withoutOrigin = { origin: null, originPlace: null, originHint: null, travel: { ...request.travel, maxMinutes: null, nearest: false } };
     const notices = [];
     if (result.travelState === 'routing_unavailable') {
       if (travelRequired) {
@@ -684,7 +696,7 @@ export const createDemoSearch = ({ index, store, getEngine = async () => null, n
     }
 
     if (result.candidates.length > 0) {
-      const sorted = sortCandidates(result.candidates, request);
+      const sorted = sortCandidates(result.candidates.map(withPreferredSlots(request)), request);
       return {
         ...base,
         status: 'ok',
