@@ -4206,7 +4206,7 @@ export default function App() {
                   </div>
                 )}
               </div>
-              {locationError && <p className="mt-2 text-[11px] leading-4 text-slate-500 dark:text-slate-400">Геолокация недоступна · поиск от центра Казани</p>}
+              {locationError && !isManualOrigin && <p className="mt-2 text-[11px] leading-4 text-slate-500 dark:text-slate-400">Геолокация недоступна · поиск от центра Казани</p>}
             </header>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
