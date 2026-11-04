@@ -15,6 +15,7 @@
  *
  *   GET    /api/admin/me                           кто вошёл и что ему можно
  *   GET    /api/admin/dashboard?period=7d          дашборд (24h, 7d, 30d, 90d)
+ *   GET    /api/admin/stats?preset=7d              подробная статистика (или from, to, bucket)
  *   GET    /api/admin/users                        список: q, role, status, kind, sort, dir, page, pageSize
  *   POST   /api/admin/users                        создать без пароля + приглашение (ссылка — в ответе, только при ручной передаче)
  *   GET    /api/admin/users/export                 CSV с теми же фильтрами (или ids=…)
@@ -64,6 +65,7 @@ const defaultLimit = createRateLimiter({ maxPerIp: 600, maxPerInstance: Number.P
 const route = createRouter([
   ['GET', '/api/admin/me', 'me'],
   ['GET', '/api/admin/dashboard', 'dashboard'],
+  ['GET', '/api/admin/stats', 'stats'],
   ['GET', '/api/admin/users', 'listUsers'],
   ['POST', '/api/admin/users', 'createUser'],
   ['GET', '/api/admin/users/export', 'exportUsers'],
@@ -213,6 +215,7 @@ export const createAdminHandler = ({ getContext = getAccountContext, limit = def
       switch (operation) {
         case 'me': result = admin.me(actor); break;
         case 'dashboard': result = await admin.dashboard(actor, query.period); break;
+        case 'stats': result = await admin.stats(actor, query); break;
         case 'listUsers': result = admin.listUsers(actor, query); break;
         case 'createUser': result = await admin.createUser(actor, body, { base: requestOrigin(req) }); res.statusCode = 201; break;
         case 'exportUsers': {
