@@ -184,11 +184,6 @@ export default function LegalPage() {
                   <a href={`/legal/${slug}`} className="font-medium text-blue-700 underline underline-offset-2 dark:text-blue-300">Действующая редакция — от {formatVersion(current)}</a>
                 </p>
               )}
-              {doc.draft && (
-                <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[14px] leading-5 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200" data-testid="legal-document-draft">
-                  Проект документа: сведения об операторе заполнены не полностью, юридическая проверка не проведена.
-                </p>
-              )}
               <div className="mt-4">{renderLegalText(doc.text)}</div>
 
               {state.history.length > 1 && (
