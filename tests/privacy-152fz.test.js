@@ -373,7 +373,7 @@ describe('152-ФЗ: регистрация и журнал согласий', { 
         const previous = await browserFor(localBase).call(`/api/legal/terms?version=${old.version}`);
         assert.equal(previous.status, 200);
         assert.equal(previous.body.document.sha256, old.sha256, 'прежняя редакция доступна и не изменена');
-        assert.equal(previous.body.history.length, 2);
+        assert.equal(previous.body.history.length, context.documents.history('terms').length + 1, 'все прежние редакции и новая');
       } finally {
         localServer.close();
       }
