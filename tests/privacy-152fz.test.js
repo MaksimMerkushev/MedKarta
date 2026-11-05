@@ -133,6 +133,8 @@ describe('152-ФЗ: документы и редакции', () => {
     // Реквизиты оператора не заполнены — документы честно помечены проектом.
     assert.equal(documents.current('terms').draft, true);
     assert.ok(documents.current('privacy_policy').text.includes(LEGAL_PLACEHOLDER));
+    // Рабочее название вместо реквизитов документ не завершает: регистрация остаётся закрытой.
+    assert.ok(documents.current('privacy_policy').text.includes('Команда МедКарта'));
     assert.deepEqual(documents.readiness(), { ready: false, missing: [], drafts: ['privacy_policy', 'terms'] });
     // Согласие на сведения о здоровье — проект письменной формы, на сайте не запрашивается.
     assert.equal(documents.current('health_consent').status, 'not_offered');

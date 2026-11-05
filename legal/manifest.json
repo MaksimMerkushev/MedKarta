@@ -1,7 +1,7 @@
 {
   "documents": {
     "privacy_policy": {
-      "current": "2026-10-28",
+      "current": "2026-11-05",
       "status": "published",
       "versions": [
         {
@@ -15,11 +15,17 @@
           "file": "privacy-policy/2026-10-28.md",
           "sha256": "af26666985896662f960232aa383847a90836ef502042db15901be941e594e3a",
           "publishedAt": "2026-10-28"
+        },
+        {
+          "version": "2026-11-05",
+          "file": "privacy-policy/2026-11-05.md",
+          "sha256": "06d6fed85deb70e1552bcecba56f45c3805bf9577506695b8a7941368f393471",
+          "publishedAt": "2026-11-05"
         }
       ]
     },
     "terms": {
-      "current": "2026-10-26",
+      "current": "2026-11-05",
       "status": "published",
       "versions": [
         {
@@ -27,11 +33,17 @@
           "file": "terms/2026-10-26.md",
           "sha256": "5ecff2f066cf7d9dd74c49221d734f77b0813238de22144d789aed09e21dfdd8",
           "publishedAt": "2026-10-26"
+        },
+        {
+          "version": "2026-11-05",
+          "file": "terms/2026-11-05.md",
+          "sha256": "a1fda979d18b21caaae76c337adb5b1ab07ca9c321e680ece8de6320ed15eba2",
+          "publishedAt": "2026-11-05"
         }
       ]
     },
     "health_consent": {
-      "current": "2026-10-26",
+      "current": "2026-11-05",
       "status": "not_offered",
       "versions": [
         {
@@ -39,6 +51,12 @@
           "file": "health-consent/2026-10-26.md",
           "sha256": "8a3b8ae1ee86b071c1fbb05a90ea6027cf5a33296069387cae6fc8599691d6cb",
           "publishedAt": "2026-10-26"
+        },
+        {
+          "version": "2026-11-05",
+          "file": "health-consent/2026-11-05.md",
+          "sha256": "ad8f5ec7e510d87913ecd21f0105eb0e29b39210a9a3e57b469fdeeaabbb960b",
+          "publishedAt": "2026-11-05"
         }
       ]
     }
