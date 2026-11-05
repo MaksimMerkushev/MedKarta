@@ -49,7 +49,7 @@ export default function LegalAcceptance({ documents, checked, onChange, error = 
     <div className="space-y-3" data-testid="legal-acceptance">
       {draft && (
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] leading-5 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200" data-testid="legal-draft-note">
-          Документы — проект: сведения об операторе ещё не заполнены. Тестовый стенд.
+          Документы — проект: сведения об операторе заполнены не полностью. Тестовый стенд.
         </p>
       )}
       <div className="flex items-start gap-3">
