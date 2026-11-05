@@ -432,7 +432,7 @@ try {
     await page.waitForSelector('[data-testid=legal-document]');
     expect(page.url().endsWith('/legal/privacy'), `адрес: ${page.url()}`);
     const text = await page.textContent('[data-testid=legal-document]');
-    expect(/Политика обработки персональных данных/.test(text) && /Команда МедКарта/.test(text) && !/ТРЕБУЕТСЯ ЗАПОЛНИТЬ/.test(text) && !/Проект документа/.test(text), 'текст политики показан неверно');
+    expect(/Политика обработки персональных данных/.test(text) && /Команда МедКарта/.test(text) && !/ТРЕБУЕТСЯ ЗАПОЛНИТЬ/.test(text) && !/Проект документа|Все редакции|SHA-256/.test(text), 'текст политики показан неверно');
     const sizes = await page.evaluate(() => {
       const scroller = document.querySelector('[data-testid=legal-page]');
       return { doc: document.documentElement.scrollWidth - window.innerWidth, page: scroller.scrollWidth - scroller.clientWidth };

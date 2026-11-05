@@ -3,11 +3,12 @@
  *
  * /legal/privacy, /legal/terms, /legal/health-consent — тексты документов.
  * ?version=ГГГГ-ММ-ДД — прежняя редакция (их не удаляют и не меняют: журнал
- * согласий хранит хэш принятого текста). Текст — из legal/*.md через
+ * согласий хранит хэш принятого текста). Ссылка на принятую редакцию — в «Моих
+ * данных», общего списка редакций и хэша на странице нет. Текст — из legal/*.md через
  * /api/legal; разметка разбирается здесь в элементы React (без innerHTML).
  */
 import { Fragment, useEffect, useState } from 'react';
-import { ArrowLeft, FileText, History } from 'lucide-react';
+import { ArrowLeft, FileText } from 'lucide-react';
 
 import { fetchLegalDocument } from '../services/account';
 import { BrandMark } from '../auth/AuthLayout';
@@ -100,19 +101,13 @@ export default function LegalPage() {
   const theme = useTheme();
   const { path } = useLocation();
   const slug = path.replace(/^\/legal\/?/, '').split('/')[0] || 'privacy';
-  const [version, setVersion] = useState(readVersion);
+  const [version] = useState(readVersion);
   const [result, setResult] = useState(null);
   // Ответ принадлежит конкретному документу и редакции. При смене запроса
   // показываем загрузку сразу, без дополнительного обновления в эффекте.
   const state = result?.slug === slug && result.version === version
     ? result
     : { status: 'loading' };
-
-  useEffect(() => {
-    const onPop = () => setVersion(readVersion());
-    window.addEventListener('popstate', onPop);
-    return () => window.removeEventListener('popstate', onPop);
-  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -185,33 +180,6 @@ export default function LegalPage() {
                 </p>
               )}
               <div className="mt-4">{renderLegalText(doc.text)}</div>
-
-              {state.history.length > 1 && (
-                <section className="mt-10 border-t border-slate-200 pt-6 dark:border-slate-800" aria-labelledby="legal-history">
-                  <h2 id="legal-history" className="flex items-center gap-2 text-[15px] font-semibold text-slate-900 dark:text-white">
-                    <History size={16} aria-hidden="true" /> Все редакции
-                  </h2>
-                  <ul className="mt-2 space-y-1 text-[14px]">
-                    {state.history.map((item) => (
-                      <li key={item.version}>
-                        <a
-                          href={`/legal/${slug}?version=${encodeURIComponent(item.version)}`}
-                          onClick={(event) => {
-                            if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
-                            event.preventDefault();
-                            window.history.pushState(null, '', `/legal/${slug}?version=${encodeURIComponent(item.version)}`);
-                            setVersion(item.version);
-                          }}
-                          className={`underline-offset-2 hover:underline ${item.version === doc.version ? 'font-semibold text-slate-900 dark:text-white' : 'text-blue-700 dark:text-blue-300'}`}
-                        >
-                          Редакция от {formatVersion(item.version)}{item.version === current ? ' (действующая)' : ''}
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              )}
-              <p className="mt-8 break-all text-[12px] text-slate-400 dark:text-slate-500">SHA-256 текста редакции: {doc.sha256}</p>
             </article>
           )}
         </main>
