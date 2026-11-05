@@ -41,8 +41,7 @@ const skip = !DatabaseSync && 'нужен Node 22.13+ (node:sqlite)';
 const ROOT_EMAIL = 'root@medkarta.test';
 const ROOT_PASSWORD = 'Корневой пароль для тестов 2026';
 const USER_PASSWORD = 'Зелёный чай без сахара по утрам';
-// LEGAL_DRAFTS_ALLOWED: документы-проекты с [ТРЕБУЕТСЯ ЗАПОЛНИТЬ ОПЕРАТОРОМ] не закрывают регистрацию в тестах.
-const MAIL_ENV = { SMTP_FROM: 'МедКарта <noreply@medkarta.test>', PUBLIC_BASE_URL: TEST_ORIGIN, LEGAL_DRAFTS_ALLOWED: 'on' };
+const MAIL_ENV = { SMTP_FROM: 'МедКарта <noreply@medkarta.test>', PUBLIC_BASE_URL: TEST_ORIGIN };
 const MINUTE = 60 * 1000;
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

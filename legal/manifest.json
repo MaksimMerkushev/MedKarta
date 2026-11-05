@@ -19,7 +19,7 @@
         {
           "version": "2026-11-05",
           "file": "privacy-policy/2026-11-05.md",
-          "sha256": "06d6fed85deb70e1552bcecba56f45c3805bf9577506695b8a7941368f393471",
+          "sha256": "8b95b1b0255779d8013f4308b57c001aa241003fce98acd18a6b3c906b40d065",
           "publishedAt": "2026-11-05"
         }
       ]
@@ -37,7 +37,7 @@
         {
           "version": "2026-11-05",
           "file": "terms/2026-11-05.md",
-          "sha256": "a1fda979d18b21caaae76c337adb5b1ab07ca9c321e680ece8de6320ed15eba2",
+          "sha256": "2a0d5e8f4c22b79f686ddc32680806e22f312b0ddd43c36faaa6b020fe6e12fe",
           "publishedAt": "2026-11-05"
         }
       ]
@@ -55,7 +55,7 @@
         {
           "version": "2026-11-05",
           "file": "health-consent/2026-11-05.md",
-          "sha256": "ad8f5ec7e510d87913ecd21f0105eb0e29b39210a9a3e57b469fdeeaabbb960b",
+          "sha256": "10a4100cea21ceee84c5a20d8f1d730058aec51b8ed11bc09a9d91775a1822c1",
           "publishedAt": "2026-11-05"
         }
       ]

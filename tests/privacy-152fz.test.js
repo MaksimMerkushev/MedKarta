@@ -66,6 +66,22 @@ const copyLegal = () => {
   return dir;
 };
 
+/** Документы, где в соглашении появилась метка незаполненных сведений. */
+const draftDocuments = () => {
+  const dir = copyLegal();
+  const manifestPath = path.join(dir, 'manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  const entry = manifest.documents.terms;
+  const item = entry.versions.find((version) => version.version === entry.current);
+  const text = `${fs.readFileSync(path.join(dir, item.file), 'utf8')}\n${LEGAL_PLACEHOLDER}\n`;
+  fs.writeFileSync(path.join(dir, item.file), text);
+  item.sha256 = sha256Text(text);
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+  const documents = createLegalDocuments({ dir });
+  fs.rmSync(dir, { recursive: true, force: true });
+  return documents;
+};
+
 const makeContext = ({ file = ':memory:', documents = createLegalDocuments(), env = ENV, outbox = [], erasureLog = createErasureLog(), demoBookings, now } = {}) => {
   const delivery = createDelivery({ env, send: capture(outbox) });
   const context = createAccountContext({
@@ -130,12 +146,12 @@ describe('152-ФЗ: документы и редакции', () => {
       assert.ok(doc, key);
       assert.equal(doc.sha256, sha256Text(doc.text));
     }
-    // Реквизиты оператора не заполнены — документы честно помечены проектом.
-    assert.equal(documents.current('terms').draft, true);
-    assert.ok(documents.current('privacy_policy').text.includes(LEGAL_PLACEHOLDER));
-    // Рабочее название вместо реквизитов документ не завершает: регистрация остаётся закрытой.
+    // Юридического лица нет: оператор — «Команда МедКарта», меток в действующих редакциях нет.
+    assert.equal(documents.current('terms').draft, false);
+    assert.ok(!documents.current('privacy_policy').text.includes(LEGAL_PLACEHOLDER));
     assert.ok(documents.current('privacy_policy').text.includes('Команда МедКарта'));
-    assert.deepEqual(documents.readiness(), { ready: false, missing: [], drafts: ['privacy_policy', 'terms'] });
+    assert.deepEqual(documents.readiness(), { ready: true, missing: [], drafts: [] });
+    assert.deepEqual(draftDocuments().readiness(), { ready: false, missing: [], drafts: ['terms'] });
     // Согласие на сведения о здоровье — проект письменной формы, на сайте не запрашивается.
     assert.equal(documents.current('health_consent').status, 'not_offered');
     assert.equal(CONSENT_PURPOSES.health_data.offered, false);
@@ -162,11 +178,12 @@ describe('152-ФЗ: документы и редакции', () => {
     assert.equal(legalDraftsAllowed({ LEGAL_DRAFTS_ALLOWED: 'on', NODE_ENV: 'production' }), false);
     assert.equal(legalDraftsAllowed({ LEGAL_DRAFTS_ALLOWED: 'on', APP_ENV: 'production' }), false);
     if (!DatabaseSync) return;
-    const closed = makeContext({ env: { ...ENV, LEGAL_DRAFTS_ALLOWED: '' } }).context;
+    const draft = draftDocuments();
+    const closed = makeContext({ documents: draft, env: { ...ENV, LEGAL_DRAFTS_ALLOWED: '' } }).context;
     assert.equal(closed.registration.closedReason, 'legal_documents_incomplete');
-    const prod = makeContext({ env: { ...ENV, NODE_ENV: 'production' } }).context;
+    const prod = makeContext({ documents: draft, env: { ...ENV, NODE_ENV: 'production' } }).context;
     assert.equal(prod.registration.closedReason, 'legal_documents_incomplete');
-    const dev = makeContext().context;
+    const dev = makeContext({ documents: draft }).context;
     assert.equal(dev.registration.closedReason, null);
   });
 
@@ -201,7 +218,7 @@ describe('152-ФЗ: регистрация и журнал согласий', { 
     const shown = flow.start.body.context.documents;
     assert.equal(shown.terms.version, context.documents.current('terms').version);
     assert.equal(shown.privacy_policy.version, context.documents.current('privacy_policy').version);
-    assert.equal(shown.terms.draft, true, 'форма знает, что документ — проект');
+    assert.equal(shown.terms.draft, false);
 
     for (const body of [{}, { acceptTerms: false, documents: accepted(context).documents }, { acceptTerms: 'yes', documents: accepted(context).documents }]) {
       const refused = await flow.complete(body);
