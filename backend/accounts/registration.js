@@ -30,6 +30,9 @@
  * «[ТРЕБУЕТСЯ ЗАПОЛНИТЬ ОПЕРАТОРОМ]»), регистрация тоже закрыта: принимать
  * условия, в которых не указано, кто оператор, нельзя. Для разработки и
  * автотестов (не в production) — LEGAL_DRAFTS_ALLOWED=on.
+ * Открытая регистрация собирает email людей, поэтому оператор должен сперва
+ * уведомить Роскомнадзор (ст. 22 152-ФЗ). Пока этого нет, регистрация закрыта
+ * и при REGISTRATION_MODE=open; подтверждение — OPERATOR_NOTIFIED=on.
  *
  * Шаг 4 требует принять пользовательское соглашение (отметка без
  * предустановки, проверка на сервере) в той редакции, что видел человек; это
@@ -90,6 +93,10 @@ const stateOf = (record, stamp) => {
 export const legalDraftsAllowed = (env = process.env) =>
   String(env.LEGAL_DRAFTS_ALLOWED || '').toLowerCase() === 'on' && env.NODE_ENV !== 'production' && env.APP_ENV !== 'production';
 
+/** Подтвердил ли оператор, что уведомил Роскомнадзор. Без этого регистрация не открывается. */
+export const operatorNotified = (env = process.env) =>
+  String(env.OPERATOR_NOTIFIED || '').trim().toLowerCase() === 'on';
+
 export const createRegistrationService = ({
   store, accounts, delivery, mailer, mode = registrationModeFromEnv(), consents = null, documents = null, env = process.env, now = () => Date.now(),
 }) => {
@@ -99,6 +106,7 @@ export const createRegistrationService = ({
   /** Почему регистрация закрыта (null — открыта). */
   const closedReason = () => {
     if (mode !== 'open') return 'invite_only';
+    if (!operatorNotified(env)) return 'operator_not_notified';
     if (!(delivery.emailEnabled && mailer && delivery.appUrl)) return 'mail_disabled';
     if (!consents || !documents) return 'legal_unavailable';
     if (!documents.readiness().ready && !legalDraftsAllowed(env)) return 'legal_documents_incomplete';
@@ -147,7 +155,7 @@ export const createRegistrationService = ({
     get enabled() {
       return enabled();
     },
-    /** invite_only | mail_disabled | legal_documents_incomplete | legal_unavailable | null. */
+    /** invite_only | operator_not_notified | mail_disabled | legal_documents_incomplete | legal_unavailable | null. */
     get closedReason() {
       return closedReason();
     },

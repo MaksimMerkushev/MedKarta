@@ -61,6 +61,7 @@ const env = {
   APP_URL: '',
   PUBLIC_BASE_URL: BASE,
   REGISTRATION_MODE: 'open',
+  OPERATOR_NOTIFIED: 'on',
   MFA_SECRET_KEY: randomBytes(32).toString('base64'),
 };
 const server = createServer({ env, base: BASE });

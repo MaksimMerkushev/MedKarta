@@ -269,7 +269,7 @@ switch (command) {
     console.log(`Ожидают активации: ${store.countPendingUsers()}`);
     console.log(`Активных суперадминистраторов: ${store.countActiveSuperadmins()}`);
     const closed = context.registration.closedReason;
-    const reasons = { mail_disabled: 'почта не настроена', legal_documents_incomplete: 'в документах не заполнены сведения об операторе (legal-status)', legal_unavailable: 'документы недоступны' };
+    const reasons = { operator_not_notified: 'нет OPERATOR_NOTIFIED=on: Роскомнадзор не уведомлён', mail_disabled: 'почта не настроена', legal_documents_incomplete: 'в документах не заполнены сведения об операторе (legal-status)', legal_unavailable: 'документы недоступны' };
     console.log(`Регистрация: ${context.registration.mode === 'open' ? (closed ? `open, но выключена — ${reasons[closed] || closed}` : 'открыта') : 'только по приглашению'}`);
     const readiness = context.documents.readiness();
     console.log(`Документы: ${readiness.ready ? 'готовы' : `черновики — ${[...readiness.drafts, ...readiness.missing].join(', ')}`}`);

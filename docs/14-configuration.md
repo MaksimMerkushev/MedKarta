@@ -81,6 +81,7 @@
 |---|---|---|---|
 | `ACCOUNTS` | включено | `off` — выключить аккаунты и админ-панель | [accountContext.js](../backend/api/accountContext.js) |
 | `ACCOUNTS_DB_PATH` | `var/accounts/medkarta.sqlite` | файл базы | [accountContext.js](../backend/api/accountContext.js) |
+| `OPERATOR_NOTIFIED` | выключено | `on` — оператор уведомил Роскомнадзор; без этого регистрация закрыта и при `REGISTRATION_MODE=open` | [registration.js](../backend/accounts/registration.js) |
 | `LEGAL_DRAFTS_ALLOWED` | выключено | `on` — открыть регистрацию, хотя в политике и соглашении остались метки `[ТРЕБУЕТСЯ ЗАПОЛНИТЬ ОПЕРАТОРОМ]`. **Только для тестового стенда и автотестов**: при `NODE_ENV=production` или `APP_ENV=production` не действует ([privacy/13](privacy/13-operator-checklist.md)) | [registration.js](../backend/accounts/registration.js) |
 | `BACKUP_ENCRYPTION_KEY` | — | 32 байта (base64 или hex): ключ для `npm run accounts -- backup --encrypt` и `decrypt-backup` (AES-256-GCM). Храните **отдельно** от копий и от `MFA_SECRET_KEY`; нужен только там, где делают и восстанавливают копии | [backupCrypto.js](../backend/accounts/backupCrypto.js) |
 | `REGISTRATION_MODE` | `invite_only` | `open` — регистрация по email (нужна настроенная почта), `invite_only` — аккаунты только по приглашению; другое значение — `invite_only` | [registration.js](../backend/accounts/registration.js) |

@@ -29,7 +29,7 @@ import { createErasureLog } from '../backend/accounts/erasureLog.js';
 import { decryptBackup, encryptBackup, isEncryptedBackup } from '../backend/accounts/backupCrypto.js';
 import { hashPassword } from '../backend/accounts/passwords.js';
 import { deadlineAfter, PRIVACY_DEADLINES } from '../backend/accounts/privacyRequests.js';
-import { legalDraftsAllowed } from '../backend/accounts/registration.js';
+import { legalDraftsAllowed, operatorNotified } from '../backend/accounts/registration.js';
 import { ACCOUNT_MIGRATIONS, createSqliteAccountStore, loadSqlite } from '../backend/accounts/sqliteStore.js';
 import { createAccountContext } from '../backend/api/accountContext.js';
 import { createAssistantPass } from '../backend/api/assistantPass.js';
@@ -54,7 +54,7 @@ const LEGAL_DIR = path.join(ROOT, 'legal');
 const ROOT_EMAIL = 'root@medkarta.test';
 const ROOT_PASSWORD = 'Корневой пароль для тестов 2026';
 const USER_PASSWORD = 'Зелёный чай без сахара по утрам';
-const ENV = { SMTP_FROM: 'МедКарта <noreply@medkarta.test>', PUBLIC_BASE_URL: TEST_ORIGIN, LEGAL_DRAFTS_ALLOWED: 'on' };
+const ENV = { SMTP_FROM: 'МедКарта <noreply@medkarta.test>', PUBLIC_BASE_URL: TEST_ORIGIN, LEGAL_DRAFTS_ALLOWED: 'on', OPERATOR_NOTIFIED: 'on' };
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const tempDir = (prefix) => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -170,6 +170,19 @@ describe('152-ФЗ: документы и редакции', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('открытая регистрация закрыта, пока оператор не уведомил Роскомнадзор', () => {
+    assert.equal(operatorNotified({}), false);
+    assert.equal(operatorNotified({ OPERATOR_NOTIFIED: 'yes' }), false);
+    assert.equal(operatorNotified({ OPERATOR_NOTIFIED: ' ON ' }), true);
+    if (!DatabaseSync) return;
+    const closed = makeContext({ env: { ...ENV, OPERATOR_NOTIFIED: '' } }).context;
+    assert.equal(closed.registration.closedReason, 'operator_not_notified');
+    assert.equal(closed.registration.enabled, false);
+    const production = makeContext({ env: { ...ENV, OPERATOR_NOTIFIED: '', NODE_ENV: 'production', APP_ENV: 'production' } }).context;
+    assert.equal(production.registration.closedReason, 'operator_not_notified');
+    assert.equal(makeContext().context.registration.closedReason, null);
   });
 
   it('пока в документах метки, регистрация закрыта; LEGAL_DRAFTS_ALLOWED — только вне production', () => {
