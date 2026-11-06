@@ -58,7 +58,7 @@ const PORT = Number(process.env.E2E_PORT) || 4210;
 // localhost, а не 127.0.0.1: ключи доступа (WebAuthn) работают только на доменном имени.
 const BASE = `http://localhost:${PORT}`;
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'medkarta-e2e-auth-'));
-const ROOT_EMAIL = 'root@medkarta.test';
+const ROOT_EMAIL = 'root@navimed.test';
 const ROOT_PASSWORD = `Е2Е-${randomBytes(9).toString('base64url')}-корень`;
 const env = {
   ...process.env,

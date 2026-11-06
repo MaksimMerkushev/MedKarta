@@ -81,7 +81,7 @@ export const minimizeComplaint = (text) => {
   const scrub = (part) => {
     let result = part.replace(/@[A-Z][A-Z0-9_]*/gu, ' ');
     for (const pattern of INLINE) result = result.replace(pattern, ' ');
-    return result.replace(/\s+/gu, ' ').replace(/\s+([.,;!?])/gu, '$1').trim();
+    return result.replace(/\s+/gu, ' ').replace(/\s+([.,;!?])/gu, '$1').replace(/^[\s.,;:!?-]+/u, '').trim();
   };
   for (const raw of String(text || '').split(CLAUSES)) {
     const clause = raw.trim();
