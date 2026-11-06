@@ -9,7 +9,7 @@ import { describe, it } from 'node:test';
 
 import { createSearch } from '../backend/routing/astar.js';
 import { createGraph } from '../backend/routing/graph.js';
-import { createRoutingEngine } from '../backend/routing/engine.js';
+import { createRoutingEngine, DEFAULT_DRIVING_FACTOR, drivingFactorFromEnv } from '../backend/routing/engine.js';
 import { decodeGraph, encodeGraph } from '../backend/routing/format.js';
 import { createTravelTimesHandler, parseTravelRequest, TRAVEL_LIMITS } from '../backend/api/travelTimes.js';
 import { buildGridGraph, GRID, nodeIndex } from './fixtures/roadGraph.js';
@@ -58,6 +58,40 @@ describe('Обход с потолком времени', () => {
 
     assert.equal(bounded[0].durationSeconds, all[0].durationSeconds);
     assert.equal(bounded[1].durationSeconds, null);
+  });
+});
+
+describe('Поправка на городское движение', () => {
+  const adjusted = createRoutingEngine({ graph, drivingFactor: 2 });
+  const from = at(0, 0);
+  const to = at(0, 4);
+
+  it('время на машине умножается, пешком и по длине пути не меняется', async () => {
+    const [plain] = await engine.travelTimes(from, [to], 'driving');
+    const [scaled] = await adjusted.travelTimes(from, [to], 'driving');
+    assert.equal(scaled.durationSeconds, plain.durationSeconds * 2);
+    assert.equal(scaled.distanceKm, plain.distanceKm);
+    const [walk] = await engine.travelTimes(from, [to], 'foot');
+    const [walkScaled] = await adjusted.travelTimes(from, [to], 'foot');
+    assert.equal(walkScaled.durationSeconds, walk.durationSeconds);
+    const route = engine.route({ waypoints: [from, to] });
+    const routeScaled = adjusted.route({ waypoints: [from, to] });
+    assert.equal(routeScaled.durationS, route.durationS * 2);
+    assert.equal(routeScaled.distanceM, route.distanceM);
+  });
+
+  it('потолок времени считается с поправкой: цель за ним не попадает в выдачу', async () => {
+    const [plain] = await engine.travelTimes(from, [to], 'driving');
+    const [fits] = await adjusted.travelTimes(from, [to], 'driving', { maxSeconds: plain.durationSeconds * 2 + 1 });
+    assert.ok(fits.durationSeconds);
+    const [beyond] = await adjusted.travelTimes(from, [to], 'driving', { maxSeconds: plain.durationSeconds + 1 });
+    assert.equal(beyond.durationSeconds, null);
+  });
+
+  it('значение из окружения проверяется', () => {
+    assert.equal(drivingFactorFromEnv({}), DEFAULT_DRIVING_FACTOR);
+    assert.equal(drivingFactorFromEnv({ ROUTE_DRIVING_FACTOR: '1.5' }), 1.5);
+    for (const bad of ['0.5', 'много', '100']) assert.equal(drivingFactorFromEnv({ ROUTE_DRIVING_FACTOR: bad }), DEFAULT_DRIVING_FACTOR);
   });
 });
 
