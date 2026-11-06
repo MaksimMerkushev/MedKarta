@@ -91,7 +91,7 @@
 | `WEBAUTHN_ORIGINS` | — | дополнительные адреса страниц (через запятую), с которых принимаются ключи доступа, например `https://www.navimed.tech` | [mfa.js](../backend/accounts/mfa.js) |
 | `PASSWORD_BREACH_CHECK` | выключено | `hibp` — проверять новый пароль по базе утечек Have I Been Pwned: уходят только первые 5 символов SHA-1, пароль и email — нет; сервис недоступен — проверка пропускается | [breachedPasswords.js](../backend/accounts/breachedPasswords.js) |
 | `ADMIN_BOOTSTRAP_PASSWORD` | — | **только вне production** (разработка, автотесты): создать главного суперадминистратора при запуске, если его ещё нет. В production игнорируется — суперадминистратор создаётся командой `npm run accounts -- bootstrap` | [accountContext.js](../backend/api/accountContext.js), [bootstrap.js](../backend/accounts/bootstrap.js) |
-| `ADMIN_BOOTSTRAP_EMAIL` | `maximka2703@bk.ru` | email главного суперадминистратора | [bootstrap.js](../backend/accounts/bootstrap.js) |
+| `ADMIN_BOOTSTRAP_EMAIL` | — | email главного суперадминистратора | [bootstrap.js](../backend/accounts/bootstrap.js) |
 | `APP_ENV` | — | `production` — как и `NODE_ENV=production`: игнорировать `ADMIN_BOOTSTRAP_PASSWORD`, запрещать `seed-test-users` без `--allow-production` | [accounts.mjs](../scripts/accounts.mjs) |
 | `COOKIE_SECURE` | автоматически | `on` / `off` — принудительно считать запрос HTTPS (cookie `__Host-mk_sid` с `Secure`) или HTTP (`mk_sid`) | [accountHttp.js](../backend/api/accountHttp.js) |
 | `TRUST_PROXY`, `TRUSTED_PROXIES` | 0; только `127.0.0.1` | сколько прокси перед сервером и с каких адресов принимать `X-Forwarded-For` — от этого зависят счётчики подбора по адресу | [rateLimit.js](../backend/http/rateLimit.js) |
