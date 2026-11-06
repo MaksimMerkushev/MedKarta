@@ -175,6 +175,8 @@ export const createPipeline = ({
       origin = null,
       takeExternalBudget = () => true,
       runExclusive = (task) => task(),
+      // Только для локальной диагностики: куда записать понятый запрос (understanding/frame.js).
+      probe = null,
     }) {
       const started = Date.now();
       /*
@@ -194,6 +196,7 @@ export const createPipeline = ({
           }
         });
       const gate = await exclusive(() => gateway.process({ messages, sessionId }));
+      if (probe) probe.gate = gate;
 
       metrics.increment('gateway.decision', { decision: gate.decision });
       /*
@@ -235,6 +238,7 @@ export const createPipeline = ({
           metrics.increment('planner.budget_exhausted');
         }
       }
+      if (probe) probe.triaged = triaged;
       if (triaged?.status === 'emergency') {
         metrics.increment('gateway.emergency');
         return {
@@ -273,6 +277,11 @@ export const createPipeline = ({
         } else {
           dropGuess(gate.context);
         }
+      }
+      const modelRoles = applyModelRoles(gate, triaged);
+      if (probe) {
+        probe.triaged = triaged;
+        probe.modelRoles = modelRoles;
       }
       const triageNote = triaged && triaged.status !== 'not_medical'
         ? applyTriage(gate.context, triaged, { unsure: triaged.status === 'clarify' })
@@ -530,6 +539,29 @@ const START_WITH = { therapist: 'терапевта', pediatrician: 'педиа�
  * раньше. Взрослого не записываем к педиатру, ребёнка с общей жалобой — к
  * терапевту. Возвращает фразу для ответа.
  */
+/*
+ * Модель отнесла фрагмент к симптому или биографии: условие из него снимается. Создать или
+ * изменить условие модель не может. Фрагмент учитывается, только если он дословно есть в
+ * переданном ей тексте; метка места переводится в исходный текст только здесь, на сервере.
+ */
+export const applyModelRoles = (gate, triaged) => {
+  const mentions = triaged?.frame?.mentions || [];
+  const sent = (gate.context.triageTurns || []).join('\n');
+  const places = gate.context.triagePlaces;
+  const fragments = [];
+  const ignored = [];
+  for (const mention of mentions) {
+    if (mention.role !== 'symptom_time' && mention.role !== 'biography_place') continue;
+    if (!sent.includes(mention.text)) {
+      ignored.push(mention.text);
+      continue;
+    }
+    fragments.push(mention.text.replace(/\[место_\d+\]/gu, (label) => places?.get(label) || label));
+  }
+  if (fragments.length > 0) gate.context.withoutFragments?.(fragments);
+  return { fragments, ignored };
+};
+
 const applyTriage = (context, triaged, { unsure = false } = {}) => {
   const child = Boolean(context.booking ? context.booking.child : context.classification?.isChild);
   const keys = triaged.specialties
