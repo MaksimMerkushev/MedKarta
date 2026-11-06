@@ -228,6 +228,35 @@ try {
     await shot(admin, '02-dashboard');
   });
 
+  await step('5а. Статистика суперадминистратора: период, вкладки, свои даты, выгрузка', async () => {
+    await goto(admin, '/admin/stats');
+    await admin.waitForSelector('[data-testid=stats-total]');
+    await admin.click('[data-testid=stats-preset-30d]');
+    await admin.waitForFunction(() => /30 дней/.test(document.querySelector('[data-testid=stats-period]')?.textContent || ''));
+    const total = await admin.textContent('[data-testid=stats-total]');
+    expect(/\d/.test(total) && !/Запросов к серверу0/.test(total), `запросы не посчитаны: ${total}`);
+    await admin.waitForSelector('[data-testid=stats-endpoints] >> text="GET /api/admin/stats"');
+    await shot(admin, '02a-stats-requests');
+    for (const tab of ['Ассистент', 'Поиск и карта', 'Пользователи', 'Запись', 'Письма']) {
+      await admin.click(`[role=tab] >> text=${tab}`);
+      await admin.waitForTimeout(150);
+      await shot(admin, `02b-stats-${tab}`);
+    }
+    await admin.click('[role=tab] >> text=Запросы');
+    const today = await admin.evaluate(() => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' }));
+    await admin.fill('[data-testid=stats-from]', today);
+    await admin.fill('[data-testid=stats-to]', today);
+    await admin.click('[data-testid=stats-apply]');
+    await admin.waitForFunction(() => /Свой период/.test(document.querySelector('[data-testid=stats-period]')?.textContent || ''));
+    const [download] = await Promise.all([admin.waitForEvent('download'), admin.click('[data-testid=stats-csv]')]);
+    expect(/^medkarta-stats-requests-.*\.csv$/.test(download.suggestedFilename()), `имя файла: ${download.suggestedFilename()}`);
+    const csv = fs.readFileSync(await download.path(), 'utf8');
+    expect(csv.includes('/api/admin/stats') && csv.includes('Запросов'), 'в выгрузке нет адресов');
+    expect(!csv.includes(ROOT_EMAIL), 'в выгрузке есть адрес пользователя');
+    const stored = await admin.evaluate(() => fetch('/api/admin/stats?from=2026-02-31&to=2026-03-01').then((response) => response.status));
+    expect(stored === 400, `неверный период: ${stored}`);
+  });
+
   await step('6. Найти трёх тестовых пользователей; у администратора — отметка 2FA', async () => {
     await goto(admin, '/admin/users');
     await admin.fill('[data-testid=users-search]', 'medkarta.test');

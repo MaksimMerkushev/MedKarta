@@ -16,6 +16,7 @@ import { buildPlannerBody, REASONING_EFFORTS } from '../backend/planner/client.j
 import { PLANNER_SYSTEM_PROMPT } from '../backend/planner/prompts.js';
 import { validatePlan } from '../backend/planner/validator.js';
 import { createProxyFetch, describeProxy, parseProxyUrl } from '../backend/planner/proxyFetch.js';
+import { createExternalTriage, validateTriage } from '../backend/planner/triage.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const envFile = path.join(ROOT, '.env');
@@ -218,6 +219,33 @@ if (!verdict?.ok) {
   ok(`План принят валидатором: ${plan.action}, терапевт — ассистент будет работать через эту модель`);
 } else {
   warn(`План принят валидатором, но неожиданный: ${scrub(content)}`);
+}
+
+/*
+ * Триаж жалоб (planner/triage.js): та же модель (или AI_TRIAGE_MODEL), служебная
+ * синтетическая жалоба. Проверяем, что модель выбирает врача и умеет переспросить.
+ */
+if (!process.exitCode && !/^(?:off|0|false|no|local)$/iu.test(String(process.env.AI_SYMPTOM_TRIAGE || '').trim())) {
+  console.log('\nТриаж жалоб…');
+  const triage = createExternalTriage({
+    apiKey, url, fetchImpl, timeoutMs: 45_000,
+    model: process.env.AI_TRIAGE_MODEL || model,
+    reasoningEffort: REASONING_EFFORTS.includes(effort) ? effort : null,
+  });
+  for (const turns of [['болит живот'], ['болит живот', 'Вверху живота, после еды изжога']]) {
+    const label = turns.join(' → ');
+    try {
+      const startedTriage = Date.now();
+      const completion = await triage.classify({ turns });
+      const result = validateTriage(completion.raw);
+      const seconds = ((Date.now() - startedTriage) / 1000).toFixed(1);
+      if (!result) fail(`«${label}»: ответ не прошёл проверку: ${scrub(completion.raw)}`, 'Модель плохо следует схеме триажа — пришлите этот вывод.');
+      else if (result.status === 'clarify') ok(`«${label}» (${seconds} с): уточняет — ${result.question} [${result.options.join(' / ')}]`);
+      else ok(`«${label}» (${seconds} с): ${result.status} — ${result.specialties.join(', ') || '—'}`);
+    } catch (error) {
+      fail(`«${label}»: ${scrub(error?.message)} (${error?.code || 'ошибка'})`);
+    }
+  }
 }
 
 if (isOpenRouter && keyBefore && !keyBefore.error) {

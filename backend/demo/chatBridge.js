@@ -325,6 +325,7 @@ export const buildBookingRequest = ({ booking, execution, now, index = null }) =
       nearest: booking.nearest,
     },
     originHint: booking.originHint,
+    originPlace: booking.originPlace,
     originConfirmed: Boolean(booking.originConfirmed),
     preferCheap: Boolean(booking.preferCheap),
     city: booking.city,

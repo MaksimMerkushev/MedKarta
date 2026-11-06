@@ -10,10 +10,16 @@
  *     нет письма, и наоборот;
  *   - отдельный цикл забирает письма, которым пора уходить (статус sending
  *     ставится атомарно — дважды одно письмо не уйдёт), отправляет и ставит
- *     sent; при ошибке — повтор через 30 с, 2, 10, 30 минут, после пятой
- *     неудачи — failed. Статус доставки переносится в саму ссылку
+ *     sent; при временной ошибке (4xx, нет связи) — повтор через 30 с, 2,
+ *     10, 30 минут (плюс до 20 % случайно, чтобы повторы не сбивались в
+ *     кучу), после пятой неудачи — failed. Постоянная ошибка (5xx: ключ,
+ *     отправитель, квота, адрес) — сразу failed: повтор как есть бессмыслен.
+ *     Обрыв связи после передачи письма (smtp_uncertain) повторяется один
+ *     раз и с тем же Message-ID. Статус доставки переносится в саму ссылку
  *     (delivery_status): «отправлено» пишется только после ответа 250 от
- *     SMTP-сервера;
+ *     SMTP-сервера — это «принято провайдером», а не «доставлено»;
+ *   - письма уходят по одному и не чаще раза в minIntervalMs (Postbox — одно
+ *     в секунду), в том числе отправленные администратором «сразу»;
  *   - письма со ссылками-ключами (регистрация, приглашение, смена пароля и
  *     email) в базе только зашифрованы (AES-256-GCM, привязка к id письма)
  *     ключом, выведенным из главного ключа сервера (MFA_SECRET_KEY или файл
@@ -39,7 +45,10 @@
  *     20 в час: их вызывает сам владелец после входа, и шквал
  *     информационных писем их не вытесняет (как и ссылки — друг друга);
  *   - писем со ссылками с одного источника (сеть /24, /64) — 10 в час;
- *   - в очереди не больше 500 неотправленных писем.
+ *   - в очереди не больше 500 неотправленных писем;
+ *   - всех писем за 24 часа — не больше dailyLimit (квота Postbox — 200):
+ *     сверх него письмо не ставится в очередь, а пользователь получает тот
+ *     же ответ, что и при других лимитах.
  */
 
 import { createHash, randomBytes } from 'node:crypto';
@@ -62,35 +71,90 @@ export const MAIL_LIMITS = Object.freeze({
   MAX_QUEUE: 500,
   MAX_ATTEMPTS: 5,
   BACKOFF_MS: Object.freeze([30 * 1000, 2 * MINUTE, 10 * MINUTE, 30 * MINUTE]),
+  BACKOFF_JITTER: 0.2,
   KEEP_DAYS: 30,
   TICK_MS: 5_000,
 });
 
+/** Постоянные ошибки настройки почты — в журнал уровнем error: их чинит администратор, а не повтор. */
+const CONFIG_ERRORS = new Set(['smtp_auth', 'smtp_sender', 'smtp_quota', 'smtp_tls', 'smtp_no_starttls', 'smtp_insecure']);
+
 export const addressHash = (address) => createHash('sha256').update(String(address || '').trim().toLowerCase()).digest('hex');
+
+/** Пауза перед повтором: ступень BACKOFF_MS плюс до 20 % случайно. */
+export const retryDelay = (attempts, random = Math.random) => {
+  const base = MAIL_LIMITS.BACKOFF_MS[Math.min(Math.max(attempts, 1) - 1, MAIL_LIMITS.BACKOFF_MS.length - 1)];
+  return base + Math.floor(base * MAIL_LIMITS.BACKOFF_JITTER * random());
+};
+
+/** Что ответил сервер — для журнала: код, расширенный код, id у провайдера. Адресов и текста нет. */
+const providerFields = (details) => ({
+  ...(Number.isInteger(details?.status) ? { smtp_status: details.status } : {}),
+  ...(details?.enhanced ? { smtp_enhanced: details.enhanced } : {}),
+  ...(details?.queuedAs ? { provider_ref: details.queuedAs } : {}),
+  ...(details?.requestId ? { provider_request_id: details.requestId } : {}),
+});
 
 /**
  * @param {object} deps
  * @param {object} deps.store хранилище (sqliteStore.js)
- * @param {object} deps.delivery доставка (accounts/delivery.js): deliver, emailEnabled
+ * @param {object} deps.delivery доставка (accounts/delivery.js): deliver, emailEnabled, quota
  * @param {(ref: {type: string, id: string}, status: 'sent'|'failed') => void} [deps.onStatus] статус доставки — в ссылку
  * @param {Buffer|null} [deps.masterKey] главный ключ сервера (secrets.loadMfaKey): из него — ключ писем со ссылками
  * @param {(ref: {type: string, id: string}) => boolean} [deps.refActive] ссылка из письма ещё действует (не использована, не отозвана)
  * @param {() => number} [deps.now]
+ * @param {() => number} [deps.clock] настоящее время для паузы между письмами (не подменяется вместе с now)
+ * @param {(ms: number) => Promise<void>} [deps.sleep]
+ * @param {() => number} [deps.random] случайная добавка к паузе перед повтором
  */
-export const createMailer = ({ store, delivery, onStatus = () => {}, masterKey = null, refActive = () => true, now = () => Date.now() }) => {
+export const createMailer = ({
+  store, delivery, onStatus = () => {}, masterKey = null, refActive = () => true, now = () => Date.now(),
+  clock = () => Date.now(), sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), random = Math.random,
+}) => {
   const { box, keyId, persistent } = createMailBox(masterKey);
   if (!persistent) logger.warn('mail.ephemeral_key', { status: 'memory' });
   let timer = null;
   let running = null;
+  const dailyLimit = delivery.quota?.dailyLimit ?? 0;
+  const minIntervalMs = delivery.quota?.minIntervalMs ?? 0;
+  let lastSendAt = Number.NEGATIVE_INFINITY;
+  let gate = Promise.resolve();
+  let quotaWarnedAt = Number.NEGATIVE_INFINITY;
 
   const linkKinds = [...SECRET_KINDS];
   const accountKinds = MAIL_KINDS.filter((kind) => ACCOUNT_NOTICE_KINDS.has(kind));
   const infoKinds = MAIL_KINDS.filter((kind) => !SECRET_KINDS.has(kind) && !ACCOUNT_NOTICE_KINDS.has(kind));
 
+  /**
+   * Письма уходят по одному и не чаще раза в minIntervalMs — и из цикла
+   * очереди, и «отправить сразу»: Postbox на превышение отвечает 454.
+   */
+  const paced = (work) => {
+    const turn = gate.then(async () => {
+      const wait = lastSendAt + minIntervalMs - clock();
+      if (wait > 0) await sleep(wait);
+      try {
+        return await work();
+      } finally {
+        lastSendAt = clock();
+      }
+    });
+    gate = turn.catch(() => {});
+    return turn;
+  };
+
   /** Можно ли сейчас отправить письмо такого вида на этот адрес (и с этого источника). */
   const allows = ({ kind, to, sourceKey = null }) => {
     const toHash = addressHash(to);
     const stamp = now();
+    if (dailyLimit > 0 && store.countRecentMail(stamp - DAY) >= dailyLimit) {
+      // Предупреждение — не чаще раза в 10 минут: исчерпанную квоту не превратить в поток записей журнала.
+      if (stamp - quotaWarnedAt >= 10 * MINUTE) {
+        quotaWarnedAt = stamp;
+        logger.warn('mail.daily_quota', { status: 'limited', count: dailyLimit });
+      }
+      return { allowed: false, reason: 'daily_quota' };
+    }
     if (store.countPendingMail() >= MAIL_LIMITS.MAX_QUEUE) return { allowed: false, reason: 'queue_full' };
     if (ACCOUNT_NOTICE_KINDS.has(kind)) {
       if (store.countMailTo({ toHash, since: stamp - HOUR, kinds: accountKinds }) >= MAIL_LIMITS.ACCOUNT_NOTICES_PER_ADDRESS_HOUR) return { allowed: false, reason: 'address_hour' };
@@ -153,7 +217,7 @@ export const createMailer = ({ store, delivery, onStatus = () => {}, masterKey =
     }
   };
 
-  const finish = (mail, status, error = null) => {
+  const finish = (mail, status, error = null, details = null) => {
     if (status === 'sent') store.markMailSent(mail.id, now());
     else store.markMailFailed(mail.id, error);
     if (mail.refType && mail.refId) {
@@ -163,7 +227,11 @@ export const createMailer = ({ store, delivery, onStatus = () => {}, masterKey =
         logger.error('mail.status_failed', failure);
       }
     }
-    logger.event(status === 'sent' ? 'mail.sent' : 'mail.failed', { status, action: mail.kind, ...(error ? { error_code: error } : {}) });
+    // mail_id — id письма в очереди: по нему строка журнала связывается с RequestID провайдера.
+    const fields = { status, action: mail.kind, mail_id: mail.id, ...(error ? { error_code: error } : {}), ...providerFields(details) };
+    if (status === 'sent') logger.event('mail.sent', fields);
+    else if (CONFIG_ERRORS.has(error)) logger.error('mail.failed', { code: error }, fields);
+    else logger.event('mail.failed', fields);
   };
 
   /** Одна попытка отправить взятое из очереди письмо. */
@@ -191,17 +259,19 @@ export const createMailer = ({ store, delivery, onStatus = () => {}, masterKey =
       return false;
     }
     try {
-      await delivery.deliver({ to: mail.toAddress, content });
-      finish(mail, 'sent');
+      const accepted = await paced(() => delivery.deliver({ to: mail.toAddress, content, messageId: mail.id }));
+      finish(mail, 'sent', null, accepted);
       return true;
     } catch (error) {
       const code = error instanceof MailError ? error.code : 'mail_error';
-      if (retry && mail.attempts < MAIL_LIMITS.MAX_ATTEMPTS && code !== 'bad_address' && code !== 'mail_disabled') {
-        const delay = MAIL_LIMITS.BACKOFF_MS[Math.min(mail.attempts - 1, MAIL_LIMITS.BACKOFF_MS.length - 1)];
-        store.markMailRetry(mail.id, now() + delay, code);
-        logger.warn('mail.retry', { status: 'retry', error_code: code, count: mail.attempts });
+      // Повторяются только временные ошибки; обрыв после передачи письма — не больше одного раза.
+      const transient = (!(error instanceof MailError) || error.transient !== false) && code !== 'bad_address' && code !== 'mail_disabled';
+      const uncertainAgain = code === 'smtp_uncertain' && mail.lastError === 'smtp_uncertain';
+      if (retry && transient && !uncertainAgain && mail.attempts < MAIL_LIMITS.MAX_ATTEMPTS) {
+        store.markMailRetry(mail.id, now() + retryDelay(mail.attempts, random), code);
+        logger.warn('mail.retry', { status: 'retry', error_code: code, count: mail.attempts, mail_id: mail.id, ...providerFields(error) });
       } else {
-        finish(mail, 'failed', code);
+        finish(mail, 'failed', code, error);
       }
       return false;
     }

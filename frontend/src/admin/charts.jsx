@@ -13,7 +13,7 @@ import { Table2 } from 'lucide-react';
 
 import { formatNumber } from '../ui/format';
 
-const PADDING = { top: 14, right: 16, bottom: 26, left: 40 };
+const BASE_PADDING = { top: 14, right: 16, bottom: 26, left: 40 };
 
 const niceMax = (value) => {
   if (!Number.isFinite(value) || value <= 0) return 4;
@@ -93,6 +93,8 @@ export function TimeChart({ labels, axisLabels = labels, series, type = 'columns
   const [showTable, setShowTable] = useState(false);
   const count = labels.length;
   const max = useMemo(() => niceMax(Math.max(0, ...series.flatMap((item) => item.values))), [series]);
+  // Подпись оси целиком: «120 тыс.» шире стандартного поля и обрезалась до «0 тыс.».
+  const PADDING = { ...BASE_PADDING, left: Math.max(BASE_PADDING.left, compact(max).length * 6.2 + 10) };
   const allZero = series.every((item) => item.values.every((value) => !value));
 
   const innerWidth = Math.max(0, width - PADDING.left - PADDING.right);
@@ -197,6 +199,65 @@ export function TimeChart({ labels, axisLabels = labels, series, type = 'columns
               ))}
             </div>
           )}
+        </div>
+      )}
+    </figure>
+  );
+}
+
+/**
+ * Тепловая карта «день недели × час»: один оттенок от светлого к тёмному
+ * (величина, а не категория), зазор 2 px, подсказка по наведению и с
+ * клавиатуры, таблица — для тех, кто не различает оттенки.
+ */
+export function Heatmap({ rows, columns, values, caption, unit = '', emptyText = 'Нет данных за период' }) {
+  const [hover, setHover] = useState(null);
+  const [showTable, setShowTable] = useState(false);
+  const max = Math.max(0, ...values.flat());
+  const fill = (value) => (value > 0 ? 0.14 + 0.86 * (value / max) : 0);
+  const active = hover ? `${rows[hover[0]]}, ${columns[hover[1]]}: ${formatNumber(values[hover[0]][hover[1]])}${unit ? ` ${unit}` : ''}` : null;
+  return (
+    <figure className="mk-viz" aria-label={caption}>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="min-h-[18px] text-[12px] font-medium tabular-nums text-slate-600 dark:text-slate-300" role="status">{active || (max === 0 ? emptyText : 'Наведите на ячейку — будет число')}</p>
+        <button type="button" onClick={() => setShowTable((current) => !current)} className="inline-flex shrink-0 items-center gap-1 rounded-lg px-1.5 py-0.5 text-[11.5px] font-semibold text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800" aria-pressed={showTable}>
+          <Table2 size={13} aria-hidden="true" /> {showTable ? 'Карта' : 'Таблица'}
+        </button>
+      </div>
+      {showTable ? (
+        <DataTable labels={rows} series={columns.map((column, index) => ({ key: column, label: column, values: values.map((row) => row[index]) }))} caption={caption} />
+      ) : (
+        <div className="overflow-x-auto">
+          <div className="grid min-w-[520px] gap-[2px]" style={{ gridTemplateColumns: `28px repeat(${columns.length}, minmax(0, 1fr))` }} onPointerLeave={() => setHover(null)}>
+            <span />
+            {columns.map((column, index) => (
+              <span key={column} className="text-center text-[10.5px] tabular-nums text-slate-500 dark:text-slate-400">{index % 3 === 0 ? column : ''}</span>
+            ))}
+            {rows.map((row, rowIndex) => (
+              <div key={row} className="contents">
+                <span className="self-center text-[11px] text-slate-500 dark:text-slate-400">{row}</span>
+                {columns.map((column, columnIndex) => {
+                  const value = values[rowIndex][columnIndex];
+                  const selected = hover?.[0] === rowIndex && hover?.[1] === columnIndex;
+                  return (
+                    <span
+                      key={column}
+                      tabIndex={0}
+                      role="img"
+                      aria-label={`${row}, ${column}: ${value}`}
+                      onPointerEnter={() => setHover([rowIndex, columnIndex])}
+                      onFocus={() => setHover([rowIndex, columnIndex])}
+                      onBlur={() => setHover(null)}
+                      className={`relative h-5 rounded-[3px] outline-none ${selected ? 'ring-2 ring-slate-500 dark:ring-slate-300' : ''}`}
+                      style={{ background: 'var(--viz-track)' }}
+                    >
+                      <span className="absolute inset-0 rounded-[3px]" style={{ background: 'var(--viz-1)', opacity: fill(value) }} />
+                    </span>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </figure>

@@ -1464,7 +1464,7 @@ export default function App() {
   const [assistantPicks, setAssistantPicks] = useState({});
   /*
    * Демо-запись под ответами ассистента: id реплики → запрос строгого
-   * подбора. Подбор исполняет сервер (DemoOffers → /api/demo/search).
+   * подбора. Подбор исполняет сервер (DemoOffers → /api/booking/search).
    */
   const [assistantBookings, setAssistantBookings] = useState({});
   const bookingEnabledRef = useRef(false);
@@ -1534,6 +1534,12 @@ export default function App() {
     searchSourceRef.current = { source: 'assistant', at: Date.now() };
     // Режим записи: вместо «топ-3» по справочнику — строгий подбор свободного времени.
     const bookingMode = Boolean(result.booking) && bookingEnabledRef.current && Number.isInteger(meta.messageId);
+    // «Рядом с площадью Тукая»: точка отправления на карте — та же, от которой считается время в пути.
+    const namedOrigin = result.booking?.request?.originPlace ? result.booking.request.origin : null;
+    if (bookingMode && namedOrigin) {
+      setCustomOrigin([namedOrigin.lat, namedOrigin.lng]);
+      setIsManualOrigin(true);
+    }
     if (bookingMode) {
       setAssistantBookings((current) => {
         const kept = Object.entries(current).slice(-19);
@@ -4200,7 +4206,7 @@ export default function App() {
                   </div>
                 )}
               </div>
-              {locationError && <p className="mt-2 text-[11px] leading-4 text-slate-500 dark:text-slate-400">Геолокация недоступна · поиск от центра Казани</p>}
+              {locationError && !isManualOrigin && <p className="mt-2 text-[11px] leading-4 text-slate-500 dark:text-slate-400">Геолокация недоступна · поиск от центра Казани</p>}
             </header>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">

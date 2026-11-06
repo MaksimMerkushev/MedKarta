@@ -34,7 +34,7 @@ flowchart LR
         valid["Validator + Policy Engine"]
         exec["Executor + Result Builder"]
         cat[("Справочник")]
-        routing["/api/route, /api/travel-times,<br/>/api/demo/search"]
+        routing["/api/route, /api/travel-times,<br/>/api/booking/search"]
         log["safeLogger:<br/>белый список полей"]
     end
 
@@ -200,13 +200,14 @@ flowchart TD
 
 | Канал | Что передаётся | Мера |
 |---|---|---|
-| `/api/route`, `/api/travel-times`, `/api/demo/search` | координаты пользователя и точек | обрабатываются собственным движком; в журнал идут только число точек, профиль, исход, время расчёта ([api/route.js](../backend/api/route.js), [api/travelTimes.js](../backend/api/travelTimes.js)) |
+| `/api/route`, `/api/travel-times`, `/api/booking/search` (прежний путь — `/api/demo/search`) | координаты пользователя и точек | обрабатываются собственным движком; в журнал идут только число точек, профиль, исход, время расчёта ([api/route.js](../backend/api/route.js), [api/travelTimes.js](../backend/api/travelTimes.js)) |
 | Тайлы `tile.openstreetmap.org` | какой участок карты открыт | единственный внешний хост в CSP (`img-src`); нужен свой поставщик тайлов для продакшена ([deployment.md](deployment.md)) |
 | Ссылки «Яндекс Карты / 2ГИС» | координаты точки отправления и целей в URL | только по нажатию пользователя ([externalMaps.js](../frontend/src/externalMaps.js)) |
 | Адресная строка `?q=` | текст поиска | рекомендуемый формат журнала nginx без строки запроса ([deployment.md](deployment.md)) |
 | `/api/events` | закрытый словарь событий | без текста, координат, IP; DNT/GPC уважаются ([analytics.md](analytics.md)) |
 | Кабинет | email, имя, хэш пароля, id программы ДМС, избранное | не связан с ассистентом; регистрация выключена по умолчанию ([accounts.md](accounts.md)) |
 | Демо-запись | слот, номер, токены | персональных данных пациента нет ни в запросах, ни в базе ([api/demoBooking.js](../backend/api/demoBooking.js)) |
+| База статистики | сводные счётчики: запросы по часам и обезличенным адресам, счётчики процесса по суткам | адресов, id пользователей, параметров и текстов запросов нет; признаки здоровья (триаж, срочные случаи) — только по суткам; 400 дней ([stats.md](stats.md)) |
 | Журнал сервера | только поля из белого списка | см. ниже |
 
 ## Журнал и метрики

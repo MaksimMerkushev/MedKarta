@@ -38,7 +38,9 @@
 | Формат запроса подбора | [shared/demoSearch.js](../shared/demoSearch.js) (`normalizeSearchRequest`, `describeRequest`) | [demo-scenarios.test.js](../tests/demo-scenarios.test.js) | [11](11-demo-booking.md), [12](12-api-reference.md) |
 | Строгий подбор | [search.js](../backend/demo/search.js) (`createDemoSearch`, `run`, `sortCandidates`) | [demo-scenarios.test.js](../tests/demo-scenarios.test.js) | [11](11-demo-booking.md) |
 | Слоты, удержание, запись, отмена | [bookingStore.js](../backend/demo/bookingStore.js) | [demo-booking.test.js](../tests/demo-booking.test.js) | [11](11-demo-booking.md), [13](13-data-model.md) |
-| HTTP демо-записи | [api/demoBooking.js](../backend/api/demoBooking.js) | [demo-booking.test.js](../tests/demo-booking.test.js) | [12](12-api-reference.md) |
+| HTTP записи (`/api/booking/*`, прежние `/api/demo/*`) | [api/demoBooking.js](../backend/api/demoBooking.js) | [demo-booking.test.js](../tests/demo-booking.test.js), [booking-api.test.js](../tests/booking-api.test.js) | [12](12-api-reference.md) |
+| Коннекторы записи и кэш слотов | [booking/connectors](../backend/booking/connectors), [slotCache.js](../backend/booking/slotCache.js) | [booking-connectors.test.js](../tests/booking-connectors.test.js), [booking-api.test.js](../tests/booking-api.test.js) | [11](11-demo-booking.md) |
+| Статистика для суперадминистратора | [backend/stats](../backend/stats), [Stats.jsx](../frontend/src/admin/pages/Stats.jsx) | [admin-stats.test.js](../tests/admin-stats.test.js), `scripts/e2e-admin.mjs` | [stats.md](stats.md) |
 | Генерация демо-набора | [generator.js](../backend/demo/generator.js), [demo-generate.mjs](../scripts/demo-generate.mjs) | [demo-data.test.js](../tests/demo-data.test.js) | [demo.md](demo.md) |
 | Интерфейс подбора и записи | [DemoOffers.jsx](../frontend/src/DemoOffers.jsx), [BookingDialog.jsx](../frontend/src/BookingDialog.jsx), [MyBookingsPanel.jsx](../frontend/src/MyBookingsPanel.jsx) | нет автоматических тестов | [04](04-frontend.md) |
 

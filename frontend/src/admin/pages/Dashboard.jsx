@@ -35,7 +35,7 @@ const bucketFull = (iso, hourly) => {
     : date.toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow', weekday: 'short', day: 'numeric', month: 'long' });
 };
 
-function Tile({ label, value, sub, icon: Icon, tone = 'blue', testId }) {
+export function Tile({ label, value, sub, icon: Icon, tone = 'blue', testId }) {
   const tones = {
     blue: 'bg-blue-50 text-blue-600 dark:bg-blue-950/60 dark:text-blue-300',
     green: 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-300',

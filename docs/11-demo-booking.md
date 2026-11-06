@@ -20,7 +20,7 @@ sequenceDiagram
     participant AI as /api/chat
     participant BR as chatBridge
     participant UI as DemoOffers / BookingDialog
-    participant SR as /api/demo/search
+    participant SR as /api/booking/search
     participant ST as bookingStore (SQLite)
 
     U->>AI: «ЛОР завтра после 18:00, до 3000 ₽»
@@ -31,10 +31,10 @@ sequenceDiagram
     SR->>ST: свободные слоты кандидатов
     SR-->>UI: status ok / needs / empty / out_of_coverage / unavailable
     U->>UI: выбирает слот
-    UI->>ST: POST /api/demo/hold {slotId}
+    UI->>ST: POST /api/booking/hold {slotId}
     ST-->>UI: holdToken, expiresAt (5 минут)
     U->>UI: подтверждает
-    UI->>ST: POST /api/demo/bookings {slotId, holdToken, idempotencyKey, planId}
+    UI->>ST: POST /api/booking/bookings {slotId, holdToken, idempotencyKey, planId}
     ST-->>UI: 201 booking: number, cancelToken
     UI->>UI: номер и токен отмены — в localStorage этого браузера
 ```
@@ -85,7 +85,7 @@ sequenceDiagram
 | `maxPrice`, `preferCheap` | 100–100 000 ₽; «подешевле» без суммы |
 | `dms` | `{required, planId, prefer}` |
 | `travel` | `{maxMinutes: 5–120, mode: driving / foot / bike, nearest}` |
-| `origin`, `originHint`, `originConfirmed` | точка от клиента; «от дома / от работы / от места»; подтверждение «я там» |
+| `origin`, `originHint`, `originPlace`, `originConfirmed` | точка от клиента; «от дома / от работы / от места»; известное место из [kazanPlaces.js](../shared/kazanPlaces.js) («рядом с площадью Тукая») — точка без вопроса; подтверждение «я там» |
 | `city` | Казань или населённый пункт вне покрытия (Иннополис, Москва и др.) |
 | `unsupported`, `fallbacks` | условия, которых в демо нет, и заранее данные согласия на замену |
 | `wheelchair`, `parking` | свойства филиала |
@@ -231,18 +231,68 @@ stateDiagram-v2
 - `npm run demo:reset` — удалить все демо-записи и вернуть слоты к исходным;
   можно при работающем сервере ([demo-reset.mjs](../scripts/demo-reset.mjs)).
 
+## Слой коннекторов
+
+Подбор и запись не обращаются к хранилищу напрямую: между ними и источником
+слотов стоит коннектор ([booking/connectors](../backend/booking/connectors)).
+Демо — первый и пока единственный коннектор; следующие (заявка, интегратор,
+API МИС клиники) подключаются тем же интерфейсом, и подбор не знает, какая у
+клиники МИС.
+
+| Метод | Возможность `can` | Что делает |
+|---|---|---|
+| `listSlots({pairs, fromDay, toDay, at})` | `slots` | свободные будущие слоты пар «врач × филиал» |
+| `checkSlot({slotId, at})` | `slots` | один слот или `null` |
+| `hold`, `release` | `hold` | удержание на время подтверждения |
+| `book` | `book` | запись с ключом идемпотентности |
+| `cancel` | `cancel` | отмена |
+| `status({items, at})` | `status` | состояние записей по номеру и токену |
+| — | `push` | коннектор сам присылает события (вебхук), методов не требует |
+
+Необязательные: `schedule` — все слоты врача с состояниями и отсутствия (без
+него расписание врача — только свободное время из `listSlots`) и
+`listForAccount` — записи кабинета (пока их хранит демо; с первой МИС они
+переедут в общий реестр записей МедКарты). Коннектор проверяется при запуске
+сервиса ([contract.js](../backend/booking/connectors/contract.js)): заявлена
+возможность — обязаны быть её методы. Чего коннектор не умеет — ответ
+`409 not_supported`, а не ошибка сервера.
+
+Демо-коннектор ([demo.js](../backend/booking/connectors/demo.js)) только
+передаёт вызовы хранилищу: номера, токены, коды отказов и гарантии — те же,
+что описаны выше.
+
+### Кэш слотов
+
+[slotCache.js](../backend/booking/slotCache.js). Подбор читает свободное время
+через `freeSlots`:
+
+- у коннектора со своей базой (`localSlots`, демо) — напрямую, без кэша;
+- у внешнего — из кэша в памяти: пара «врач × филиал» загружается на 14 дней
+  от «сегодня» по Москве и обновляется не чаще раза в 10 минут; одновременные
+  поиски по одной паре ждут одну загрузку;
+- своё удержание, запись и отмена сбрасывают кэш пары сразу, в том числе при
+  отказе (слот могли занять в МИС мимо МедКарты);
+- МИС не ответила — подбор получает прежний ответ не старше 30 минут; старше —
+  у пары нет свободного времени. Ошибка — в журнал (`booking.slots_failed`);
+- у коннектора без `slots` (заявка) подбор не находит слотов, а не падает.
+
+Фоновой синхронизации по расписанию пока нет: пара обновляется при поиске.
+
 ## API
+
+Основные пути — `/api/booking/*`; прежние `/api/demo/*` отвечают так же, с
+теми же лимитами (вкладки, открытые со старой сборкой).
 
 | Метод | Путь | Назначение | Лимит на адрес |
 |---|---|---|---|
-| POST | `/api/demo/search` | строгий подбор | 120 за 5 мин |
-| GET | `/api/demo/slots?doctorId=&branchId=&from=&days=&planId=&patient=` | расписание врача (1–14 дней), цены, покрытие ДМС | 600 за 5 мин |
-| POST | `/api/demo/hold` | удержать слот | 60 за 5 мин |
-| POST | `/api/demo/release` | снять своё удержание | 60 за 5 мин |
-| POST | `/api/demo/bookings` | записаться | 60 за 5 мин |
-| POST | `/api/demo/bookings/cancel` | отменить | 60 за 5 мин |
-| POST | `/api/demo/bookings/lookup` | состояние своих записей (до 20) | 600 за 5 мин |
-| GET | `/api/demo/bookings/mine` | записи вошедшего пользователя (до 50); гость — `401` | 600 за 5 мин |
+| POST | `/api/booking/search` | строгий подбор | 120 за 5 мин |
+| GET | `/api/booking/slots?doctorId=&branchId=&from=&days=&planId=&patient=` | расписание врача (1–14 дней), цены, покрытие ДМС | 600 за 5 мин |
+| POST | `/api/booking/hold` | удержать слот | 60 за 5 мин |
+| POST | `/api/booking/release` | снять своё удержание | 60 за 5 мин |
+| POST | `/api/booking/bookings` | записаться | 60 за 5 мин |
+| POST | `/api/booking/bookings/cancel` | отменить | 60 за 5 мин |
+| POST | `/api/booking/bookings/lookup` | состояние своих записей (до 20) | 600 за 5 мин |
+| GET | `/api/booking/bookings/mine` | записи вошедшего пользователя (до 50); гость — `401` | 600 за 5 мин |
 
 Запись, сделанная после входа в кабинет, привязана к его id (`account_id`) и
 видна только этому аккаунту; запись гостя ни к кому не привязана, её номер и
@@ -252,7 +302,7 @@ stateDiagram-v2
 тело до 16 КБ. При выключенном демо — `404 demo_disabled`. Коды ошибок
 записи: `bad_request` 400, `slot_not_found` и `booking_not_found` 404,
 `slot_taken`, `slot_held`, `slot_unavailable`, `slot_past`, `slot_conflict`,
-`idempotency_conflict` 409. Примеры запросов и ответов — в
+`idempotency_conflict` и `not_supported` 409. Примеры запросов и ответов — в
 [12-api-reference.md](12-api-reference.md).
 
 ## Тесты
@@ -264,8 +314,11 @@ stateDiagram-v2
 | [demo-scenarios.test.js](../tests/demo-scenarios.test.js) | 79 (+5 с графом) | текст → подбор → запись при замороженном времени, сложные условия, контекст диалога, приватность |
 | [booking-constraints.test.js](../tests/booking-constraints.test.js) | 188 | разбор условий из текста |
 | [booking-fuzz.test.js](../tests/booking-fuzz.test.js) | 2 | 60 случайных сочетаний одной фразой и 60 диалогом с фиксированным зерном |
+| [booking-connectors.test.js](../tests/booking-connectors.test.js) | 16 | контракт коннектора, демо-коннектор поверх хранилища, кэш слотов: срок, сброс, отказ МИС, одна загрузка на пару |
+| [booking-api.test.js](../tests/booking-api.test.js) | 5 | `/api/booking/*` и `/api/demo/*` — одно и то же; внешний коннектор через кэш; `not_supported` |
 
-Числа тестов — из прогона при аудите ([16-testing.md](16-testing.md)).
+Числа тестов — из прогона при аудите ([16-testing.md](16-testing.md)), для
+двух последних файлов — при их добавлении.
 
 ## Ограничения демо
 
@@ -276,4 +329,6 @@ stateDiagram-v2
   возраста врачей, анонимного приёма, справок и записи нескольких пациентов
   подряд — ассистент честно говорит «не могу проверить».
 - Лимиты программы ДМС и согласование со страховой не моделируются.
-- Отменить запись можно только из браузера, где сохранены номер и токен.
+- Запись гостя можно отменить только из браузера, где сохранены номер и
+  токен; запись, сделанная после входа, отменяется и из кабинета на любом
+  устройстве.

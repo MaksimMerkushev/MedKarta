@@ -58,6 +58,8 @@ const OFF_TOPIC = /(?<!\p{L})(?:погод\p{L}*|анекдот\p{L}*|пошут
 const SEQUENCE_WORDS = /(?<!\p{L})(?:сначала|потом|затем|после\s+(?:этого|него|неё|нее)|а\s+после)(?!\p{L})/u;
 /* «И ещё к стоматологу», «а потом к лору» — ещё один врач; «а лучше к дерматологу» — замена. */
 const ADDITIVE_WORDS = /(?<!\p{L})(?:ещ[её]|также|потом|затем|плюс|заодно|кроме\s+того|а\s+после)(?!\p{L})/u;
+/* Что искать, а не как: при смене врача прежняя цель не держится. */
+const TARGET_SIGNALS = new Set(['service', 'clinic', 'clear']);
 const REPLACE_WORDS = /(?<!\p{L})(?:лучше|вместо|теперь|передумал\p{L}*|хотя\s+нет|точнее|вернее|не\s+(?:к|нужен|нужна|надо))(?!\p{L})/u;
 
 /* Сколько последних реплик пользователя держит контекст диалога. */
@@ -344,6 +346,17 @@ export const createPrivacyGateway = ({
   outboundMode = outboundModeFromEnv(),
 }) => {
   const structuredOutbound = outboundMode === 'structured';
+  /* Профиль врача из справочника: id записи → ключ профиля. */
+  const keyByLabel = new Map(Object.entries(SPECIALTY_CANON).map(([key, label]) => [label.toLowerCase(), key]));
+  const doctorProfiles = new Map();
+  for (const doctor of catalog?.doctors || []) {
+    const key = keyByLabel.get(String(doctor.specialty || '').toLowerCase());
+    if (key) doctorProfiles.set(String(doctor.id), key);
+  }
+  const profilesOfDoctors = (analysis) => [...new Set((analysis.entities || [])
+    .filter((entity) => entity.kind === ENTITY_KIND.DOCTOR && Array.isArray(entity.ids))
+    .flatMap((entity) => entity.ids.map((id) => doctorProfiles.get(String(id))).filter(Boolean)))];
+
   if (catalog) {
     registerCatalogVocabulary(catalog);
   }
@@ -510,6 +523,11 @@ export const createPrivacyGateway = ({
     let analyses;
     let classification;
     let perTurnSpecialties = [];
+    let newRequestStart = 0;
+    let profileChangeStart = 0;
+    let targetStart = 0;
+    let openComplaint = false;
+    let triageStart = 0;
     let perTurnChild = [];
     let perTurnTied = [];
     let perTurnVariants = [];
@@ -546,11 +564,40 @@ export const createPrivacyGateway = ({
        * перебивает названный раньше профиль: «дерматолог» → «а просто
        * консультация?» не превращается в терапевта.
        */
+      /*
+       * Контекст держится, пока реплика его продолжает: «дерматолог» → «а просто
+       * консультация?», «кардиолог» → «слабость» (общее слово ни о чём не спорит),
+       * «ортопед» → «болит колено» (его профиль). Новая жалоба на другое — уже
+       * новый запрос, даже когда классификатор в ней не уверен: «кардиолог» →
+       * «болит колено» — травматолог, а не снова кардиолог.
+       */
+      let namedEarlier = false;
+      let current = [];
+      let currentNamed = false;
       perTurnSpecialties = perTurn.map((item, index) => {
-        if (analyses[index].specialties.length > 0) return [...new Set(analyses[index].specialties)];
-        const namedEarlier = analyses.slice(0, index).some((analysis) => analysis.specialties.length > 0);
-        if (namedEarlier && item.confidence < POLICY.symptomConfidenceThreshold) return [];
-        return (item.specialties || []).slice(0, 1);
+        const analysis = analyses[index];
+        const variants = item.specialties || [];
+        const fitsCurrent = variants.some((key) => current.includes(key));
+        // Врач по фамилии — тот же контекст, что названный профиль: «к Павловой» — это кардиолог.
+        const doctorKeys = analysis.specialties.length === 0 ? profilesOfDoctors(analysis) : [];
+        let keys;
+        if (analysis.specialties.length > 0) keys = [...new Set(analysis.specialties)];
+        else if (doctorKeys.length > 0 || !namedEarlier || item.confidence >= POLICY.symptomConfidenceThreshold) keys = doctorKeys.length > 0 ? [] : variants.slice(0, 1);
+        else keys = item.complaint && variants[0] && variants[0] !== 'therapist' && !fitsCurrent ? variants.slice(0, 1) : [];
+        if (keys.length > 0) {
+          // Жалоба сменила названного врача: всё, что было раньше, — прошлый запрос (модели-триажу не уходит).
+          if (analysis.specialties.length === 0 && currentNamed && !fitsCurrent) newRequestStart = index;
+          // Цель поиска сменилась — врач и услуга из прошлого запроса к ней не относятся.
+          if (current.length > 0 && !keys.every((key) => current.includes(key))) profileChangeStart = index;
+          current = keys;
+          currentNamed = analysis.specialties.length > 0;
+          targetStart = index;
+        } else if (doctorKeys.length > 0) {
+          current = doctorKeys;
+          currentNamed = true;
+        }
+        namedEarlier ||= analysis.specialties.length > 0 || doctorKeys.length > 0;
+        return keys;
       });
       perTurnChild = perTurn.map((item) => Boolean(item.isChild));
       perTurnTied = perTurn.map((item) => item.tied || null);
@@ -570,6 +617,16 @@ export const createPrivacyGateway = ({
         perTurnSpecialties[index] = [chosen];
         analyses[index] = { ...analyses[index], specialties: [chosen], defaultedSpecialty: Boolean(reply.unsure) };
       }
+      /*
+       * Жалоба после названного врача, по которой словарь выбрать не может
+       * («кардиолог» → «колет в боку»): подходит она этому врачу или нет, решает
+       * модель-триаж, и ей нужны обе реплики. Без модели остаётся названный врач.
+       */
+      const lastNamedIndex = analyses.findLastIndex((analysis) => analysis.specialties.length > 0);
+      openComplaint = lastNamedIndex >= 0
+        && perTurnSpecialties.findLastIndex((keys) => keys.length > 0) === lastNamedIndex
+        && perTurn.slice(lastNamedIndex + 1).some((item) => item.complaint);
+      triageStart = openComplaint ? lastNamedIndex : newRequestStart;
       const lastTurn = perTurn[perTurn.length - 1] || classifier('');
       /*
        * Красные флаги проверяются и по тексту без маскировки: «Инсульт» с
@@ -582,6 +639,8 @@ export const createPrivacyGateway = ({
       classification = {
         emergency: lastTurn.emergency || rawEmergency,
         hasMedicalText: perTurn.some((item) => item.hasMedicalText),
+        // Сколько реплик после первой жалобы этого запроса — столько раз ассистент уже мог переспросить.
+        answeredAfterComplaint: Math.max(0, perTurn.length - 1 - Math.max(newRequestStart, perTurn.findIndex((item, index) => index >= newRequestStart && item.hasMedicalText))),
         isChild: perTurn.some((item) => item.isChild),
         confidence: Math.max(...perTurn.map((item) => item.confidence), 0),
         specialties: [...new Set(perTurn.flatMap((item) => item.specialties))],
@@ -608,13 +667,23 @@ export const createPrivacyGateway = ({
     const turnConstraints = userTexts.map((text) => extractConstraints(text));
     const constraints = Object.assign({}, ...turnConstraints);
 
+    /*
+     * Что просили сделать до нового запроса, за ним не тянется: «маршрут к
+     * кардиологу» → «болит колено» — подбор врача, а не маршрут. Названный врач
+     * отменяет прежнюю цель («где сделать МРТ» → «кардиолог»), но не способ:
+     * «маршрут к терапевту» → «нет, к лору» — по-прежнему маршрут.
+     */
     const signals = {};
-    for (const turnSignals of userTexts.map((text) => extractIntentSignals(text))) {
-      for (const [name, active] of Object.entries(turnSignals)) signals[name] = Boolean(signals[name] || active);
-    }
+    userTexts.forEach((text, index) => {
+      if (index < newRequestStart) return;
+      for (const [name, active] of Object.entries(extractIntentSignals(text))) {
+        if (index < targetStart && TARGET_SIGNALS.has(name)) continue;
+        signals[name] = Boolean(signals[name] || active);
+      }
+    });
     // Маршрут просили словами («маршрут», «как добраться», «сначала… потом») — иначе разговор о записи.
     const routeIntent = Boolean(signals.route);
-    const sequence = userTexts.some((text) => SEQUENCE_WORDS.test(String(text).toLowerCase()));
+    const sequence = userTexts.slice(newRequestStart).some((text) => SEQUENCE_WORDS.test(String(text).toLowerCase()));
     /*
      * Профили, о которых разговор сейчас. Поздняя реплика с профилем заменяет
      * прежние («ЛОР» → «а лучше дерматолог»), а в разговоре о маршруте добавляет
@@ -677,7 +746,19 @@ export const createPrivacyGateway = ({
       const named = doctorsByFirstName(earlier.doctorIds, userTexts[index]);
       if (named.length > 0 && named.length < earlier.doctorIds.length) turnBookings[index] = { ...turnBookings[index], doctorIds: named };
     }
-    const mergedBooking = mergeBookingTurns(turnBookings.map((booking, index) => ({ booking, constraints: turnConstraints[index] })));
+    const bookingTurns = turnBookings.map((booking, index) => ({ booking, constraints: turnConstraints[index] }));
+    const mergedBooking = mergeBookingTurns(bookingTurns);
+    /*
+     * Смена врача не отменяет день, цену, район и ДМС — это контекст. Но врач и
+     * услуга из прошлого запроса к новому не относятся: «к кардиологу Иванову» →
+     * «болит колено» иначе искало бы травматолога среди одного кардиолога.
+     */
+    if (profileChangeStart > 0) {
+      const sinceChange = mergeBookingTurns(bookingTurns.slice(profileChangeStart));
+      for (const field of ['doctorIds', 'excludeDoctorIds', 'doctorChoice', 'foreignDoctor', 'doctorOtherAsk', 'serviceId', 'procedureSpecialty', 'visit']) {
+        mergedBooking[field] = sinceChange[field];
+      }
+    }
     /*
      * «Невролог Ефимова» → «а Ефимов?»: врач, названный позже профиля, сам
      * задаёт профиль — прежний «невролог» к нему не применяется (иначе
@@ -717,6 +798,8 @@ export const createPrivacyGateway = ({
       unknownSpecialty: unknownWins ? analyses[lastUnknownIndex].unknownSpecialties[0] : null,
       // Профиль назван словами («ЛОР»), а не выведен из жалобы — по нему можно искать без уточнений.
       explicitSpecialty: lastSpecialtyIndex >= 0 && analyses[lastSpecialtyIndex].specialties.length > 0,
+      // После названного врача — жалоба, которую словарь не разобрал: решает модель-триаж.
+      openComplaint,
       // «Не знаю» на вопрос «к кому записаться?» — терапевт, которого ассистент предложил сам.
       specialtyDefaulted: lastSpecialtyIndex >= 0 && Boolean(analyses[lastSpecialtyIndex].defaultedSpecialty),
       // Признаки ответа последней реплики («не знаю», «да») — для текста ответа.
@@ -862,7 +945,10 @@ export const createPrivacyGateway = ({
      * Профили для модели и локального плана — только текущие: после «педиатр для
      * сына» → «а теперь мне к терапевту» маршрут не идёт через обоих.
      */
-    const currentKnown = unknownOnly || doctorAfterSpecialty ? [] : currentSpecialties;
+    // Последняя реплика ищет услугу, а не врача: «кардиолог» → «где сделать МРТ» — прежний врач не цель.
+    const lastTurnIndex = analyses.length - 1;
+    const asksServiceNow = lastSpecialtyIndex < lastTurnIndex && extractIntentSignals(userTexts[lastTurnIndex]).service;
+    const currentKnown = unknownOnly || doctorAfterSpecialty || asksServiceNow ? [] : currentSpecialties;
     const specialties = [
       ...new Set(lastSpecialtyIndex >= 0 || unknownOnly || doctorAfterSpecialty
         ? currentKnown
@@ -941,8 +1027,29 @@ export const createPrivacyGateway = ({
       },
     };
 
+    /*
+     * Жалоба для триажа (planner/triage.js): реплики пользователя после
+     * редактуры — метки вместо ФИО, телефонов, адресов. Остаточное «имя»
+     * проверяется во всех репликах, а не только в последней: модели уходит
+     * вся история. Поле неперечислимое — случайная сериализация контекста
+     * (журнал, ответ) его не вытащит. Нужен ли триаж, решает pipeline.
+     */
+    const triage = Boolean(decision.triage)
+      && redactedTurns.every((turn) => countResidualNameLike(turn.text, streetWords) <= POLICY.maxResidualNameLike);
+    if (triage) {
+      Object.defineProperty(context, 'triageTurns', {
+        // Только текущий запрос: прошлый («кардиолог» перед «болит колено») модель не должен сбивать.
+        value: Object.freeze(redactedTurns.slice(triageStart).map((turn) => turn.text.replace(/\s+/gu, ' ').trim()).filter(Boolean)),
+        enumerable: false,
+      });
+      Object.defineProperty(context, 'triageTokens', {
+        value: Object.freeze([...placeholders.map((item) => item.token), ...locationTokens]),
+        enumerable: false,
+      });
+    }
+
     if (decision.decision !== GATEWAY_DECISION.ALLOW_EXTERNAL) {
-      return { ...decision, request: null, requestId, sessionId: session, context };
+      return { ...decision, triage, request: null, requestId, sessionId: session, context };
     }
 
     /*
@@ -1000,7 +1107,7 @@ export const createPrivacyGateway = ({
       locale: 'ru-RU',
     });
 
-    return { ...decision, request, requestId, sessionId: session, context };
+    return { ...decision, triage, request, requestId, sessionId: session, context };
   };
 
   return Object.freeze({ process, policyVersion: POLICY_VERSION, policy: POLICY });

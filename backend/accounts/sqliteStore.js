@@ -1440,9 +1440,14 @@ export const createSqliteAccountStore = ({ DatabaseSync, file }) => {
       ${kinds ? `AND kind IN (${kinds.map(() => '?').join(', ')})` : ''}`).get(toHash, since, ...(kinds || [])).count,
     countMailFromSource: ({ sourceKey, since }) => db.prepare('SELECT COUNT(*) AS count FROM mail_outbox WHERE source_key = ? AND created_at >= ?').get(sourceKey, since).count,
     countPendingMail: () => db.prepare("SELECT COUNT(*) AS count FROM mail_outbox WHERE status IN ('pending', 'sending')").get().count,
+    // Для суточной квоты: всё, что ушло или ещё уйдёт; не ушедшее совсем (failed) провайдер не считает.
+    countRecentMail: (since) => db.prepare("SELECT COUNT(*) AS count FROM mail_outbox WHERE created_at >= ? AND status != 'failed'").get(since).count,
     mailStats: (since) => Object.fromEntries(db.prepare('SELECT status, COUNT(*) AS count FROM mail_outbox WHERE created_at >= ? GROUP BY status').all(since)
       .map((row) => [row.status, row.count])),
     purgeMail: (before) => db.prepare("DELETE FROM mail_outbox WHERE created_at < ? AND status IN ('sent', 'failed')").run(before).changes,
+    /** Письма за период для статистики: вид, статус, код ошибки — без адресов. */
+    mailReport: ({ since, until }) => db.prepare(`SELECT kind, status, last_error AS error, created_at AS createdAt FROM mail_outbox
+      WHERE created_at >= ? AND created_at < ?`).all(since, until),
 
     /** Копия базы, сделанная перед миграцией при этом запуске (или null). */
     migrationBackup,

@@ -1,7 +1,7 @@
 {
   "documents": {
     "privacy_policy": {
-      "current": "2026-10-26",
+      "current": "2026-11-05",
       "status": "published",
       "versions": [
         {
@@ -9,11 +9,23 @@
           "file": "privacy-policy/2026-10-26.md",
           "sha256": "239b1bdb0e95aa30ed37deecda240e7851ea7caadf12d548b7c38cb133cf33f1",
           "publishedAt": "2026-10-26"
+        },
+        {
+          "version": "2026-10-28",
+          "file": "privacy-policy/2026-10-28.md",
+          "sha256": "af26666985896662f960232aa383847a90836ef502042db15901be941e594e3a",
+          "publishedAt": "2026-10-28"
+        },
+        {
+          "version": "2026-11-05",
+          "file": "privacy-policy/2026-11-05.md",
+          "sha256": "590c1129bfb68ca02b2a365029565864628816d7f1939eac64bbdf0ebe749ecf",
+          "publishedAt": "2026-11-05"
         }
       ]
     },
     "terms": {
-      "current": "2026-10-26",
+      "current": "2026-11-05",
       "status": "published",
       "versions": [
         {
@@ -21,11 +33,17 @@
           "file": "terms/2026-10-26.md",
           "sha256": "5ecff2f066cf7d9dd74c49221d734f77b0813238de22144d789aed09e21dfdd8",
           "publishedAt": "2026-10-26"
+        },
+        {
+          "version": "2026-11-05",
+          "file": "terms/2026-11-05.md",
+          "sha256": "571b413e5faaa672723ab3ad461c4af74eba95abcefb67ea815fb212984b6d4f",
+          "publishedAt": "2026-11-05"
         }
       ]
     },
     "health_consent": {
-      "current": "2026-10-26",
+      "current": "2026-11-05",
       "status": "not_offered",
       "versions": [
         {
@@ -33,6 +51,12 @@
           "file": "health-consent/2026-10-26.md",
           "sha256": "8a3b8ae1ee86b071c1fbb05a90ea6027cf5a33296069387cae6fc8599691d6cb",
           "publishedAt": "2026-10-26"
+        },
+        {
+          "version": "2026-11-05",
+          "file": "health-consent/2026-11-05.md",
+          "sha256": "10a4100cea21ceee84c5a20d8f1d730058aec51b8ed11bc09a9d91775a1822c1",
+          "publishedAt": "2026-11-05"
         }
       ]
     }

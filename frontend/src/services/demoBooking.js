@@ -1,7 +1,7 @@
 /*
  * © 2026 МедКарта Казань. Все права защищены.
  *
- * Демо-запись. Логика — на сервере (/api/demo/*); здесь запросы и номера
+ * Демо-запись. Логика — на сервере (/api/booking/*); здесь запросы и номера
  * записей гостя в этом браузере (записи кабинета хранит сервер). Симуляция: ничего не уходит в клиники,
  * страховые и МИС; персональных данных пациента в записи нет — только слот
  * и программа ДМС.
@@ -69,7 +69,7 @@ const roundOrigin = (origin) => {
  * в /api/chat они не уходят.
  */
 export const searchDemo = (searchRequest, { origin = null, planId = null, signal } = {}) =>
-  request('/api/demo/search', {
+  request('/api/booking/search', {
     method: 'POST',
     signal,
     body: {
@@ -88,25 +88,25 @@ export const fetchDoctorSlots = ({ doctorId, branchId, from = null, days = 7, pl
   if (from) params.set('from', from);
   if (planId) params.set('planId', planId);
   if (patient) params.set('patient', patient);
-  return request(`/api/demo/slots?${params}`, { signal });
+  return request(`/api/booking/slots?${params}`, { signal });
 };
 
-export const holdSlot = (slotId) => request('/api/demo/hold', { method: 'POST', body: { slotId } });
+export const holdSlot = (slotId) => request('/api/booking/hold', { method: 'POST', body: { slotId } });
 
 export const releaseSlot = (slotId, holdToken) =>
-  request('/api/demo/release', { method: 'POST', body: { slotId, holdToken } }).catch(() => null);
+  request('/api/booking/release', { method: 'POST', body: { slotId, holdToken } }).catch(() => null);
 
 export const createBooking = ({ slotId, holdToken, idempotencyKey, planId }) =>
-  request('/api/demo/bookings', { method: 'POST', body: { slotId, holdToken, idempotencyKey, planId: planId || null } });
+  request('/api/booking/bookings', { method: 'POST', body: { slotId, holdToken, idempotencyKey, planId: planId || null } });
 
 export const cancelBooking = ({ number, cancelToken }) =>
-  request('/api/demo/bookings/cancel', { method: 'POST', body: { number, cancelToken } });
+  request('/api/booking/bookings/cancel', { method: 'POST', body: { number, cancelToken } });
 
 /** Записи вошедшего пользователя (сессия — в cookie). */
-export const fetchAccountBookings = ({ signal } = {}) => request('/api/demo/bookings/mine', { signal });
+export const fetchAccountBookings = ({ signal } = {}) => request('/api/booking/bookings/mine', { signal });
 
 export const lookupBookings = (items) =>
-  request('/api/demo/bookings/lookup', {
+  request('/api/booking/bookings/lookup', {
     method: 'POST',
     body: { items: items.map(({ number, cancelToken }) => ({ number, cancelToken })) },
   });

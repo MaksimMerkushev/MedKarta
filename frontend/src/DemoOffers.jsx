@@ -2,7 +2,7 @@
  * © 2026 МедКарта Казань. Все права защищены.
  *
  * Варианты демо-записи под ответом ассистента. Строгий подбор идёт на сервере
- * (/api/demo/search). Если ничего не подошло, показывается, какое условие
+ * (/api/booking/search). Если ничего не подошло, показывается, какое условие
  * отсекло варианты, и предлагается ослабить одно — только по нажатию
  * пользователя (это и есть согласие).
  */
@@ -91,6 +91,7 @@ const OptionCard = ({ option, index, today, onBook, onFocus, onRoute, compact })
             <Clock size={12} aria-hidden="true" className="mr-1 inline-block -translate-y-px text-violet-500" />
             Ближайшее: {formatDay(option.nextSlot.day, today)}, {option.nextSlot.start}
             <span className="block font-normal text-slate-400">{option.service.name}, {option.service.durationMinutes} мин</span>
+            {option.outsidePreference && <span className="block font-normal text-amber-700 dark:text-amber-300">В желаемое время свободных мест нет</span>}
           </p>
           {slots.length > 1 && (
             <div className="mt-1.5 flex flex-wrap gap-1" aria-label="Свободное время">

@@ -32,6 +32,8 @@
 | `OPENROUTER_API_KEY` или `AI_API_KEY` | — | ключ; без него — только локальный планировщик | [pipeline.js](../backend/pipeline.js) |
 | `AI_UPSTREAM_URL` | `https://modelhub.my/v1/chat/completions` | адрес OpenAI-совместимого `chat/completions`; только `https://` (или `http://localhost`) | [pipeline.js](../backend/pipeline.js), [client.js](../backend/planner/client.js) |
 | `AI_MODEL` | `gpt-5.4-mini` | имя модели | [pipeline.js](../backend/pipeline.js) |
+| `AI_SYMPTOM_TRIAGE` | включён | `off` — жалобы только локально: модель-триаж (врач по симптомам и уточняющий вопрос) не вызывается | [policies.js](../backend/privacy/policies.js), [triage.js](../backend/planner/triage.js) |
+| `AI_TRIAGE_MODEL` | `AI_MODEL` | модель для триажа жалоб | [pipeline.js](../backend/pipeline.js) |
 | `AI_REASONING_EFFORT` | не отправляется | `none`, `minimal`, `low`, `medium`, `high` | [client.js](../backend/planner/client.js) |
 | `AI_PROXY_URL` | — | `login:password@host:port`, `host:port:login:password` или `socks5://…`; ошибка в адресе выключает внешнюю модель | [proxyFetch.js](../backend/planner/proxyFetch.js) |
 | `AI_DAILY_CALL_LIMIT` | `2000` | вызовов модели в сутки на процесс; значение из админ-панели («Обращений к ИИ-модели в сутки») важнее | [rateLimit.js](../backend/http/rateLimit.js) |
@@ -117,8 +119,14 @@
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | порт 465 для `tls`, 587 для `starttls` | то же по отдельности, если `SMTP_URL` не задан | [smtp.js](../backend/mail/smtp.js) |
 | `SMTP_SECURE` | `starttls` | `tls` (сразу TLS, порт 465), `starttls` (обязательный STARTTLS) или `none` (без шифрования — пароль не отправляется) | [smtp.js](../backend/mail/smtp.js) |
 | `SMTP_ALLOW_INSECURE` | — | `on` — без TLS, **только** для `localhost` (учебный SMTP-сервер в тестах) | [smtp.js](../backend/mail/smtp.js) |
+| `SMTP_TIMEOUT` | `20` | сколько секунд ждать ответа SMTP-сервера, 5–120 | [smtp.js](../backend/mail/smtp.js) |
+| `SMTP_REPLY_TO` | — | адрес для ответов (`support@navimed.tech`), только когда ящик принимает письма; неверный — письма без Reply-To и предупреждение | [delivery.js](../backend/accounts/delivery.js) |
+| `MAIL_DAILY_LIMIT` | `200` | не больше писем за 24 часа (квота Postbox); `0` — без потолка | [delivery.js](../backend/accounts/delivery.js), [outbox.js](../backend/mail/outbox.js) |
+| `MAIL_MIN_INTERVAL_MS` | `1000` для SMTP | пауза между письмами (Postbox — не больше одного в секунду) | [outbox.js](../backend/mail/outbox.js) |
+| `MAIL_TEST_RECIPIENTS` | — | только для `npm run mail:check -- --send`: свои адреса через запятую | [mail-check.mjs](../scripts/mail-check.mjs) |
 
-Сертификат почтового сервера проверяется всегда; вход (AUTH) без TLS
+Настройка Yandex Cloud Postbox и проверка — [mail-setup.md](mail-setup.md).
+Сертификат почтового сервера проверяется всегда (TLS не ниже 1.2); вход (AUTH) без TLS
 запрещён. Пароль SMTP — секрет: только в `.env` или в окружении сервиса, не
 в git и не в админ-панели.
 
@@ -126,6 +134,8 @@
 
 | Переменная | По умолчанию | Что делает | Где |
 |---|---|---|---|
+| `STATS` | включено | `off` — не считать запросы для раздела «Статистика» | [stats/index.js](../backend/stats/index.js) |
+| `STATS_DB_PATH` | `stats.sqlite` рядом с базой аккаунтов | база статистики ([stats.md](stats.md)) | [stats/index.js](../backend/stats/index.js) |
 | `ANALYTICS` | включено | `off` — не писать события | [events.js](../backend/api/events.js) |
 | `ANALYTICS_DIR` | `var/analytics` | каталог журнала | [events.js](../backend/api/events.js) |
 | `ANALYTICS_MAX_EVENTS_PER_DAY` | `50000` | потолок записей в сутки | [eventStore.js](../backend/analytics/eventStore.js) |

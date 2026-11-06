@@ -61,8 +61,6 @@ const env = {
   APP_URL: '',
   PUBLIC_BASE_URL: BASE,
   REGISTRATION_MODE: 'open',
-  // Документы — проекты с метками оператора; на тестовом стенде регистрацию это не закрывает (в production — закрывает).
-  LEGAL_DRAFTS_ALLOWED: 'on',
   MFA_SECRET_KEY: randomBytes(32).toString('base64'),
 };
 const server = createServer({ env, base: BASE });
@@ -426,16 +424,15 @@ try {
   });
 
   console.log('Персональные данные (152-ФЗ):');
-  await step('Документы: политика и соглашение открываются со ссылок, проект помечен; на телефоне без прокрутки вбок', async () => {
+  await step('Документы: политика и соглашение открываются со ссылок, без пометки о проекте, списка редакций и хэша; на телефоне без прокрутки вбок', async () => {
     const page = await newPage({ width: 375 });
     await page.goto(`${BASE}/register`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('[data-testid=footer-privacy]');
     await page.click('[data-testid=footer-privacy]');
     await page.waitForSelector('[data-testid=legal-document]');
     expect(page.url().endsWith('/legal/privacy'), `адрес: ${page.url()}`);
-    await page.waitForSelector('[data-testid=legal-document-draft]');
     const text = await page.textContent('[data-testid=legal-document]');
-    expect(/Политика обработки персональных данных/.test(text) && /\[ТРЕБУЕТСЯ ЗАПОЛНИТЬ ОПЕРАТОРОМ\]/.test(text), 'текст политики не показан');
+    expect(/Политика обработки персональных данных/.test(text) && /Команда МедКарта/.test(text) && !/ТРЕБУЕТСЯ ЗАПОЛНИТЬ/.test(text) && !/Проект документа|SHA-256 текста редакции|\(действующая\)/.test(text), 'текст политики показан неверно');
     const sizes = await page.evaluate(() => {
       const scroller = document.querySelector('[data-testid=legal-page]');
       return { doc: document.documentElement.scrollWidth - window.innerWidth, page: scroller.scrollWidth - scroller.clientWidth };

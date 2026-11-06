@@ -38,8 +38,9 @@ import { createSqliteAccountStore, loadSqlite } from '../accounts/sqliteStore.js
 import { createLoginThrottle } from '../accounts/throttle.js';
 import { setLimitSettings } from '../http/rateLimit.js';
 import { getLegalDocuments } from '../legal/documents.js';
-import { createMailer } from '../mail/outbox.js';
+import { createMailer, MAIL_LIMITS } from '../mail/outbox.js';
 import { logger } from '../observability/safeLogger.js';
+import { defaultCollectStats } from '../stats/index.js';
 import { createAssistantPass } from './assistantPass.js';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
@@ -75,6 +76,31 @@ export const forgetDemoBookings = async (userId) => {
   }
 };
 
+/** Демо-записи за период для статистики: справочные названия вместо id, без аккаунтов. Запись выключена — null. */
+export const demoBookingRowsOf = async ({ since, until }) => {
+  const { getDefaultDemoBookingService } = await import('./demoBooking.js');
+  const service = await getDefaultDemoBookingService();
+  if (!service?.store.report) return null;
+  const { index } = service;
+  return service.store.report({ since, until }).map((row) => {
+    const place = index.branches.get(row.branchId);
+    const doctor = index.doctors.get(row.doctorId);
+    return {
+      status: row.status,
+      createdAt: row.createdAt,
+      cancelledAt: row.cancelledAt,
+      startAt: row.startAt,
+      withPlan: Boolean(row.withPlan),
+      withAccount: Boolean(row.withAccount),
+      specialty: doctor?.specialty || null,
+      doctor: doctor?.name || null,
+      clinic: place?.clinic.name || null,
+      district: place?.branch.district || null,
+      service: index.services.get(row.serviceId)?.name || null,
+    };
+  });
+};
+
 const componentHealth = async () => {
   const { collectComponentHealth } = await import('./systemInfo.js');
   return collectComponentHealth();
@@ -95,6 +121,8 @@ export const createAccountContext = ({
   documents = getLegalDocuments(),
   erasureLog = createErasureLog(),
   demoBookings = demoBookingsOf,
+  collectStats = defaultCollectStats,
+  bookingRows = demoBookingRowsOf,
   now = () => Date.now(),
 }) => {
   const settings = createSettingsService({ store, now });
@@ -123,7 +151,7 @@ export const createAccountContext = ({
   const invitations = createInvitationService({ store, accounts, delivery, mailer, consents, now });
   const registration = createRegistrationService({ store, accounts, delivery, mailer, mode: registrationMode, consents, documents, env, now });
   const emailChange = createEmailChangeService({ store, accounts, delivery, mailer, now });
-  const admin = createAdminService({ store, accounts, invitations, onAccountDeleted, systemInfo, throttle, now });
+  const admin = createAdminService({ store, accounts, invitations, onAccountDeleted, systemInfo, throttle, now, collectStats, bookingRows, mailKeepDays: MAIL_LIMITS.KEEP_DAYS });
   const privacy = createPrivacyService({ store, accounts, consents, demoBookingsOf: demoBookings, now });
   // Пропуск к ассистенту — подпись ключом из главного ключа сервера: переживает перезапуск, в нём нет id аккаунта.
   const assistantPass = createAssistantPass({ key: deriveKey(masterKey, 'assistant-pass'), now });

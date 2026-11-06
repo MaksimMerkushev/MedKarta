@@ -1,17 +1,25 @@
 /*
  * © 2026 МедКарта Казань. Все права защищены.
  *
- * Демо-запись: строгий подбор, расписание врача, удержание слота, запись,
- * отмена. Работает только при DEMO_DATA=on.
+ * Запись: строгий подбор, расписание врача, удержание слота, запись,
+ * отмена. Пока единственный коннектор — демо, поэтому работает только при
+ * DEMO_DATA=on.
  *
- *   POST /api/demo/search            — строгий подбор по условиям
- *   GET  /api/demo/slots             — расписание врача с состояниями слотов
- *   POST /api/demo/hold              — удержать слот на время подтверждения
- *   POST /api/demo/release           — снять своё удержание
- *   POST /api/demo/bookings          — записаться (идемпотентно)
- *   POST /api/demo/bookings/cancel   — отменить запись
- *   POST /api/demo/bookings/lookup   — состояние своих записей по номерам и токенам
- *   GET  /api/demo/bookings/mine     — записи вошедшего пользователя
+ *   POST /api/booking/search            — строгий подбор по условиям
+ *   GET  /api/booking/slots             — расписание врача с состояниями слотов
+ *   POST /api/booking/hold              — удержать слот на время подтверждения
+ *   POST /api/booking/release           — снять своё удержание
+ *   POST /api/booking/bookings          — записаться (идемпотентно)
+ *   POST /api/booking/bookings/cancel   — отменить запись
+ *   POST /api/booking/bookings/lookup   — состояние своих записей по номерам и токенам
+ *   GET  /api/booking/bookings/mine     — записи вошедшего пользователя
+ *
+ * Прежние пути /api/demo/* отвечают так же: ими пользуются открытые вкладки
+ * со старой сборкой.
+ *
+ * Слоты и записи идут через коннектор (backend/booking/connectors): обработчик
+ * не знает, демо это или МИС клиники; чего коннектор не умеет — отказ
+ * not_supported.
  *
  * Это симуляция: ничего не уходит в МИС, клиники, страховые и уведомления.
  * Персональных данных пациента нет ни в запросах, ни в базе. Запись, сделанная
@@ -23,7 +31,11 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { BookingError, createBookingStore, loadSqlite } from '../demo/bookingStore.js';
+import { defineConnector, requireCapability } from '../booking/connectors/contract.js';
+import { createDemoConnector } from '../booking/connectors/demo.js';
+import { BookingError } from '../booking/errors.js';
+import { createSlotSource } from '../booking/slotCache.js';
+import { createBookingStore, loadSqlite } from '../demo/bookingStore.js';
 import { getDemoCatalog } from '../demo/catalog.js';
 import { createDemoSearch } from '../demo/search.js';
 import { addDays, demoNow, isDay, moscowDay, moscowParts } from '../demo/time.js';
@@ -41,17 +53,19 @@ const defaultSearchLimit = createRateLimiter({ maxPerIp: 120, maxPerInstance: Nu
 const defaultReadLimit = createRateLimiter({ maxPerIp: 600, maxPerInstance: Number.POSITIVE_INFINITY, scaled: true });
 const defaultWriteLimit = createRateLimiter({ maxPerIp: 60, maxPerInstance: Number.POSITIVE_INFINITY, scaled: true });
 
-const ROUTES = new Map([
-  ['/api/demo/search', { POST: 'search' }],
-  ['/api/demo/slots', { GET: 'slots' }],
-  ['/api/demo/hold', { POST: 'hold' }],
-  ['/api/demo/release', { POST: 'release' }],
-  ['/api/demo/bookings', { POST: 'book' }],
-  ['/api/demo/bookings/cancel', { POST: 'cancel' }],
-  ['/api/demo/bookings/lookup', { POST: 'lookup' }],
-  ['/api/demo/bookings/mine', { GET: 'mine' }],
-]);
-export const DEMO_BOOKING_PATHS = Object.freeze([...ROUTES.keys()]);
+const OPERATIONS = [
+  ['search', { POST: 'search' }],
+  ['slots', { GET: 'slots' }],
+  ['hold', { POST: 'hold' }],
+  ['release', { POST: 'release' }],
+  ['bookings', { POST: 'book' }],
+  ['bookings/cancel', { POST: 'cancel' }],
+  ['bookings/lookup', { POST: 'lookup' }],
+  ['bookings/mine', { GET: 'mine' }],
+];
+const routesUnder = (prefix) => OPERATIONS.map(([suffix, methods]) => [`${prefix}/${suffix}`, methods]);
+const ROUTES = new Map([...routesUnder('/api/booking'), ...routesUnder('/api/demo')]);
+export const BOOKING_PATHS = Object.freeze([...ROUTES.keys()]);
 
 const ERROR_STATUS = Object.freeze({
   bad_request: 400,
@@ -63,6 +77,7 @@ const ERROR_STATUS = Object.freeze({
   slot_past: 409,
   slot_conflict: 409,
   idempotency_conflict: 409,
+  not_supported: 409,
 });
 
 const pathOf = (url) => {
@@ -79,8 +94,58 @@ const isTrustedWrite = (req) => {
   return /^application\/json\b/i.test(String(req.headers['content-type'] || ''));
 };
 
-export const createDemoBookingService = ({ index, store, getEngine, now }) => {
-  const search = createDemoSearch({ index, store, getEngine, now });
+/**
+ * @param {object} deps
+ * @param {object} deps.index индекс демо-набора: врачи, филиалы, услуги, цены
+ * @param {object} [deps.store] демо-хранилище; из него — коннектор по умолчанию
+ * @param {object} [deps.connector] коннектор записи (backend/booking/connectors)
+ */
+export const createDemoBookingService = ({ index, store, connector = createDemoConnector({ store }), getEngine, now }) => {
+  const active = defineConnector(connector);
+  const slots = createSlotSource({ connector: active, onError: (error) => logger.error('booking.slots_failed', error) });
+  const search = createDemoSearch({ index, store: slots, getEngine, now });
+
+  /** Удержание и запись меняют расписание: кэш пары сбрасывается и при отказе — слот могли занять в МИС. */
+  const changing = async (slotId, work) => {
+    try {
+      return await work();
+    } finally {
+      if (typeof slotId === 'string') slots.invalidateSlot(slotId);
+    }
+  };
+
+  /** Расписание врача; у коннектора без schedule — только свободное время. */
+  const schedule = async ({ doctor, branchId, fromDay, toDay, at }) => {
+    requireCapability(active, 'slots');
+    if (active.schedule) return active.schedule({ doctorId: doctor.id, branchId, fromDay, toDay, at });
+    const pairs = (branchId ? [branchId] : doctor.branchIds).map((id) => ({ doctorId: doctor.id, branchId: id }));
+    const free = [...(await slots.freeSlots({ pairs, fromDay, toDay, at })).values()].flat();
+    return { slots: free.sort((a, b) => Date.parse(a.startAt) - Date.parse(b.startAt)), absences: [] };
+  };
+
+  const hold = ({ slotId, at }) => changing(slotId, () => {
+    requireCapability(active, 'hold');
+    return active.hold({ slotId, at });
+  });
+  const release = ({ slotId, holdToken, at }) => changing(slotId, () => {
+    requireCapability(active, 'hold');
+    return active.release({ slotId, holdToken, at });
+  });
+  const book = (input) => changing(input.slotId, () => {
+    requireCapability(active, 'book');
+    return active.book(input);
+  });
+  const cancel = async ({ number, cancelToken, at }) => {
+    requireCapability(active, 'cancel');
+    const result = await active.cancel({ number, cancelToken, at });
+    if (result.slot) slots.invalidateSlot(result.slot.id);
+    return result;
+  };
+  const status = async ({ items, at }) => {
+    requireCapability(active, 'status');
+    return active.status({ items, at });
+  };
+  const listForAccount = async ({ accountId, at }) => (active.listForAccount ? active.listForAccount({ accountId, at }) : []);
 
   /** Запись с подробностями: врач, клиника, услуга, цена, покрытие. */
   const describe = (view) => {
@@ -103,7 +168,10 @@ export const createDemoBookingService = ({ index, store, getEngine, now }) => {
     };
   };
 
-  return Object.freeze({ index, store, search, describe, now });
+  return Object.freeze({
+    index, store, connector: active, slots, search, describe, now,
+    schedule, hold, release, book, cancel, status, listForAccount,
+  });
 };
 
 let defaultService;
@@ -224,7 +292,7 @@ export const createDemoBookingHandler = ({
           const today = moscowDay(at);
           const from = isDay(params.get('from')) && params.get('from') >= today ? params.get('from') : today;
           const days = Math.min(Math.max(Number(params.get('days')) || 7, 1), 14);
-          const schedule = service.store.doctorSchedule({ doctorId, branchId, fromDay: from, toDay: addDays(from, days - 1), at });
+          const schedule = await service.schedule({ doctor, branchId, fromDay: from, toDay: addDays(from, days - 1), at });
           const branch = branchId || doctor.branchIds[0];
           // Покрытие ДМС — по выбранной программе, для каждой услуги врача в этом филиале.
           const planId = service.index.plans.has(params.get('planId')) ? params.get('planId') : null;
@@ -246,33 +314,33 @@ export const createDemoBookingHandler = ({
           return;
         }
         case 'hold': {
-          const result = service.store.hold({ slotId: body.slotId, at });
+          const result = await service.hold({ slotId: body.slotId, at });
           logger.event('demo.hold', { status: 'ok' });
           respondJson(res, 200, result);
           return;
         }
         case 'release': {
-          respondJson(res, 200, { released: service.store.release({ slotId: body.slotId, holdToken: body.holdToken, at }) });
+          respondJson(res, 200, { released: await service.release({ slotId: body.slotId, holdToken: body.holdToken, at }) });
           return;
         }
         case 'book': {
           const planId = typeof body.planId === 'string' && service.index.plans.has(body.planId) ? body.planId : null;
           const owner = await accountUser();
-          const booking = service.store.book({ slotId: body.slotId, holdToken: body.holdToken || null, idempotencyKey: body.idempotencyKey, planId, accountId: owner?.id || null, at });
+          const booking = await service.book({ slotId: body.slotId, holdToken: body.holdToken || null, idempotencyKey: body.idempotencyKey, planId, accountId: owner?.id || null, at });
           logger.event('demo.booking', { status: booking.repeated ? 'repeated' : 'created' });
           // owned — запись привязана к кабинету; иначе номер и код отмены хранит браузер.
           respondJson(res, booking.repeated ? 200 : 201, { booking: service.describe(booking) });
           return;
         }
         case 'cancel': {
-          const result = service.store.cancel({ number: body.number, cancelToken: body.cancelToken, at });
+          const result = await service.cancel({ number: body.number, cancelToken: body.cancelToken, at });
           logger.event('demo.cancel', { status: result.alreadyCancelled ? 'repeated' : 'cancelled' });
           respondJson(res, 200, { booking: service.describe(result), slotReleased: result.slotReleased, alreadyCancelled: result.alreadyCancelled });
           return;
         }
         case 'lookup': {
           const items = Array.isArray(body.items) ? body.items : [];
-          respondJson(res, 200, { bookings: service.store.lookup({ items, at }).map((item) => (item.found ? service.describe(item) : item)) });
+          respondJson(res, 200, { bookings: (await service.status({ items, at })).map((item) => (item.found ? service.describe(item) : item)) });
           return;
         }
         case 'mine': {
@@ -281,7 +349,7 @@ export const createDemoBookingHandler = ({
             respondJson(res, 401, { error: 'Войдите в личный кабинет.' });
             return;
           }
-          respondJson(res, 200, { bookings: service.store.listForAccount({ accountId: owner.id, at }).map(service.describe) });
+          respondJson(res, 200, { bookings: (await service.listForAccount({ accountId: owner.id, at })).map(service.describe) });
           return;
         }
         default:

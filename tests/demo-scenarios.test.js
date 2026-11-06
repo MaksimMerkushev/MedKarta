@@ -24,6 +24,8 @@ import { createRoutingEngine } from '../backend/routing/engine.js';
 import { loadGraph } from '../backend/routing/graph.js';
 import { PLANNER_ERROR } from '../backend/planner/client.js';
 import { sanitizeAiAction } from '../shared/contract.js';
+import { normalizeSearchRequest } from '../shared/demoSearch.js';
+import { KAZAN_PLACES } from '../shared/kazanPlaces.js';
 import { makeTestPipeline, TEST_SESSION } from './helpers.js';
 
 const DatabaseSync = await loadSqlite();
@@ -1126,5 +1128,135 @@ describe('Демо-сценарии: запись', needsSqlite, () => {
     // что подбор и запись используют одно хранилище, а не память процесса.
     assert.equal(typeof store.close, 'function');
     assert.equal(store.kind, 'sqlite');
+  });
+});
+
+/*
+ * Длинная фраза одним сообщением: день, запасной день, пожелание по времени,
+ * цена, лимит пути и названное место. Каждое условие должно дойти до подбора.
+ */
+describe('Длинная фраза со всеми условиями', () => {
+  const FULL = 'Я нахожусь в Казани, рядом с площадью Тукая. Последние несколько дней у меня закладывает правое ухо, не знаю, к какому врачу обратиться. '
+    + 'Подбери подходящего специалиста на ближайшие два дня, желательно после 17:30, стоимостью до 2 500 ₽ и не дальше 20 минут на машине. '
+    + 'Если на сегодня не будет, то можно будет на завтра после 18:00.';
+  const TUKAY = { lat: KAZAN_PLACES.tukay.lat, lng: KAZAN_PLACES.tukay.lng };
+  const requestOf = async (texts) => (await chat(texts)).booking.request;
+
+  it('все условия поняты, точка не переспрашивается', async () => {
+    const request = await requestOf(FULL);
+    assert.equal(request.specialty, 'lor');
+    assert.deepEqual(request.date.options.map((option) => [option.kind, option.from ?? null]), [['today', null], ['tomorrow', '18:00']]);
+    assert.equal(request.timeFrom, null);
+    assert.deepEqual(request.preferWindow, { from: '17:30', to: null });
+    assert.equal(request.maxPrice, 2500);
+    assert.equal(request.travel.maxMinutes, 20);
+    assert.equal(request.travel.nearest, false, '«я нахожусь рядом» — не просьба «поближе»');
+    assert.equal(request.originPlace, 'tukay');
+    assert.equal(request.originConfirmed, true);
+    assert.deepEqual(request.origin, TUKAY);
+  });
+
+  it('подбор не задаёт вопросов и держит все условия', { skip: !DatabaseSync }, async () => {
+    const result = await run(await chat(FULL), { origin: CENTER });
+    if (!HAS_REAL_GRAPH) return;
+    assert.equal(result.status, 'ok');
+    assert.deepEqual(result.request.origin, TUKAY, 'названное место важнее точки браузера');
+    const starts = result.options.map((option) => Date.parse(option.nextSlot.startAt));
+    assert.deepEqual(starts, [...starts].sort((left, right) => left - right), 'сначала самое раннее время: сегодня, затем завтра');
+    for (const option of result.options) {
+      assert.ok(option.price <= 2500);
+      assert.ok(option.travel.minutes <= 20);
+      for (const slot of option.slots) {
+        assert.ok([TODAY, TOMORROW].includes(slot.day), slot.day);
+        if (slot.day === TOMORROW) assert.ok(slot.start >= '18:00', slot.start);
+      }
+    }
+  });
+
+  for (const [title, texts, expected] of [
+    ['«на ближайшие два дня»', 'лор на ближайшие два дня', { date: { kind: 'range', from: TODAY, to: TOMORROW } }],
+    ['«если на сегодня не будет» в конце предложения', 'лор. Если на сегодня не будет, то можно будет на завтра после 18:00.', { date: { kind: 'any_of', options: [{ kind: 'today' }, { kind: 'tomorrow', from: '18:00', to: null }] } }],
+    ['то же первой репликой, без врача', 'Если сегодня не будет, то завтра после 18:00', { date: { kind: 'any_of', options: [{ kind: 'today' }, { kind: 'tomorrow', from: '18:00', to: null }] } }],
+    ['свой час у каждого дня, точка в конце', 'лор сегодня после 17:30, а если не будет, то завтра после 18:00.', { date: { kind: 'any_of', options: [{ kind: 'today', from: '17:30', to: null }, { kind: 'tomorrow', from: '18:00', to: null }] } }],
+    ['сумма с пробелом — не время', 'лор сегодня до 2 500 ₽, а если не будет, то завтра', { date: { kind: 'any_of', options: [{ kind: 'today' }, { kind: 'tomorrow' }] }, maxPrice: 2500 }],
+    ['пожелание не стирает условие', 'лор после 18:00, желательно после 19:00', { timeFrom: '18:00', preferWindow: { from: '19:00', to: null } }],
+    ['одно пожелание условием не становится', 'лор желательно после 17:30', { timeFrom: null, preferWindow: { from: '17:30', to: null } }],
+    ['запасной день отдельной репликой хранит время', ['лор сегодня после 18', 'а если сегодня никого — то завтра'], { date: { kind: 'any_of', options: [{ kind: 'today' }, { kind: 'tomorrow' }] }, timeFrom: '18:00' }],
+  ]) {
+    it(title, async () => {
+      const request = await requestOf(texts);
+      for (const [key, value] of Object.entries(expected)) assert.deepEqual(request[key], value, key);
+    });
+  }
+
+  for (const [text, place] of [
+    ['я на площади Тукая, лор не дальше 20 минут', 'tukay'],
+    ['лор не дальше 20 минут от площади Тукая', 'tukay'],
+    ['лор не более 30 минут от центра', 'center'],
+    ['лор от метро Яшьлек за 20 минут', 'yashlek'],
+    ['лор рядом с Кремлём', 'kremlin'],
+    ['нахожусь у вокзала, нужен лор', 'vokzal'],
+  ]) {
+    it(`известное место: «${text}»`, async () => {
+      const request = await requestOf(text);
+      assert.equal(request.originPlace, place);
+      assert.equal(request.originConfirmed, true);
+    });
+  }
+
+  for (const [text, hint] of [
+    ['лор не дальше 20 минут от дачи', 'place'],
+    ['лор рядом с центром семьи', 'place'],
+    ['лор не дальше 20 минут от дома', 'home'],
+    ['живу у вокзала, лор поближе', 'home'],
+  ]) {
+    it(`незнакомое или личное место спрашиваем: «${text}»`, async () => {
+      const request = await requestOf(text);
+      assert.equal(request.originHint, hint);
+      assert.equal(request.originPlace, null);
+      assert.equal(request.originConfirmed, false);
+    });
+  }
+
+  for (const [text, nearest] of [
+    ['я на площади Тукая, лор поближе', true],
+    ['я на площади Тукая, найди ближайшего лора', true],
+    ['лор рядом с Кремлём', true],
+    ['я на площади Тукая, лор в ближайшее время', false],
+  ]) {
+    it(`«поближе» только по просьбе: «${text}»`, async () => {
+      assert.equal((await requestOf(text)).travel.nearest, nearest);
+    });
+  }
+
+  it('«расстояние не важно» снимает и названное место', async () => {
+    const request = await requestOf(['лор рядом с Кремлём', 'расстояние не важно']);
+    assert.equal(request.originPlace, null);
+    assert.equal(request.origin, null);
+  });
+
+  it('место приходит только из справочника', () => {
+    assert.equal(normalizeSearchRequest({ originPlace: 'constructor' }).request.originPlace, null);
+    assert.equal(normalizeSearchRequest({ originPlace: 'неизвестное' }).request.origin, null);
+  });
+
+  it('все места справочника — в Казани и на сети дорог', { skip: !HAS_REAL_GRAPH }, () => {
+    for (const [id, place] of Object.entries(KAZAN_PLACES)) {
+      assert.ok(place.lat > 55.7 && place.lat < 55.9 && place.lng > 49 && place.lng < 49.3, id);
+      assert.ok(engine.snapsToNetwork({ lat: place.lat, lng: place.lng }, 'driving'), id);
+    }
+  });
+
+  it('при пожелании показывается подходящее время, иначе вариант помечен', { skip: !DatabaseSync }, async () => {
+    const result = await run(await chat('лор завтра желательно после 17:30'));
+    assert.equal(result.status, 'ok');
+    assert.ok(result.options.length > 0);
+    for (const option of result.options) {
+      assert.equal(option.nextSlot.startAt, option.slots[0].startAt);
+      if (option.outsidePreference) assert.ok(option.slots.every((slot) => slot.start < '17:30'));
+      else assert.ok(option.slots.every((slot) => slot.start >= '17:30'), option.doctor.id);
+    }
+    const flags = result.options.map((option) => option.outsidePreference);
+    assert.deepEqual(flags, [...flags].sort((left, right) => Number(left) - Number(right)), 'подходящие — выше');
   });
 });

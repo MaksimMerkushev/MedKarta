@@ -649,6 +649,9 @@ describe('Аудит 3: настоящий перезапуск сервера �
     SMTP_USER: '',
     SMTP_PASSWORD: '',
     SMTP_FROM: 'МедКарта <noreply@medkarta.test>',
+    // Учебный SMTP на этом компьютере: пауза между письмами (квота Postbox) не нужна,
+    // а с ней уведомления прошлого теста ждали бы в очереди до следующего запуска.
+    MAIL_MIN_INTERVAL_MS: '0',
     APP_URL: '',
     PUBLIC_BASE_URL: base,
     REGISTRATION_MODE: 'invite_only',
