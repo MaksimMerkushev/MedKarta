@@ -15,6 +15,7 @@
  */
 
 import { KAZAN_PLACES } from '../../shared/kazanPlaces.js';
+import { classifySymptoms, SENSITIVE_RULE_IDS } from './symptoms.js';
 
 const prepare = (text) => String(text || '').toLowerCase().replace(/ё/gu, 'е');
 const B = '(?<![\\p{L}\\p{N}])';
@@ -22,7 +23,12 @@ const E = '(?![\\p{L}\\p{N}])';
 
 /* Диагнозы, которые опасно раскрывать даже без имени: такую реплику разбирает только сервер. */
 const SENSITIVE = new RegExp(`${B}(?:вич|спид|гепатит\\p{L}*|сифилис\\p{L}*|гоноре\\p{L}*|хламиди\\p{L}*|туберкул\\p{L}*|наркоман\\p{L}*|наркотик\\p{L}*|алкоголи\\p{L}*|шизофрен\\p{L}*|биполяр\\p{L}*|психоз\\p{L}*|психиатр\\p{L}*|аборт\\p{L}*|бесплоди\\p{L}*|изнасил\\p{L}*|суицид\\p{L}*)${E}`, 'u');
-export const hasSensitiveCondition = (text) => SENSITIVE.test(prepare(text));
+/* Тот же перечень, что у локального классификатора (symptoms.js): список один на всю систему. */
+export const hasSensitiveCondition = (text) => {
+  const lower = prepare(text);
+  if (SENSITIVE.test(lower)) return true;
+  return classifySymptoms(lower).matchedRules.some((id) => SENSITIVE_RULE_IDS.includes(id));
+};
 
 /* Редкое обстоятельство указывает на человека и без имени: при сомнении текст не передаётся. */
 const RARE_CIRCUMSTANCE = new RegExp(`${B}(?:единственн\\p{L}*|известн(?:ый|ая)|знаменит\\p{L}*|чемпион\\p{L}*|олимпийск\\p{L}*|народн(?:ый|ая)\\s+артист\\p{L}*)${E}`, 'u');
@@ -50,6 +56,15 @@ const QUOTED = /«[^»]{2,40}»/gu;
 const ALL_CAPS = /(?<![\p{L}\p{N}])\p{Lu}{2,}(?![\p{L}\p{N}])/gu;
 const NUMBERED = /№\s*\d+/gu;
 const NUMBERED_PLACE = /((?:школ|гимнази|лице|больниц|поликлиник|детск\p{L}*\s+сад|сад)\p{L}*)\s+(?:номер\s+)?\d+/giu;
+/*
+ * Имена собственные пишут с заглавной: «в банке Акибанк», «соседка Галина». В середине
+ * фразы такое слово заменяется меткой. Если строчными написано название, программа его не
+ * отличит от обычного слова: это известное ограничение, см. начало файла.
+ */
+const MID_SENTENCE_NAME = /(?<=[\p{L}\p{N},:)»"\]]\s+)\p{Lu}\p{Ll}{2,}(?:-\p{Lu}?\p{Ll}+)?/gu;
+const COMMON_NAMES = new RegExp(`^(?:казан\\p{L}*|россии|росси\\p{L}*|паркинсон\\p{L}*|альцгеймер\\p{L}*|бехтерев\\p{L}*|крон\\p{L}*|квинке|хашимото|рейно|меньер\\p{L}*)$`, 'u');
+/* «У мужа гастрит, а у меня кашель»: чужое состояние не нужно для выбора врача этому человеку. */
+const OTHER_PERSON = /(^|[.!?;]\s*)[Уу]\s+(?:муж|жен|мам|матер|пап|отц|брат|сестр|сын|доч|бабушк|дедушк|сосед|подруг|друг|коллег|свекр|тещ|тёщ|зят|невестк)\p{L}*\s+[^.!?;,]*,\s*(а\s+у\s+меня)/gu;
 const FULL_DATE = /(?<![\d.])\d{1,2}[./]\d{1,2}[./]\d{2,4}(?![\d.])/gu;
 const CAR_PLATE = /(?<![\p{L}\p{N}])[АВЕКМНОРСТУХ]\s?\d{3}\s?[АВЕКМНОРСТУХ]{2}\s?\d{2,3}(?![\p{L}\p{N}])/giu;
 
@@ -80,6 +95,7 @@ export const deidentifyComplaint = (text, state = { places: new Map() }) => {
   result = replaceSpans(result, INSTITUTION, '[организация]');
   result = result.replace(NUMBERED_PLACE, '$1').replace(NUMBERED, '');
   result = result.replace(NAMED_ORG, (whole, prefix) => `${prefix}[организация]`);
+  result = result.replace(OTHER_PERSON, '$1[о другом человеке], $2');
   result = result.replace(QUOTED, '[название]');
   result = result.replace(ALL_CAPS, (word) => (MEDICAL_ABBREVIATIONS.has(word) ? word : '[организация]'));
   for (const pattern of PLACE_PATTERNS) {
@@ -88,6 +104,12 @@ export const deidentifyComplaint = (text, state = { places: new Map() }) => {
       state.places.set(label, raw);
       return label;
     });
+  }
+  const words = result.match(/\p{L}{3,}/gu) || [];
+  const capitalized = words.filter((word) => /^\p{Lu}/u.test(word)).length;
+  // Каждое слово с заглавной — манера письма, а не название.
+  if (capitalized <= Math.max(2, words.length / 2)) {
+    result = result.replace(MID_SENTENCE_NAME, (word) => (COMMON_NAMES.test(prepare(word)) ? word : '[название]'));
   }
   return { text: result.replace(/\s+/gu, ' ').replace(/\s+([.,;!?])/gu, '$1').trim(), blocked: false, reason: null };
 };
