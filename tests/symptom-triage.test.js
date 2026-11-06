@@ -147,6 +147,13 @@ describe('Триаж: границы', () => {
     assert.doesNotMatch(calls[0].text, /@[A-Z]/, 'метки модели не нужны: остаётся только жалоба');
   });
 
+  for (const text of ['у мужа ВИЧ, а у меня болит голова', 'у меня вич и болит голова', 'лечусь от гепатита, болит живот']) {
+    it(`особый диагноз — модель не вызывается: «${text}»`, async () => {
+      const { calls } = await chat([text], specialist('neurologist'));
+      assert.equal(calls.length, 0);
+    });
+  }
+
   it('реплика почти из одних персональных данных — модель не вызывается', async () => {
     const { calls } = await chat(['Гульнара Хайруллина, 89171234567, болит живот'], specialist('gastroenterologist'));
     assert.equal(calls.length, 0);

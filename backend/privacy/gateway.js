@@ -1038,7 +1038,8 @@ export const createPrivacyGateway = ({
      */
     const triage = Boolean(decision.triage)
       && redactedTurns.every((turn) => countResidualNameLike(turn.text, streetWords) <= POLICY.maxResidualNameLike)
-      && !redactedTurns.some((turn) => hasSensitiveCondition(turn.text));
+      // По исходному тексту: «ВИЧ» заглавными редактура может принять за имя и вырезать.
+      && !analyses.some((analysis) => hasSensitiveCondition(analysis.message.content));
     if (triage) {
       Object.defineProperty(context, 'triageTurns', {
         // Только текущий запрос: прошлый («кардиолог» перед «болит колено») модель не должен сбивать.
