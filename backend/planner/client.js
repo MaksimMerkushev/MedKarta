@@ -11,6 +11,7 @@
  * уходят наружу, только если одновременно ошиблись Gateway и эта проверка.
  */
 
+import { aiTraceSink } from '../observability/aiTrace.js';
 import { isSanitizedPlannerRequest } from '../privacy/models.js';
 import { detectEntities } from '../privacy/detectors.js';
 import { checkClosedVocabulary, isKnownPlace, isStreetMention } from '../privacy/vocabulary.js';
@@ -151,6 +152,10 @@ export const requestCompletion = async ({
 }) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // Локальная диагностика: тот же запрос и настоящий ответ, без ключа и заголовков авторизации.
+  const sink = aiTraceSink();
+  const wire = sink && /openrouter\.ai/u.test(String(url)) ? { ...body, usage: { include: true } } : body;
+  const exchange = sink ? { provider, startedAt: new Date().toISOString(), request: { url: String(url), method: 'POST', headerNames: ['Content-Type', 'Authorization (скрыт)'], bytes: Buffer.byteLength(JSON.stringify(wire)), body: wire } } : null;
 
   try {
     const response = await fetchImpl(url, {
@@ -162,8 +167,19 @@ export const requestCompletion = async ({
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(wire),
     });
+    if (exchange) {
+      const text = await response.clone().text();
+      let json = null;
+      try {
+        json = JSON.parse(text);
+      } catch {
+        // Не JSON: сохранится как текст.
+      }
+      exchange.response = { status: response.status, ms: Date.now() - Date.parse(exchange.startedAt), json, text: json ? undefined : text.slice(0, 4000) };
+      sink(exchange);
+    }
 
     if (!response.ok) {
       // Тело ошибки не логируется и не пересылается: провайдеры часто
@@ -199,6 +215,10 @@ export const requestCompletion = async ({
       },
     };
   } catch (error) {
+    if (exchange && !exchange.response) {
+      exchange.error = error?.code || error?.name || 'error';
+      sink(exchange);
+    }
     if (error?.name === 'AbortError') {
       throw new PlannerError('planner timeout', PLANNER_ERROR.TIMEOUT);
     }
