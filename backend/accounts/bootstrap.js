@@ -17,7 +17,8 @@ import { randomBytes } from 'node:crypto';
 import { hashPassword, passwordProblem } from './passwords.js';
 import { checkEmail, userLabel } from './service.js';
 
-export const DEFAULT_SUPERADMIN = Object.freeze({ email: 'maximka2703@bk.ru', firstName: 'Максим', lastName: '' });
+// Адреса здесь нет: репозиторий публичный. Его задают ADMIN_BOOTSTRAP_EMAIL или --email.
+export const DEFAULT_SUPERADMIN = Object.freeze({ firstName: 'Администратор', lastName: '' });
 
 export const TEST_USERS = Object.freeze([
   { email: 'anna.smirnova@medkarta.test', firstName: 'Анна', lastName: 'Смирнова' },
@@ -30,7 +31,7 @@ const newId = () => randomBytes(16).toString('hex');
 /**
  * @returns {Promise<{status: 'created'|'exists', user: object}>}
  */
-export const bootstrapSuperadmin = async ({ store, email = DEFAULT_SUPERADMIN.email, firstName = DEFAULT_SUPERADMIN.firstName, lastName = DEFAULT_SUPERADMIN.lastName, password, now = () => Date.now() }) => {
+export const bootstrapSuperadmin = async ({ store, email, firstName = DEFAULT_SUPERADMIN.firstName, lastName = DEFAULT_SUPERADMIN.lastName, password, now = () => Date.now() }) => {
   const address = checkEmail(email);
   const existing = store.getUserByEmail(address);
   if (existing) return { status: 'exists', user: existing };

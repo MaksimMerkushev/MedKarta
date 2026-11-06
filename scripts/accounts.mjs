@@ -153,7 +153,8 @@ const findByEmail = (email) => {
 
 switch (command) {
   case 'bootstrap': {
-    const email = option('email') || process.env.ADMIN_BOOTSTRAP_EMAIL || DEFAULT_SUPERADMIN.email;
+    const email = option('email') || process.env.ADMIN_BOOTSTRAP_EMAIL;
+    if (!email) die('Укажите адрес суперадминистратора: --email или ADMIN_BOOTSTRAP_EMAIL.');
     if (store.getUserByEmail(normalizeEmail(email))) {
       console.log('Аккаунт уже есть — ничего не изменено. Ссылка для смены пароля: access-link --email …');
       break;
