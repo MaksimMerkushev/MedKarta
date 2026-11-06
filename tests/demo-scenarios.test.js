@@ -27,6 +27,7 @@ import { sanitizeAiAction } from '../shared/contract.js';
 import { normalizeSearchRequest } from '../shared/demoSearch.js';
 import { KAZAN_PLACES } from '../shared/kazanPlaces.js';
 import { makeTestPipeline, TEST_SESSION } from './helpers.js';
+import { extractBookingConstraints } from '../backend/privacy/bookingConstraints.js';
 
 const DatabaseSync = await loadSqlite();
 const NOW = moscowMoment('2026-10-12', '12:00');

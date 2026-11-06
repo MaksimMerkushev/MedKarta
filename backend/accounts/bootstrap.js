@@ -18,7 +18,7 @@ import { hashPassword, passwordProblem } from './passwords.js';
 import { checkEmail, userLabel } from './service.js';
 
 // Адреса здесь нет: репозиторий публичный. Его задают ADMIN_BOOTSTRAP_EMAIL или --email.
-export const DEFAULT_SUPERADMIN = Object.freeze({ firstName: 'Администратор', lastName: '' });
+export const DEFAULT_SUPERADMIN = Object.freeze({ firstName: 'Максим', lastName: '' });
 
 export const TEST_USERS = Object.freeze([
   { email: 'anna.smirnova@medkarta.test', firstName: 'Анна', lastName: 'Смирнова' },
