@@ -36,7 +36,8 @@
 | `AI_TRIAGE_MODEL` | `AI_MODEL` | модель для триажа жалоб | [pipeline.js](../backend/pipeline.js) |
 | `AI_REASONING_EFFORT` | не отправляется | `none`, `minimal`, `low`, `medium`, `high` | [client.js](../backend/planner/client.js) |
 | `AI_PROXY_URL` | — | `login:password@host:port`, `host:port:login:password` или `socks5://…`; ошибка в адресе выключает внешнюю модель | [proxyFetch.js](../backend/planner/proxyFetch.js) |
-| `AI_DAILY_CALL_LIMIT` | `2000` | вызовов модели в сутки на процесс; значение из админ-панели («Обращений к ИИ-модели в сутки») важнее | [rateLimit.js](../backend/http/rateLimit.js) |
+| `AI_DAILY_CALL_LIMIT` | `300` | вызовов модели в сутки на процесс; значение из админ-панели («Обращений к ИИ-модели в сутки») важнее | [rateLimit.js](../backend/http/rateLimit.js) |
+| `AI_DAILY_CALLS_PER_IP` | `60` | вызовов модели с одного адреса в сутки; сверх — ответ по локальному плану | [rateLimit.js](../backend/http/rateLimit.js) |
 
 > Если задан ключ, но не задан `AI_UPSTREAM_URL`, запросы с ключом уходят на
 > адрес по умолчанию; в журнале запуска — предупреждение
