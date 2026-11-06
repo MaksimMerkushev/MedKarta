@@ -71,6 +71,25 @@ describe('Запись: HTTP /api/booking/* рядом с /api/demo/*', { skip: 
     service?.store.close();
   });
 
+  it('гость не занимает расписание: у удержания и записи свои лимиты на адрес', async () => {
+    const counter = (max) => { let used = 0; return () => { used += 1; return used > max ? { allowed: false, retryAfterSeconds: 60 } : { allowed: true }; }; };
+    const handler = createDemoBookingHandler({ getService: async () => service, getAccountUser: async () => null, searchLimit: unlimited, readLimit: unlimited, writeLimit: unlimited, holdLimit: counter(1), bookLimit: counter(1) });
+    const limited = http.createServer((req, res) => handler(req, res));
+    await new Promise((resolve) => limited.listen(0, '127.0.0.1', resolve));
+    const local = limited.address().port;
+    try {
+      const statuses = {};
+      for (const [name, path, body] of [['hold', '/api/booking/hold', { slotId: 'нет-такого' }], ['book', '/api/booking/bookings', { slotId: 'нет-такого', idempotencyKey: 'k'.repeat(24) }]]) {
+        const first = await request(local, 'POST', path, { body });
+        const second = await request(local, 'POST', path, { body });
+        statuses[name] = [first.status !== 429, second.status];
+      }
+      assert.deepEqual(statuses, { hold: [true, 429], book: [true, 429] });
+    } finally {
+      limited.close();
+    }
+  });
+
   it('у каждого прежнего пути есть новый', () => {
     const legacy = BOOKING_PATHS.filter((apiPath) => apiPath.startsWith('/api/demo/'));
     assert.equal(legacy.length, 8);
