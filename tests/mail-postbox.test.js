@@ -445,6 +445,34 @@ describe('Почта: очередь, повторы и квоты', { skip: !Da
     assert.deepEqual(mailer.allows({ kind: 'reset', to: 'e@medkarta.test' }), { allowed: false, reason: 'daily_quota' }, 'и для писем со ссылками');
   });
 
+  it('заявки на регистрацию занимают не больше половины квоты: сброс пароля и уведомления проходят', async () => {
+    const { mailer } = setup({ quota: { dailyLimit: 4, minIntervalMs: 0 } });
+    const signup = (to) => mailer.enqueue({ kind: 'register_confirm', to, params: { link: 'https://medkarta.test/register/confirm#token=x', expiresAt: Date.now() + 60_000, ttlMinutes: 60 } });
+    for (const to of ['a@medkarta.test', 'b@medkarta.test']) {
+      assert.equal(mailer.allows({ kind: 'register_confirm', to }).allowed, true);
+      signup(to);
+    }
+    assert.deepEqual(mailer.allows({ kind: 'register_confirm', to: 'c@medkarta.test' }), { allowed: false, reason: 'registration_quota' });
+    assert.deepEqual(mailer.allows({ kind: 'register_exists', to: 'c@medkarta.test' }), { allowed: false, reason: 'registration_quota' });
+    assert.equal(mailer.allows({ kind: 'reset', to: 'owner@medkarta.test' }).allowed, true, 'сброс пароля не зависит от заявок');
+    assert.equal(mailer.allows({ kind: 'password_changed', to: 'owner@medkarta.test' }).allowed, true);
+    await mailer.drain();
+    assert.deepEqual(mailer.allows({ kind: 'register_confirm', to: 'c@medkarta.test' }), { allowed: false, reason: 'registration_quota' }, 'отправленные заявки тоже считаются');
+  });
+
+  it('один источник: не больше 30 писем со ссылками в сутки, даже если укладывается в часовой лимит', () => {
+    const { mailer, clock } = setup({ quota: { dailyLimit: 0, minIntervalMs: 0 } });
+    const send = (i) => mailer.enqueue({ kind: 'register_confirm', to: `s${i}@medkarta.test`, sourceKey: 'src', params: { link: 'https://medkarta.test/register/confirm#token=x', expiresAt: clock.t + 60_000, ttlMinutes: 60 } });
+    for (let i = 0; i < 30; i += 1) {
+      if (i > 0 && i % 10 === 0) clock.t += 61 * 60 * 1000;
+      assert.equal(mailer.allows({ kind: 'register_confirm', to: `s${i}@medkarta.test`, sourceKey: 'src' }).allowed, true, `письмо ${i}`);
+      send(i);
+    }
+    clock.t += 61 * 60 * 1000;
+    assert.equal(mailer.allows({ kind: 'register_confirm', to: 'next@medkarta.test', sourceKey: 'src' }).allowed, false);
+    assert.equal(mailer.allows({ kind: 'register_confirm', to: 'next@medkarta.test', sourceKey: 'other' }).allowed, true, 'другой источник не затронут');
+  });
+
   it('не чаще письма в секунду: и очередь, и «отправить сразу» — по одному, с паузой', async () => {
     const sleeps = [];
     let inFlight = 0;
