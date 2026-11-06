@@ -770,13 +770,17 @@ export const mergeSpans = (spans) => {
   return result;
 };
 
+const KIN_WORD = /^(?:сын\p{L}{0,3}|доч\p{L}{0,4}|внук\p{L}{0,3}|внучк\p{L}{0,2}|муж\p{L}{0,3}|жен[аеуы]|мам\p{L}{0,3}|пап\p{L}{0,3}|брат\p{L}{0,3}|сестр\p{L}{0,3}|бабушк\p{L}{0,2}|дедушк\p{L}{0,2}|ребенк\p{L}{0,2}|ребёнк\p{L}{0,2}|ребенок|ребёнок)$/iu;
+
 /**
  * @param {string} original исходный пользовательский текст
  * @returns {{ scan: {text: string, map: number[]}, spans: Array<object> }}
  */
 export const detectEntities = (original) => {
   const scan = buildScanView(original);
-  const spans = mergeSpans([...runPatternDetectors(scan), ...detectPersons(scan)]);
+  // «Сыну 3 года»: родство — не имя, иначе теряется и приём для ребёнка.
+  const spans = mergeSpans([...runPatternDetectors(scan), ...detectPersons(scan)])
+    .filter((span) => span.kind !== ENTITY_KIND.PERSON || !KIN_WORD.test(scan.text.slice(span.start, span.end).trim()));
   return { scan, spans };
 };
 
