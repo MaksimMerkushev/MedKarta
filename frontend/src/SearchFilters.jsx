@@ -43,7 +43,7 @@ const travelHint = (travel, active) => {
   if (!active) return `По дорогам ${travel.modeLabel}, от вашей точки на карте.`;
   if (travel.state === 'loading') return 'Считаем время по дорогам…';
   if (travel.state === 'approximate') return 'Сервер недоступен — пока оценка по расстоянию.';
-  return `По дорогам ${travel.modeLabel}, без учёта пробок.`;
+  return `По дорогам ${travel.modeLabel}, время примерное.`;
 };
 
 export default function SearchFilters({

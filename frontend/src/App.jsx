@@ -1192,7 +1192,7 @@ function RouteDock({ dockRef, count, routeData, expanded, onToggle, onClear, tra
               ) : (
                 <p className="flex items-center gap-1.5 px-1 text-[12px] text-slate-500 dark:text-slate-400" aria-live="polite">
                   {ready ? (
-                    <>{formatDistance(routeData.distance)} · без учёта пробок</>
+                    <>{formatDistance(routeData.distance)} · время примерное</>
                   ) : (
                     <><Loader2 size={12} className="animate-spin" aria-hidden="true" />Строю маршрут…</>
                   )}
@@ -4503,7 +4503,7 @@ export default function App() {
                   ) : (
                     <>
                       <div className="text-3xl font-extrabold tracking-tight text-slate-800 dark:text-white">{formatTime(routeData.time)}</div>
-                      <div className="mt-1 font-medium text-slate-500 dark:text-slate-400">{formatDistance(routeData.distance)} · без учёта пробок</div>
+                      <div className="mt-1 font-medium text-slate-500 dark:text-slate-400">{formatDistance(routeData.distance)} · время примерное</div>
                     </>
                   )
                 ) : (
@@ -4564,6 +4564,16 @@ export default function App() {
           скрыта). На компьютере и планшете вход, профиль, админ-панель и выход —
           в левой панели (кнопка аккаунта в шапке), а угол занят только маршрутом.
         */}
+        {/* На телефоне панель поиска скрыта: о вымышленных врачах сообщаем прямо на карте. */}
+        {isMobile && demoState.enabled && (
+          <div
+            data-testid="demo-map-note"
+            className="pointer-events-none absolute left-3 z-[1001] max-w-[60%] rounded-2xl border border-amber-200 bg-amber-50/95 px-3 py-2 text-[12px] leading-4 text-amber-900 shadow-lg dark:border-amber-800 dark:bg-amber-950/90 dark:text-amber-200"
+            style={{ top: 'calc(env(safe-area-inset-top, 0px) + 30px)' }}
+          >
+            <b>Демо.</b> {demoState.demoOnly ? 'Врачи и клиники вымышлены' : 'Врачи и расписание вымышлены'}
+          </div>
+        )}
         {isMobile && (
           <div className="absolute right-3 z-[1001] flex items-center gap-2" style={{ top: 'calc(env(safe-area-inset-top, 0px) + 30px)' }}>
             {account.status === 'user' && account.user ? (
@@ -4787,6 +4797,7 @@ export default function App() {
               onFocusPick={focusPick}
               onRoutePick={routePick}
               onShowAllPicks={showAllPicks}
+              demoNotice={demoState.enabled}
               bookings={demoState.booking ? assistantBookings : null}
               bookingOrigin={bookingOrigin}
               bookingPlanId={dmsPlan?.id || null}

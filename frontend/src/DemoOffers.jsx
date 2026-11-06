@@ -82,8 +82,8 @@ const OptionCard = ({ option, index, today, onBook, onFocus, onRoute, compact })
             </li>
             {option.coverage && <li><CoverageBadge coverage={option.coverage} /></li>}
             {option.travel ? (
-              <li className="inline-flex items-center gap-1 rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700 dark:bg-sky-900/40 dark:text-sky-200" title="По графу дорог, без учёта пробок">
-                <Navigation size={11} aria-hidden="true" /> {option.travel.minutes} мин {TRAVEL_LABEL[option.travel.mode] || ''}
+              <li className="inline-flex items-center gap-1 rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700 dark:bg-sky-900/40 dark:text-sky-200" title="Примерное время: по дорогам, без данных о пробках">
+                <Navigation size={11} aria-hidden="true" /> ≈ {option.travel.minutes} мин {TRAVEL_LABEL[option.travel.mode] || ''}
               </li>
             ) : null}
           </ul>
@@ -385,7 +385,7 @@ export default function DemoOffers({
                   ))}
                 </ol>
                 <p className="mt-1.5 px-1 text-[10.5px] leading-4 text-slate-400">
-                  Только врачи и время, подходящие под все условия. Время в пути — по дорогам, без пробок. Клиники, врачи и расписание — демонстрационные.
+                  Только врачи и время, подходящие под все условия. Время в пути примерное: по дорогам, без данных о пробках. Клиники, врачи и расписание — демонстрационные.
                 </p>
               </>
             )}

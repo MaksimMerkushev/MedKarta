@@ -104,6 +104,7 @@ function PrivacyNote({ className = '' }) {
 }
 
 export default function AIAssistant({
+  demoNotice = false,
   isOpen,
   onClose,
   onApplyTriage,
@@ -124,6 +125,10 @@ export default function AIAssistant({
   onLoginRequired,
 }) {
   const [messages, setMessages] = useState([GREETING]);
+  // Приветствие в демо сразу говорит, что врачи ненастоящие: панель с пометкой на телефоне скрыта.
+  const shownMessages = demoNotice
+    ? messages.map((message) => (message.id === GREETING.id ? { ...message, content: `${message.content} Сейчас это демо-версия: врачи и клиники вымышлены.` } : message))
+    : messages;
   // У каждой реплики свой id: к ответу ассистента привязывается подборка «топ-3».
   const nextIdRef = useRef(1);
   const [inputValue, setInputValue] = useState('');
@@ -250,7 +255,7 @@ export default function AIAssistant({
   const renderMessages = (bubbleClass) => (
     <div className="space-y-4">
       <AnimatePresence initial={false}>
-      {messages.map((msg) => (
+      {shownMessages.map((msg) => (
         <Motion.div key={msg.id} {...(msg.role === 'user' ? USER_BUBBLE : ASSISTANT_BUBBLE)} style={{ transformOrigin: msg.role === 'user' ? 'bottom right' : 'top left' }}>
           <div className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div
