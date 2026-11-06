@@ -1235,7 +1235,7 @@ export const extractBookingConstraints = (text, { nested = false } = {}) => {
   const districts = extractDistricts(self.masked);
   if (districts.include.length > 0) result.districts = districts.include;
   if (districts.exclude.length > 0) result.excludeDistricts = districts.exclude;
-  if (/(?<![\p{L}])(?:в\s+любом\s+районе|район\s+(?:не\s+важен|неважен|любой))/u.test(lower)) result.districtAny = true;
+  if (/(?<![\p{L}])(?:в\s+любом\s+районе|любой\s+район|район\s+(?:не\s+важен|неважен|любой|не\s*важно|без\s+разницы|вс[её]\s+равно|не\s+принципиал\p{L}*))/u.test(lower)) result.districtAny = true;
   /*
    * «В Советском районе, но если там никого — можно Приволжский», «…если
    * там нет — то любой район»: названный район — пожелание (такие первыми),
