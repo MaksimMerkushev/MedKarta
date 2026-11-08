@@ -102,34 +102,36 @@ symptom_time — когда бывает или начался симптом; e
 
 export const TRIAGE_JSON_SCHEMA = Object.freeze({
   name: 'medkarta_triage',
-  strict: false,
+  /*
+   * Строгий режим: провайдер обязан вернуть объект по схеме. Без него настоящая модель в 6 из 43
+   * ответов (08.11.2026) возвращала саму схему вместо ответа, и нужен был повторный запрос.
+   * В строгом режиме все поля обязательны (null допустим), а ограничения длины не поддерживаются:
+   * их проверяет validateTriage.
+   */
+  strict: true,
   schema: {
     type: 'object',
     additionalProperties: false,
-    required: ['status', 'specialties'],
+    required: ['status', 'specialties', 'question', 'options', 'frame'],
     properties: {
       status: { type: 'string', enum: [...TRIAGE_STATUSES] },
-      specialties: { type: 'array', maxItems: TRIAGE_LIMITS.MAX_SPECIALTIES, items: { type: 'string', enum: [...SPECIALTY_KEYS] } },
-      question: { type: ['string', 'null'], maxLength: TRIAGE_LIMITS.MAX_QUESTION_CHARS },
-      options: {
-        type: ['array', 'null'],
-        maxItems: TRIAGE_LIMITS.MAX_OPTIONS,
-        items: { type: 'string', maxLength: TRIAGE_LIMITS.MAX_OPTION_CHARS },
-      },
+      specialties: { type: 'array', items: { type: 'string', enum: [...SPECIALTY_KEYS] } },
+      question: { type: ['string', 'null'] },
+      options: { type: ['array', 'null'], items: { type: 'string' } },
       frame: {
         type: ['object', 'null'],
         additionalProperties: false,
+        required: ['symptoms', 'patient', 'mentions'],
         properties: {
-          symptoms: { type: 'array', maxItems: 6, items: { type: 'string', maxLength: 80 } },
+          symptoms: { type: 'array', items: { type: 'string' } },
           patient: { type: 'string', enum: [...FRAME_PATIENTS] },
           mentions: {
             type: 'array',
-            maxItems: 6,
             items: {
               type: 'object',
               additionalProperties: false,
               required: ['text', 'role'],
-              properties: { text: { type: 'string', maxLength: 80 }, role: { type: 'string', enum: [...FRAME_ROLES] } },
+              properties: { text: { type: 'string' }, role: { type: 'string', enum: [...FRAME_ROLES] } },
             },
           },
         },
