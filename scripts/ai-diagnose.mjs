@@ -143,16 +143,28 @@ for (const scenario of selected) {
     clarify,
     problems,
   };
+  const statuses = exchanges.map((item) => item.response?.status ?? item.error);
+  trace.modelAnswered = exchanges.length > 0 && statuses.every((status) => status === 200);
   fs.writeFileSync(path.join(OUT, `${scenario.id}.json`), JSON.stringify(trace, null, 1));
-  rows.push({ id: scenario.id, group: scenario.group, turns: scenario.turns, expected: scenario.expect, specialty, clarify, reply: action.replyText || '', calls: exchanges.length, ms, usage, statuses: exchanges.map((item) => item.response?.status ?? item.error), problems });
-  console.log(`${scenario.id}\t${problems.length === 0 ? 'ok' : 'FAIL'}\t${specialty || (clarify ? 'вопрос' : '—')}\tвызовов ${exchanges.length}\t${ms} мс\t${problems.map((problem) => problem.text).join('; ').slice(0, 110)}`);
+  rows.push({ id: scenario.id, group: scenario.group, turns: scenario.turns, expected: scenario.expect, specialty, clarify, reply: action.replyText || '', calls: exchanges.length, ms, usage, statuses, modelAnswered: trace.modelAnswered, problems });
+  // Ответ без модели (отказ, сбой) — ответ локальных правил: его нельзя выдавать за ответ модели.
+  const source = exchanges.length === 0 ? 'без модели' : trace.modelAnswered ? 'модель' : `ОТКАЗ ${statuses.join(',')}`;
+  console.log(`${scenario.id}\t${problems.length === 0 ? 'ok' : 'FAIL'}\t${source}\t${specialty || (clarify ? 'вопрос' : '—')}\tвызовов ${exchanges.length}\t${ms} мс\t${problems.map((problem) => problem.text).join('; ').slice(0, 110)}`);
+  const denied = statuses.find((status) => status === 401 || status === 402 || status === 403);
+  if (mode === 'real' && denied) {
+    console.error(`Модель отклонила запрос (HTTP ${denied}): серия остановлена, дальше были бы ответы правил, а не модели.`);
+    stopped = true;
+    break;
+  }
 }
 store?.close();
 setAiTraceSink(null);
 
 const total = rows.reduce((sum, row) => ({ prompt: sum.prompt + row.usage.prompt, completion: sum.completion + row.usage.completion, cost: sum.cost + row.usage.cost, calls: sum.calls + row.calls }), { prompt: 0, completion: 0, cost: 0, calls: 0 });
 const times = rows.map((row) => row.ms).sort((a, b) => a - b);
-const summary = { mode: mode === 'real' ? 'REAL' : 'MOCK', scenarios: rows.length, passed: rows.filter((row) => row.problems.length === 0).length, stoppedByLimit: stopped, ...total, meanMs: Math.round(times.reduce((a, b) => a + b, 0) / (times.length || 1)), p95Ms: times[Math.floor(times.length * 0.95)] ?? 0 };
+const statusCount = {};
+for (const row of rows) for (const status of row.statuses) statusCount[status] = (statusCount[status] || 0) + 1;
+const summary = { mode: mode === 'real' ? 'REAL' : 'MOCK', scenarios: rows.length, passed: rows.filter((row) => row.problems.length === 0).length, modelAnswered: rows.filter((row) => row.modelAnswered).length, statuses: statusCount, stopped, ...total, meanMs: Math.round(times.reduce((a, b) => a + b, 0) / (times.length || 1)), p95Ms: times[Math.floor(times.length * 0.95)] ?? 0 };
 fs.writeFileSync(path.join(OUT, 'summary.json'), JSON.stringify({ summary, rows }, null, 1));
 console.log(JSON.stringify(summary));
 console.log(`Трассы: ${OUT}`);
