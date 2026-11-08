@@ -39,7 +39,9 @@ const run = async (turns, reply = null) => {
     return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { prompt_tokens: 0, completion_tokens: 0 } }), { status: 200 });
   };
   const triage = createExternalTriage({ apiKey: 'test-key', url: 'https://llm.example.test/v1/chat/completions', model: 'mock', fetchImpl });
-  const { pipeline, sent } = makeTestPipeline({ catalog, triage, booking: { enabled: true, now: () => NOW } });
+  // Режим по умолчанию (structured). В режиме hybrid часть жалоб без слов из словаря модели не доходит:
+  // это прежнее поведение, оно описано в docs/ai-pipeline-report.md (раздел G).
+  const { pipeline, sent } = makeTestPipeline({ catalog, triage, outboundMode: 'structured', booking: { enabled: true, now: () => NOW } });
   const probe = {};
   const { action } = await pipeline.handle({ messages: turns.map((content) => ({ role: 'user', content })), sessionId: TEST_SESSION, probe });
   return { action: sanitizeAiAction(JSON.parse(JSON.stringify(action))), calls, sent, probe };
