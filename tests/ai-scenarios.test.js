@@ -47,8 +47,7 @@ const run = async (turns, reply = null) => {
 
 describe('Сценарии понимания запросов (заглушка модели)', () => {
   for (const scenario of SCENARIOS) {
-    if (scenario.group === 'holdout') continue;
-    it(`${scenario.id}: ${scenario.turns.join(' → ').slice(0, 70)}`, async () => {
+    it(`${scenario.id}: ${scenario.turns.join(' → ').slice(0, 70)}`, { todo: scenario.known || false }, async () => {
       const { action, calls, sent } = await run(scenario.turns);
       const outbound = [...calls.map((call) => call.serialized), ...sent.map((item) => item.serialized)].join('\n');
       const { problems } = checkScenario(scenario, { action, sentTexts: calls.map((call) => call.text), outbound });
@@ -80,6 +79,11 @@ describe('Подсказка модели о ролях', () => {
     assert.equal(action.booking.request.date.kind, 'any');
     assert.equal(action.booking.request.timeFrom ?? null, null);
     assert.equal(action.booking.request.maxPrice ?? null, null);
+  });
+
+  it('время другого события снимается так же, как время симптома', async () => {
+    const { action } = await run(['Завтра экзамен, а горло совсем пропало'], answer([{ text: 'Завтра экзамен', role: 'event_time' }]));
+    assert.equal(action.booking.request.date.kind, 'any');
   });
 
   it('фрагмент, которого нет в переданном тексте, игнорируется', async () => {

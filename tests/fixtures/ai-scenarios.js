@@ -16,6 +16,7 @@
  *   sentHas / sentNot    что должно и не должно уйти во внешнюю модель
  *   noOutbound  текст реплики не должен уйти наружу совсем
  *   searchEmpty подбор честно ничего не находит
+ * known — известное ограничение: сценарий проверяется, но провал не скрывается и описан в отчёте.
  * Смысл doctor — ожидаемый автоматически, а не медицинская правильность:
  * её должен оценивать врач.
  */
@@ -199,6 +200,43 @@ export const SCENARIOS = [
   { id: 'X46', group: 'holdout', turns: ['Слегка кольнуло в боку при беге'], expect: { emergency: false } },
   { id: 'X47', group: 'holdout', turns: ['Заложен нос неделю'], expect: { emergency: false, doctor: ['lor', 'therapist'], clarifyOk: true } },
   { id: 'X48', group: 'holdout', turns: ['Боли в груди нет, просто хочу проверить сердце'], expect: { emergency: false, doctor: ['cardiologist', 'therapist'], clarifyOk: true } },
+
+  /*
+   * Второй контрольный набор: написан после исправлений по первому. Его результат записан
+   * один раз и как есть; по нему код больше не настраивался, провалы описаны в отчёте.
+   */
+  { id: 'Y01', group: 'holdout2', turns: ['Со среды болит голова в висках'], expect: { doctor: HEAD, clarifyOk: true, noFilters: ['date'] } },
+  { id: 'Y02', group: 'holdout2', turns: ['Каждый вечер отекает колено'], expect: { doctor: TRAUMA, clarifyOk: true, noFilters: ['evening'] } },
+  { id: 'Y03', group: 'holdout2', turns: ['К ночи поднимается температура, утром нормально'], expect: { doctor: ['therapist'], clarifyOk: true, noFilters: ['evening', 'morning', 'timeFrom', 'timeTo'] } },
+  { id: 'Y04', group: 'holdout2', turns: ['Сегодня зуб отпустило, но вчера ночью болел'], expect: { doctor: ['dentist'], noFilters: ['date'] } },
+  { id: 'Y05', group: 'holdout2', known: 'время другого события правилами не отличить; снимает только подсказка модели event_time', turns: ['Завтра экзамен, а горло совсем пропало'], expect: { doctor: ['lor', 'therapist'], clarifyOk: true, noFilters: ['date'] } },
+  { id: 'Y06', group: 'holdout2', turns: ['На выходных простудился, кашель'], expect: { doctor: ['therapist', 'lor'], clarifyOk: true, noFilters: ['date'] } },
+  { id: 'Y07', group: 'holdout2', turns: ['Езжу на работу в Кировский район, болит спина'], expect: { doctor: BACK, clarifyOk: true, noFilters: ['districts'] } },
+  { id: 'Y08', group: 'holdout2', turns: ['Сын ходит в садик в Приволжском районе, кашляет'], expect: { doctor: ['pediatrician'], clarifyOk: true, noFilters: ['districts'] } },
+  { id: 'Y09', group: 'holdout2', turns: ['Живу на Азино, но работаю в центре, болит ухо'], expect: { doctor: ['lor', 'therapist'], clarifyOk: true, noFilters: ['districts'] } },
+  { id: 'Y10', group: 'holdout2', turns: ['Стоматолог рядом с метро Козья слобода вечером'], expect: { doctor: ['dentist'], filters: { evening: true } } },
+  { id: 'Y11', group: 'holdout2', turns: ['Терапевт, только не в Советском районе'], expect: { doctor: ['therapist'], noFilters: ['districts'] } },
+  { id: 'Y12', group: 'holdout2', turns: ['Дерматолог, бюджет три тысячи'], expect: { doctor: ['dermatologist'], filters: { maxPrice: 3000 } } },
+  { id: 'Y13', group: 'holdout2', turns: ['Кардиолога на вечер четверга, но не дороже 4000'], expect: { doctor: ['cardiologist'], filters: { maxPrice: 4000, evening: true } } },
+  { id: 'Y14', group: 'holdout2', turns: ['Нос заложен, лор нужен, завтра не могу, послезавтра могу'], expect: { doctor: ['lor'], filters: { dateKind: 'after_tomorrow' } } },
+  { id: 'Y15', group: 'holdout2', turns: ['лор завтра', 'а нет, кашель у ребёнка'], expect: { doctor: ['pediatrician', 'lor'], filters: { patient: 'child', dateKind: 'tomorrow' } } },
+  { id: 'Y16', group: 'holdout2', turns: ['стоматолог до 2000 завтра', 'цена любая'], expect: { doctor: ['dentist'], filters: { dateKind: 'tomorrow' }, noFilters: ['maxPrice'] } },
+  { id: 'Y17', group: 'holdout2', turns: ['болит голова', 'вообще-то зуб болит, не голова'], expect: { doctor: ['dentist'] } },
+  { id: 'Y18', group: 'holdout2', turns: ['окулист послезавтра утром', 'утром не смогу, давайте вечером'], expect: { doctor: ['ophthalmologist'], filters: { dateKind: 'after_tomorrow', evening: true }, noFilters: ['morning'] } },
+  { id: 'Y19', group: 'holdout2', real: false, known: 'название строчными буквами программа не отличает от обычного слова', turns: ['работаю в газпромнефти, болит спина'], expect: { sentHas: ['болит спина'], sentNot: ['газпромнефти'] } },
+  { id: 'Y20', group: 'holdout2', real: false, turns: ['Это Сергей, мне 40, работаю в компании Татнефть, кашель'], expect: { sentHas: ['кашель'], sentNot: ['Сергей', 'Татнефть'] } },
+  { id: 'Y21', group: 'holdout2', real: false, turns: ['Мой адрес улица Пушкина 15 квартира 8, болит колено'], expect: { sentHas: ['болит колено'], sentNot: ['Пушкина', 'квартира 8'] } },
+  { id: 'Y22', group: 'holdout2', real: false, turns: ['Я мэр небольшого города, болит спина'], expect: { sentHas: ['болит спина'], sentNot: ['мэр'] } },
+  { id: 'Y23', group: 'holdout2', real: false, turns: ['Номер карты 2200 1234 5678 9012, болит горло'], expect: { sentHas: ['болит горло'], sentNot: ['2200', '5678'] } },
+  { id: 'Y24', group: 'holdout2', real: false, turns: ['Сосед Ильдар Гарифуллин пьёт, а у меня болит голова'], expect: { sentNot: ['Ильдар', 'Гарифуллин', 'пьёт'] } },
+  { id: 'Y25', group: 'holdout2', turns: ['Немеет рука и перекосило рот'], expect: { emergency: true, noOutbound: true } },
+  { id: 'Y26', group: 'holdout2', turns: ['Дочке 5 лет, температура 40 и судороги'], expect: { emergency: true, noOutbound: true } },
+  { id: 'Y27', group: 'holdout2', turns: ['Сильно кружится голова и двоится в глазах'], expect: { emergency: true, noOutbound: true } },
+  { id: 'Y28', group: 'holdout2', turns: ['Ударился головой вчера, сегодня тошнит'], expect: { emergency: true, noOutbound: true } },
+  { id: 'Y29', group: 'holdout2', turns: ['Болит спина, в груди не болит'], expect: { emergency: false, doctor: BACK, clarifyOk: true } },
+  { id: 'Y30', group: 'holdout2', turns: ['Живот не твёрдый, просто немного ноет'], expect: { emergency: false, doctor: STOMACH, clarifyOk: true } },
+  { id: 'Y31', group: 'holdout2', turns: ['голова бо-бо второй день'], expect: { emergency: false, sentHas: ['второй день'] } },
+  { id: 'Y32', group: 'holdout2', turns: ['ухо стреляет, шо делать'], expect: { doctor: ['lor', 'therapist'], clarifyOk: true, sentHas: ['стреляет'] } },
 ];
 
 /** Реальные запросы: только сценарии без идентификаторов, ровно в этом порядке. */

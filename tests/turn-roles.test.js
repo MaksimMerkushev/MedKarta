@@ -59,6 +59,28 @@ describe('Роли частей реплики', () => {
     assert.ok(extractBookingConstraints(bookingView('я работаю посменно: в понедельник до 15')).date);
   });
 
+  for (const text of ['Вчера вечером заболел зуб, сегодня сильнее', 'Две недели шумит в ушах после 6 вечера', 'Я водитель, езжу через Ново-Савиновский район, болит спина', 'На выходных простудился, кашель', 'К ночи поднимается температура, утром нормально']) {
+    it(`рассказ о симптоме или поездке не становится условием: «${text}»`, () => {
+      const result = booking(text);
+      for (const field of [...TIME_FIELDS, 'date']) assert.ok(!result[field], `${field}: ${JSON.stringify(result[field])}`);
+      assert.deepEqual(result.districts ?? [], []);
+    });
+  }
+
+  it('настоящие условия рядом с такими словами остаются', () => {
+    assert.equal(booking('а есть кто-то после 18').availableAfter, '18:00');
+    assert.equal(booking('окулист на выходных').date ? true : Boolean(booking('окулист на выходных').weekend), true);
+  });
+
+  it('отказ после условия снимает его, а снятие «не важно» одно на цену, район и время', () => {
+    assert.ok(!booking('утром не смогу, давайте вечером').timeOfDay);
+    assert.equal(booking('утром не болит').timeOfDay ?? null, null);
+    assert.equal(extractBookingConstraints('цена любая').maxPrice, null);
+    assert.equal(extractBookingConstraints('бюджет не важен').maxPrice, null);
+    assert.equal(extractBookingConstraints('район неважно').districtAny, true);
+    assert.equal(extractBookingConstraints('время без разницы').timeAny, true);
+  });
+
   it('роли видны по частям', () => {
     assert.deepEqual(segmentTurn('Работаю на заводе, болит спина, нужен врач завтра').map((part) => part.role), ['biography', 'complaint', 'request']);
   });
