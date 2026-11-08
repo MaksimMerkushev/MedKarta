@@ -13,7 +13,7 @@
  */
 
 import { KAZAN_PLACES } from '../../shared/kazanPlaces.js';
-import { findTrigger, fixCommonTypos, isNegatedBefore, rewriteNegatedTimeBounds } from './normalize.js';
+import { findTrigger, fixCommonTypos, isNegatedBefore, isRefusedAfter, rewriteNegatedTimeBounds } from './normalize.js';
 import { CONSENTED_FALLBACKS, withoutDayWindow } from '../../shared/demoSearch.js';
 
 /** Значение дня без служебной пометки «число без месяца». */
@@ -39,7 +39,7 @@ const lastAffirmedEntry = (text, entries) => {
     const regex = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
     let match;
     while ((match = regex.exec(text)) !== null) {
-      if (isNegatedBefore(text, match.index)) continue;
+      if (isNegatedBefore(text, match.index) || isRefusedAfter(text, match.index + match[0].length)) continue;
       if (!best || match.index > best.index) best = { index: match.index, value: typeof value === 'function' ? value(match) : value };
     }
   }
@@ -390,8 +390,10 @@ const PRICE_PATTERNS = [
   },
 ];
 
+/* «Не важно», «без разницы», «любая» — одно снятие условия для цены, района и времени. */
+const DOESNT_MATTER = '(?:не\\s*важ\\p{L}*|без\\s+разницы|вс[её]\\s+равно|не\\s+принципиал\\p{L}*|любая|любой|любое)';
 const PRICE_ANY = new RegExp(
-  `(?<!${WORD})(?:цена\\s+не\\s+важн\\p{L}*|(?:по\\s+)?любой\\s+цен\\p{L}*|можно\\s+(?:и\\s+)?дороже|без\\s+ограничени\\p{L}*\\s+по\\s+цене|стоимость\\s+не\\s+важн\\p{L}*|неважно\\s+сколько\\s+стоит)`,
+  `(?<!${WORD})(?:(?:цена|стоимость|по\\s+цене|бюджет)\\s+${DOESNT_MATTER}|любая\\s+цена|цена\\s+не\\s+важн\\p{L}*|(?:по\\s+)?любой\\s+цен\\p{L}*|можно\\s+(?:и\\s+)?дороже|без\\s+ограничени\\p{L}*\\s+по\\s+цене|стоимость\\s+не\\s+важн\\p{L}*|неважно\\s+сколько\\s+стоит)`,
   'u',
 );
 
@@ -1235,7 +1237,7 @@ export const extractBookingConstraints = (text, { nested = false } = {}) => {
   const districts = extractDistricts(self.masked);
   if (districts.include.length > 0) result.districts = districts.include;
   if (districts.exclude.length > 0) result.excludeDistricts = districts.exclude;
-  if (/(?<![\p{L}])(?:в\s+любом\s+районе|любой\s+район|район\s+(?:не\s+важен|неважен|любой|не\s*важно|без\s+разницы|вс[её]\s+равно|не\s+принципиал\p{L}*))/u.test(lower)) result.districtAny = true;
+  if (/(?<![\p{L}])(?:в\s+любом\s+районе|любой\s+район|район\s+(?:не\s+важен|неважен))/u.test(lower) || new RegExp(`(?<!${WORD})район\\s+${DOESNT_MATTER}`, 'u').test(lower)) result.districtAny = true;
   /*
    * «В Советском районе, но если там никого — можно Приволжский», «…если
    * там нет — то любой район»: названный район — пожелание (такие первыми),
@@ -1708,7 +1710,7 @@ export const extractBookingConstraints = (text, { nested = false } = {}) => {
   }
   if (/(?<!\p{L})(?:можно\s+(?:и\s+)?платно|(?:давай(?:те)?|ладно,?|хорошо,?)\s+(?:и\s+)?платно|платно\s+тоже\s+(?:можно|подойд\p{L}*)|готов\p{L}*\s+(?:и\s+)?(?:за)?платить)/u.test(lower)) result.allowPaid = true;
   if (/(?<!\p{L})(?:(?:стаж|опыт)\p{L}*\s+(?:не\s+важ\p{L}*|неваж\p{L}*|любой)|без\s+(?:требовани\p{L}*\s+(?:к|по)\s+)?стаж\p{L}*)/u.test(lower)) result.experienceAny = true;
-  if (/(?<![\p{L}])(?:в\s+любое\s+время|(?:отмени\p{L}*|убери\p{L}*|сними\p{L}*)\s+время|время\s+(?:не\s+важно|неважно|любое)|(?:отмени\p{L}*|убери\p{L}*|сними\p{L}*)\s+время|время\s+(?:не\s+важно|неважно|любое)|(?:давай(?:те)?|можно|ладно,?)\s+любое\s+время|без\s+ограничени\p{L}*\s+по\s+времени|время\s+(?:не\s+важно|неважно|любое)|неважно\s+во\s+сколько|в\s+любое\s+время\s+дня)/u.test(lower)) {
+  if (new RegExp(`(?<!${WORD})время\\s+${DOESNT_MATTER}`, 'u').test(lower) || /(?<![\p{L}])(?:в\s+любое\s+время|(?:отмени\p{L}*|убери\p{L}*|сними\p{L}*)\s+время|время\s+(?:не\s+важно|неважно|любое)|(?:отмени\p{L}*|убери\p{L}*|сними\p{L}*)\s+время|время\s+(?:не\s+важно|неважно|любое)|(?:давай(?:те)?|можно|ладно,?)\s+любое\s+время|без\s+ограничени\p{L}*\s+по\s+времени|время\s+(?:не\s+важно|неважно|любое)|неважно\s+во\s+сколько|в\s+любое\s+время\s+дня)/u.test(lower)) {
     result.timeAny = true;
   }
   if (/(?<![\p{L}])(?:неважно|не\s+важно|без\s+разницы)\s+(?:сколько\s+ехать|как\s+далеко|далеко)|можно\s+(?:и\s+)?подальше|расстояние\s+не\s+важно/u.test(lower)) {
