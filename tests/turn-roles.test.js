@@ -9,7 +9,7 @@ import { describe, it } from 'node:test';
 import { deidentifyComplaint, hasRareCircumstance, hasSensitiveCondition } from '../backend/privacy/deidentify.js';
 import { extractBookingConstraints } from '../backend/privacy/bookingConstraints.js';
 import { extractConstraints } from '../backend/privacy/gateway.js';
-import { bookingView, expandCorrections, segmentTurn } from '../backend/understanding/turnRoles.js';
+import { bookingView, expandCorrections, isExplicitRequest, segmentTurn } from '../backend/understanding/turnRoles.js';
 
 // Оба извлекателя условий, как в обработке реплики: дата и район в одном, время и цена в другом.
 const booking = (text) => {
@@ -79,6 +79,15 @@ describe('Роли частей реплики', () => {
     assert.equal(extractBookingConstraints('бюджет не важен').maxPrice, null);
     assert.equal(extractBookingConstraints('район неважно').districtAny, true);
     assert.equal(extractBookingConstraints('время без разницы').timeAny, true);
+  });
+
+  it('прямо названное условие отличается от рассказа', () => {
+    assert.equal(isExplicitRequest('Сыпь на руках и сильно чешется, рядом с Кремлём, сегодня вечером', 'сегодня вечером'), true);
+    assert.equal(isExplicitRequest('Нужен лор завтра после 18', 'завтра после 18'), true);
+    assert.equal(isExplicitRequest('Вчера вечером заболел зуб, сегодня сильнее', 'сегодня'), false);
+    assert.equal(isExplicitRequest('Завтра экзамен, а горло совсем пропало', 'Завтра экзамен'), false);
+    assert.equal(isExplicitRequest('Две недели шумит в ушах после 6 вечера', 'после 6 вечера'), false);
+    assert.equal(isExplicitRequest('Я работаю учителем в Авиастроительном районе', 'в Авиастроительном районе'), false);
   });
 
   it('роли видны по частям', () => {

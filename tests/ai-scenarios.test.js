@@ -71,9 +71,22 @@ describe('Подсказка модели о ролях', () => {
   const answer = (mentions) => ({ status: 'specialist', specialties: ['lor'], frame: { symptoms: ['болит ухо'], patient: 'self', mentions } });
 
   it('снимает условие, которое правила поняли неверно', async () => {
-    const { action, probe } = await run(['Болит ухо, завтра'], answer([{ text: 'завтра', role: 'symptom_time' }]));
+    const { action, probe } = await run(['Горло болит, в субботу соревнования'], answer([{ text: 'в субботу соревнования', role: 'event_time' }]));
     assert.equal(action.booking.request.date.kind, 'any');
-    assert.deepEqual(probe.modelRoles.fragments, ['завтра']);
+    assert.deepEqual(probe.modelRoles.fragments, ['в субботу соревнования']);
+  });
+
+  it('прямо названное условие снять не может (ошибка настоящей модели на P07)', async () => {
+    const { action, probe } = await run(['Сыпь на руках и сильно чешется, рядом с Кремлём, сегодня вечером'], answer([{ text: 'сегодня вечером', role: 'symptom_time' }, { text: 'рядом с [место_1]', role: 'biography_place' }]));
+    assert.equal(action.booking.request.date.kind, 'today');
+    assert.equal(action.booking.request.evening, true);
+    assert.deepEqual(probe.modelRoles.fragments, []);
+    assert.deepEqual(probe.modelRoles.kept, ['сегодня вечером', 'рядом с Кремлём']);
+  });
+
+  it('условие в явной просьбе о записи тоже остаётся', async () => {
+    const { action } = await run(['Болит ухо, нужен лор сегодня вечером'], answer([{ text: 'сегодня вечером', role: 'symptom_time' }]));
+    assert.equal(action.booking.request.date.kind, 'today');
   });
 
   it('не может создать условие: роль приёма без условия у правил ничего не добавляет', async () => {
@@ -95,10 +108,16 @@ describe('Подсказка модели о ролях', () => {
   });
 
   it('метка места переводится обратно только на сервере', async () => {
-    const { action, calls } = await run(['Нужно к врачу в Советском районе, болит ухо'], (text) => answer(text.includes('[место_1]') ? [{ text: '[место_1]', role: 'biography_place' }] : []));
+    const { action, calls, probe } = await run(['Отдыхали в Советском районе у родных, болит ухо'], (text) => answer(text.includes('[место_1]') ? [{ text: '[место_1]', role: 'biography_place' }] : []));
     assert.match(calls[0].text, /\[место_1\]/);
     assert.doesNotMatch(calls[0].text, /Советск/);
     assert.deepEqual(action.booking.request.districts, []);
+    assert.deepEqual(probe.modelRoles.fragments, ['Советском районе']);
+  });
+
+  it('место в явной просьбе модель биографией не сделает', async () => {
+    const { action } = await run(['Нужно к врачу в Советском районе, болит ухо'], (text) => answer(text.includes('[место_1]') ? [{ text: '[место_1]', role: 'biography_place' }] : []));
+    assert.ok(action.booking.request.districts.length > 0);
   });
 
   it('неверный формат подсказки не ломает ответ', () => {

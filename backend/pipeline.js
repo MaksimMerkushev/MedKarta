@@ -36,6 +36,7 @@ import { demoNow } from './demo/time.js';
 import { publicClinicsHidden } from './demo/flags.js';
 import { logger as defaultLogger } from './observability/safeLogger.js';
 import { metrics as defaultMetrics } from './observability/metrics.js';
+import { isExplicitRequest } from './understanding/turnRoles.js';
 
 /** Причины решения шлюза, которые сами говорят о здоровье: в журнал — как «policy». */
 const HEALTH_REASONS = new Set([FAIL_CLOSED_REASON.EMERGENCY, FAIL_CLOSED_REASON.MEDICAL_TEXT, FAIL_CLOSED_REASON.LOW_CLASSIFIER_CONFIDENCE]);
@@ -551,18 +552,26 @@ export const applyModelRoles = (gate, triaged) => {
   const mentions = triaged?.frame?.mentions || [];
   const sent = (gate.context.triageTurns || []).join('\n');
   const places = gate.context.triagePlaces;
+  const originals = gate.context.turnInfo?.userTexts || [];
   const fragments = [];
   const ignored = [];
+  const kept = [];
   for (const mention of mentions) {
     if (!REMOVING_ROLES.has(mention.role)) continue;
     if (!sent.includes(mention.text)) {
       ignored.push(mention.text);
       continue;
     }
-    fragments.push(mention.text.replace(/\[место_\d+\]/gu, (label) => places?.get(label) || label));
+    const raw = mention.text.replace(/\[место_\d+\]/gu, (label) => places?.get(label) || label);
+    // Прямо названное условие остаётся: здесь правила сервера надёжнее догадки модели.
+    if (originals.some((text) => isExplicitRequest(text, raw))) {
+      kept.push(raw);
+      continue;
+    }
+    fragments.push(raw);
   }
   if (fragments.length > 0) gate.context.withoutFragments?.(fragments);
-  return { fragments, ignored };
+  return { fragments, ignored, kept };
 };
 
 const applyTriage = (context, triaged, { unsure = false } = {}) => {

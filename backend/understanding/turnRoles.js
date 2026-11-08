@@ -19,6 +19,7 @@
  * разбирает модель: она может снять условие, указав его фрагмент (см. applyModelRoles).
  */
 
+import { KAZAN_PLACES } from '../../shared/kazanPlaces.js';
 import { classifySymptoms } from '../privacy/symptoms.js';
 
 const B = '(?<![\\p{L}\\p{N}])';
@@ -113,6 +114,38 @@ export const bookingView = (text, { blanks = [] } = {}) => {
     if (typeof blank === 'string' && blank.trim()) view = view.split(blank).join(' '.repeat(blank.length));
   }
   return view;
+};
+
+/* Явная просьба о записи: специальность, «запишите», «нужен врач». */
+const REQUEST_CUE = new RegExp(`${B}(?:\\p{L}+(?:олог|иатр|ирург|апевт|опед)\\p{L}*|окулист\\p{L}*|травмпункт\\p{L}*|лор\\p{L}{0,2}|врач\\p{L}{0,3}|доктор\\p{L}{0,3}|запиш\\p{L}*|запис\\p{L}*|при[еа]м\\p{L}*|нужен|нужна|нужно|хочу|хотел\\p{L}*|найди\\p{L}*|подбери\\p{L}*|подберите|ищу|попасть)${E}`, 'u');
+/* Слова, из которых состоит условие, сказанное само по себе: «сегодня вечером», «рядом с Кремлём». */
+const CONDITION_WORD = new RegExp(`^(?:сегодня|завтра|послезавтра|утр\\p{L}*|вечер\\p{L}*|днем|день|дня|ноч\\p{L}*|обед\\p{L}*|понедельник\\p{L}*|вторник\\p{L}*|сред[ауеы]|четверг\\p{L}*|пятниц\\p{L}*|суббот\\p{L}*|воскресень\\p{L}*|выходн\\p{L}*|будн\\p{L}*|недел\\p{L}*|час\\p{L}*|минут\\p{L}*|руб\\p{L}*|тыс\\p{L}*|район\\p{L}*|дом\\p{L}*|работ\\p{L}*|рядом|около|возле|недалеко|поближе|ближе|с|со|до|после|в|во|на|к|от|у|по|и|а|но|или|лучше|желательно|можно|пожалуйста|тогда|только|мне|бы|ну|да|если|еще|уже|любой|любое|\\d+(?::\\d{2})?)$`, 'u');
+const PLACE_NAMES = Object.values(KAZAN_PLACES).map((place) => new RegExp(`(?<![\\p{L}\\p{N}])(?:${place.pattern})(?![\\p{L}\\p{N}])`, 'gu'));
+const isBareCondition = (lower) => {
+  let rest = lower.replace(/\p{L}+(?:ом|ем|ой|ий|ый)\s+район\p{L}*/gu, ' ');
+  for (const pattern of PLACE_NAMES) rest = rest.replace(pattern, ' ');
+  return (rest.match(/[\p{L}\p{N}:]+/gu) || []).every((word) => CONDITION_WORD.test(word));
+};
+
+/**
+ * Условие, сказанное прямо, догадка модели снять не может. Это так, если фрагмент стоит
+ * отдельной частью-просьбой («сыпь на руках, сегодня вечером») или в части с явной просьбой
+ * о записи («нужен лор сегодня вечером»). Модель ошибается и в простых фразах: на настоящей
+ * модели «сегодня вечером» в первом примере было отмечено как время симптома.
+ *
+ * @param {string} text исходная реплика пользователя
+ * @param {string} fragment фрагмент, который модель отнесла к симптому, событию или биографии
+ */
+export const isExplicitRequest = (text, fragment) => {
+  const needle = prepare(fragment).trim();
+  if (!needle) return false;
+  return segmentTurn(text).some((segment) => {
+    if (segment.role !== 'request') return false;
+    const lower = prepare(segment.text);
+    const at = lower.indexOf(needle);
+    if (at < 0) return false;
+    return REQUEST_CUE.test(lower) || isBareCondition(lower);
+  });
 };
 
 /** Жалоба из реплики — только для локального представления запроса, в журналы не идёт. */

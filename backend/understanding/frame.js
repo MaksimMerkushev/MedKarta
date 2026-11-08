@@ -87,7 +87,7 @@ export const buildQueryFrame = (probe) => {
     turns: classifyTurns(info),
     uncertainties: [...new Set(uncertainties)],
     emergency: Boolean(context.classification?.emergency) || triaged?.status === 'emergency',
-    modelHints: { mentions: modelMentions, patient: triaged?.frame?.patient || null, applied: probe.modelRoles?.fragments || [], ignored: probe.modelRoles?.ignored || [] },
+    modelHints: { mentions: modelMentions, patient: triaged?.frame?.patient || null, applied: probe.modelRoles?.fragments || [], ignored: probe.modelRoles?.ignored || [], kept: probe.modelRoles?.kept || [] },
     sentToModel: context.triageTurns ? [...context.triageTurns] : [],
     decision: { gateway: probe.gate.decision, reason: probe.gate.reason || null, triage: Boolean(probe.gate.triage) },
   };
