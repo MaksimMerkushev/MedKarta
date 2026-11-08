@@ -544,6 +544,9 @@ const START_WITH = { therapist: 'терапевта', pediatrician: 'педиа�
  * изменить условие модель не может. Фрагмент учитывается, только если он дословно есть в
  * переданном ей тексте; метка места переводится в исходный текст только здесь, на сервере.
  */
+/* Роли, по которым модель может снять условие. Создать условие она не может ни одной ролью. */
+const REMOVING_ROLES = new Set(['symptom_time', 'event_time', 'biography_place']);
+
 export const applyModelRoles = (gate, triaged) => {
   const mentions = triaged?.frame?.mentions || [];
   const sent = (gate.context.triageTurns || []).join('\n');
@@ -551,7 +554,7 @@ export const applyModelRoles = (gate, triaged) => {
   const fragments = [];
   const ignored = [];
   for (const mention of mentions) {
-    if (mention.role !== 'symptom_time' && mention.role !== 'biography_place') continue;
+    if (!REMOVING_ROLES.has(mention.role)) continue;
     if (!sent.includes(mention.text)) {
       ignored.push(mention.text);
       continue;

@@ -30,7 +30,7 @@ export const TRIAGE_STATUSES = Object.freeze(['specialist', 'clarify', 'emergenc
 export const MAX_CLARIFY_ROUNDS = 2;
 
 export const FRAME_PATIENTS = Object.freeze(['self', 'child', 'other_adult', 'unknown']);
-export const FRAME_ROLES = Object.freeze(['symptom_time', 'appointment_time', 'biography_place', 'search_place']);
+export const FRAME_ROLES = Object.freeze(['symptom_time', 'event_time', 'appointment_time', 'biography_place', 'search_place']);
 
 export const TRIAGE_LIMITS = Object.freeze({
   MAX_RAW_BYTES: 8 * 1024,
@@ -93,7 +93,7 @@ psychiatrist — психиатр: тревога, депрессия, пани�
 
 ## РОЛИ ФРАГМЕНТОВ
 Время и места в тексте бывают разными. «С утра тошнит», «вечером поднимается температура» — время симптома, а «запишите на утро» — время приёма. «Работаю в [место_1]» — рассказ о себе, а «нужен врач в [место_1]» — место поиска. В поле frame.mentions перечисли такие фрагменты дословно из текста, каждый с ролью:
-symptom_time — когда бывает или начался симптом; appointment_time — когда хочет на приём; biography_place — где живёт или работает; search_place — где искать врача.
+symptom_time — когда бывает или начался симптом; event_time — время другого события, не приёма («завтра экзамен», «в пятницу уезжаю»); appointment_time — когда хочет на приём; biography_place — где живёт или работает; search_place — где искать врача.
 Если в тексте их нет, mentions — пустой массив. В frame также: symptoms — жалобы короткими фразами, patient — для кого приём (self, child, other_adult, unknown). Диагнозы не ставь и не придумывай того, чего нет в тексте.
 
 ## ФОРМАТ
