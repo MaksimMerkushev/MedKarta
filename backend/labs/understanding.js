@@ -202,7 +202,9 @@ export const createLabUnderstanding = ({ synonyms, tests }) => {
           const added = [];
           let only = false;
           for (const item of turn.found) {
-            const clause = clauseOf(turn.source, item.start);
+            // Слова внутри самого названия («ОАК без лейкоцитарной формулы») командой не считаются.
+            const outside = `${turn.source.slice(0, item.start)}${' '.repeat(item.end - item.start)}${turn.source.slice(item.end)}`;
+            const clause = clauseOf(outside, item.start);
             const head = turn.source.slice(Math.max(0, item.start - 12), item.start);
             const negated = /(?<![\p{L}])не\s+$/u.test(head);
             if (REMOVE_CUE.test(clause) || negated || (INSTEAD_CUE.test(head))) removed.push(item.code);
