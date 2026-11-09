@@ -51,12 +51,16 @@ export default function LabBookingDialog({ branch, lab, tests, initialSlotId = n
   }, [load, from]);
 
   useEffect(() => {
+    // Escape закрывает только этот диалог: окно ассистента под ним остаётся открытым.
     const onKey = (event) => {
-      if (event.key === 'Escape' && !submitting) onClose?.();
+      if (event.key !== 'Escape') return;
+      event.stopImmediatePropagation();
+      event.preventDefault();
+      if (!submitting) onClose?.();
     };
-    window.addEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey, true);
     dialogRef.current?.focus();
-    return () => window.removeEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [onClose, submitting]);
 
   const days = useMemo(() => [...new Set(state.slots.map((slot) => slot.day))], [state.slots]);
