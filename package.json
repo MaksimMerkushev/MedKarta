@@ -31,6 +31,7 @@
     "eval:privacy": "node scripts/privacy-eval.mjs",
     "ai:eval": "node scripts/ai-eval.mjs",
     "ai:diagnose": "node scripts/ai-diagnose.mjs --mode mock",
+    "labs:diagnose": "node scripts/labs-diagnose.mjs --mode mock",
     "ai:check": "node scripts/ai-check.mjs",
     "ai:bench": "node scripts/ai-bench.mjs",
     "ai:trace": "node scripts/ai-trace.mjs",
