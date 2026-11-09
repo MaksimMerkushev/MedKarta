@@ -133,6 +133,7 @@ export const createLabQuote = ({ store, getEngine = async () => null, now = () =
       else complete.push(entry);
     }
     funnel.complete = complete.length;
+    const cheapestComplete = complete.length ? Math.min(...complete.map((entry) => entry.total)) : null;
 
     let candidates = complete;
     if (request.maxTotalPrice) candidates = candidates.filter((entry) => entry.total <= request.maxTotalPrice);
@@ -215,6 +216,7 @@ export const createLabQuote = ({ store, getEngine = async () => null, now = () =
       options: candidates.slice(0, MAX_OPTIONS).map(view),
       partial: partial.sort((a, b) => a.missing.length - b.missing.length || a.total - b.total).slice(0, 5).map(view),
       funnel,
+      cheapestComplete,
       blockedBy: status === 'empty' ? blockedBy(funnel, request, dateAsked || timeAsked) : null,
       notes,
       comparisonScope: `Сравнение среди ${funnel.branches} демо-филиалов МедКарты — не по всему городу.`,
