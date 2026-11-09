@@ -36,7 +36,8 @@
 | `AI_TRIAGE_MODEL` | `AI_MODEL` | модель для триажа жалоб | [pipeline.js](../backend/pipeline.js) |
 | `AI_REASONING_EFFORT` | не отправляется | `none`, `minimal`, `low`, `medium`, `high` | [client.js](../backend/planner/client.js) |
 | `AI_PROXY_URL` | — | `login:password@host:port`, `host:port:login:password` или `socks5://…`; ошибка в адресе выключает внешнюю модель | [proxyFetch.js](../backend/planner/proxyFetch.js) |
-| `AI_DAILY_CALL_LIMIT` | `2000` | вызовов модели в сутки на процесс; значение из админ-панели («Обращений к ИИ-модели в сутки») важнее | [rateLimit.js](../backend/http/rateLimit.js) |
+| `AI_DAILY_CALL_LIMIT` | `300` | вызовов модели в сутки на процесс; значение из админ-панели («Обращений к ИИ-модели в сутки») важнее | [rateLimit.js](../backend/http/rateLimit.js) |
+| `AI_DAILY_CALLS_PER_IP` | `60` | вызовов модели с одного адреса в сутки; сверх — ответ по локальному плану | [rateLimit.js](../backend/http/rateLimit.js) |
 
 > Если задан ключ, но не задан `AI_UPSTREAM_URL`, запросы с ключом уходят на
 > адрес по умолчанию; в журнале запуска — предупреждение
@@ -81,6 +82,7 @@
 |---|---|---|---|
 | `ACCOUNTS` | включено | `off` — выключить аккаунты и админ-панель | [accountContext.js](../backend/api/accountContext.js) |
 | `ACCOUNTS_DB_PATH` | `var/accounts/medkarta.sqlite` | файл базы | [accountContext.js](../backend/api/accountContext.js) |
+| `OPERATOR_NOTIFIED` | выключено | `on` — оператор уведомил Роскомнадзор; без этого регистрация закрыта и при `REGISTRATION_MODE=open` | [registration.js](../backend/accounts/registration.js) |
 | `LEGAL_DRAFTS_ALLOWED` | выключено | `on` — открыть регистрацию, хотя в политике и соглашении остались метки `[ТРЕБУЕТСЯ ЗАПОЛНИТЬ ОПЕРАТОРОМ]`. **Только для тестового стенда и автотестов**: при `NODE_ENV=production` или `APP_ENV=production` не действует ([privacy/13](privacy/13-operator-checklist.md)) | [registration.js](../backend/accounts/registration.js) |
 | `BACKUP_ENCRYPTION_KEY` | — | 32 байта (base64 или hex): ключ для `npm run accounts -- backup --encrypt` и `decrypt-backup` (AES-256-GCM). Храните **отдельно** от копий и от `MFA_SECRET_KEY`; нужен только там, где делают и восстанавливают копии | [backupCrypto.js](../backend/accounts/backupCrypto.js) |
 | `REGISTRATION_MODE` | `invite_only` | `open` — регистрация по email (нужна настроенная почта), `invite_only` — аккаунты только по приглашению; другое значение — `invite_only` | [registration.js](../backend/accounts/registration.js) |
@@ -89,7 +91,7 @@
 | `WEBAUTHN_ORIGINS` | — | дополнительные адреса страниц (через запятую), с которых принимаются ключи доступа, например `https://www.navimed.tech` | [mfa.js](../backend/accounts/mfa.js) |
 | `PASSWORD_BREACH_CHECK` | выключено | `hibp` — проверять новый пароль по базе утечек Have I Been Pwned: уходят только первые 5 символов SHA-1, пароль и email — нет; сервис недоступен — проверка пропускается | [breachedPasswords.js](../backend/accounts/breachedPasswords.js) |
 | `ADMIN_BOOTSTRAP_PASSWORD` | — | **только вне production** (разработка, автотесты): создать главного суперадминистратора при запуске, если его ещё нет. В production игнорируется — суперадминистратор создаётся командой `npm run accounts -- bootstrap` | [accountContext.js](../backend/api/accountContext.js), [bootstrap.js](../backend/accounts/bootstrap.js) |
-| `ADMIN_BOOTSTRAP_EMAIL` | `maximka2703@bk.ru` | email главного суперадминистратора | [bootstrap.js](../backend/accounts/bootstrap.js) |
+| `ADMIN_BOOTSTRAP_EMAIL` | — | email главного суперадминистратора | [bootstrap.js](../backend/accounts/bootstrap.js) |
 | `APP_ENV` | — | `production` — как и `NODE_ENV=production`: игнорировать `ADMIN_BOOTSTRAP_PASSWORD`, запрещать `seed-test-users` без `--allow-production` | [accounts.mjs](../scripts/accounts.mjs) |
 | `COOKIE_SECURE` | автоматически | `on` / `off` — принудительно считать запрос HTTPS (cookie `__Host-mk_sid` с `Secure`) или HTTP (`mk_sid`) | [accountHttp.js](../backend/api/accountHttp.js) |
 | `TRUST_PROXY`, `TRUSTED_PROXIES` | 0; только `127.0.0.1` | сколько прокси перед сервером и с каких адресов принимать `X-Forwarded-For` — от этого зависят счётчики подбора по адресу | [rateLimit.js](../backend/http/rateLimit.js) |

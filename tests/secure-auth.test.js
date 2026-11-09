@@ -41,7 +41,7 @@ const skip = !DatabaseSync && 'нужен Node 22.13+ (node:sqlite)';
 const ROOT_EMAIL = 'root@medkarta.test';
 const ROOT_PASSWORD = 'Корневой пароль для тестов 2026';
 const USER_PASSWORD = 'Зелёный чай без сахара по утрам';
-const MAIL_ENV = { SMTP_FROM: 'МедКарта <noreply@medkarta.test>', PUBLIC_BASE_URL: TEST_ORIGIN };
+const MAIL_ENV = { SMTP_FROM: 'МедКарта <noreply@medkarta.test>', PUBLIC_BASE_URL: TEST_ORIGIN, OPERATOR_NOTIFIED: 'on' };
 const MINUTE = 60 * 1000;
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -402,7 +402,7 @@ describe('Регистрация: режимы и недоступная поч�
   it('почта не настроена — регистрация выключена даже в режиме open, имитации отправки нет', async () => {
     const context = createAccountContext({
       store: createSqliteAccountStore({ DatabaseSync, file: ':memory:' }),
-      delivery: createDelivery({ env: {} }), env: {}, mfaKey: randomBytes(32), registrationMode: 'open',
+      delivery: createDelivery({ env: {} }), env: { OPERATOR_NOTIFIED: 'on' }, mfaKey: randomBytes(32), registrationMode: 'open',
       onAccountDeleted: async () => {}, systemInfo: async () => ({}),
     });
     const { server, base } = await startAuthServer(context);

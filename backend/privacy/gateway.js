@@ -23,6 +23,7 @@ import { randomUUID } from 'node:crypto';
 
 import { findTrigger, fixCommonTypos, isNegatedBefore, rewriteNegatedTimeBounds, ruStem } from './normalize.js';
 import { detectEntities, detectObfuscation, ENTITY_KIND, isKinshipWord } from './detectors.js';
+import { hasSensitiveCondition, minimizeComplaint } from './complaintScrub.js';
 import { classifySymptoms } from './symptoms.js';
 import { looksLikeSurname } from './morphology.js';
 import {
@@ -1029,17 +1030,20 @@ export const createPrivacyGateway = ({
 
     /*
      * Жалоба для триажа (planner/triage.js): реплики пользователя после
-     * редактуры — метки вместо ФИО, телефонов, адресов. Остаточное «имя»
+     * редактуры, сокращённые до слов о самочувствии (complaintScrub.js). Реплика
+     * с диагнозом из особого списка наружу не уходит. Остаточное «имя»
      * проверяется во всех репликах, а не только в последней: модели уходит
      * вся история. Поле неперечислимое — случайная сериализация контекста
      * (журнал, ответ) его не вытащит. Нужен ли триаж, решает pipeline.
      */
     const triage = Boolean(decision.triage)
-      && redactedTurns.every((turn) => countResidualNameLike(turn.text, streetWords) <= POLICY.maxResidualNameLike);
+      && redactedTurns.every((turn) => countResidualNameLike(turn.text, streetWords) <= POLICY.maxResidualNameLike)
+      // По исходному тексту: «ВИЧ» заглавными редактура может принять за имя и вырезать.
+      && !analyses.some((analysis) => hasSensitiveCondition(analysis.message.content));
     if (triage) {
       Object.defineProperty(context, 'triageTurns', {
         // Только текущий запрос: прошлый («кардиолог» перед «болит колено») модель не должен сбивать.
-        value: Object.freeze(redactedTurns.slice(triageStart).map((turn) => turn.text.replace(/\s+/gu, ' ').trim()).filter(Boolean)),
+        value: Object.freeze(redactedTurns.slice(triageStart).map((turn) => minimizeComplaint(turn.text)).filter(Boolean)),
         enumerable: false,
       });
       Object.defineProperty(context, 'triageTokens', {

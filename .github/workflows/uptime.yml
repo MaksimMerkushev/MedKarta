@@ -1,0 +1,28 @@
+# © 2026 МедКарта Казань. Все права защищены.
+#
+# Каждые 30 минут проверяет, что сайт отвечает. При сбое запуск падает, и GitHub
+# присылает письмо тому, кто последним менял расписание. GitHub отключает расписание
+# после 60 дней без коммитов в репозитории: тогда его нужно включить снова на вкладке Actions.
+name: Uptime
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Check the site
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' --retry 3 --retry-all-errors --retry-delay 20 --max-time 20 https://navimed.tech/api/health)
+          # Пока новая версия не выложена, маршрута нет: тогда проверяем, что приложение отвечает.
+          if [ "$code" = "404" ]; then
+            code=$(curl -s -o /dev/null -w '%{http_code}' --retry 3 --retry-all-errors --retry-delay 20 --max-time 20 https://navimed.tech/api/config)
+          fi
+          echo "HTTP $code"
+          test "$code" = "200"

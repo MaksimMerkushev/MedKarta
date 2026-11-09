@@ -15,10 +15,12 @@
 
 import { validateChatMessages } from '../../shared/contract.js';
 import { readBody, respondJson, verifyOrigin } from '../http/request.js';
-import { chatCpuLimiter, checkRateLimit, getClientIp, heavyWork, liveSetting, takeExternalBudget } from '../http/rateLimit.js';
+import { createIpCallBudget, chatCpuLimiter, checkRateLimit, getClientIp, heavyWork, liveSetting, takeExternalBudget } from '../http/rateLimit.js';
 import { getDefaultPipeline } from '../pipeline.js';
 import { logger } from '../observability/safeLogger.js';
 import { metrics } from '../observability/metrics.js';
+
+const modelCallsPerIp = createIpCallBudget();
 
 /**
  * Точка отправления.
@@ -182,7 +184,7 @@ export default async function handler(req, res) {
       messages,
       sessionId,
       origin,
-      takeExternalBudget,
+      takeExternalBudget: (...args) => modelCallsPerIp(clientIp) && takeExternalBudget(...args),
       runExclusive: cpuQueue.run,
     });
     const spent = Number(diagnostics?.cpuMs) || 0;

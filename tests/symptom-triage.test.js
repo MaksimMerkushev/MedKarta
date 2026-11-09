@@ -140,12 +140,19 @@ describe('Триаж: уточняющий вопрос', () => {
 });
 
 describe('Триаж: границы', () => {
-  it('ФИО и телефон в жалобе заменены метками до отправки', async () => {
+  it('ФИО и телефон из жалобы не уходят модели', async () => {
     const { calls } = await chat(['Меня зовут Гульнара Хайруллина, телефон 89171234567. Уже неделю после еды болит живот и подташнивает, подскажите, к кому идти'], specialist('gastroenterologist'));
     assert.equal(calls.length, 1);
     assert.doesNotMatch(calls[0].text, /Гульнара|Хайруллин|8917|1234567/);
-    assert.match(calls[0].text, /@PHONE_/);
+    assert.doesNotMatch(calls[0].text, /@[A-Z]/, 'метки модели не нужны: остаётся только жалоба');
   });
+
+  for (const text of ['у мужа ВИЧ, а у меня болит голова', 'у меня вич и болит голова', 'лечусь от гепатита, болит живот']) {
+    it(`особый диагноз — модель не вызывается: «${text}»`, async () => {
+      const { calls } = await chat([text], specialist('neurologist'));
+      assert.equal(calls.length, 0);
+    });
+  }
 
   it('реплика почти из одних персональных данных — модель не вызывается', async () => {
     const { calls } = await chat(['Гульнара Хайруллина, 89171234567, болит живот'], specialist('gastroenterologist'));

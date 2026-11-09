@@ -419,6 +419,29 @@ const DMS_OFF = new RegExp(
   `(?<!${WORD})(?:без\\s+(?:дмс|страховк\\p{L}*|полиса)|не\\s+по\\s+(?:дмс|страховк\\p{L}*)|дмс\\s+(?:не\\s+нуж\\p{L}*|не\\s+надо|нет|не\\s+важ\\p{L}*)|платн\\p{L}*|за\\s+(?:свой\\s+сч[её]т|деньги|наличные))(?!${WORD})`,
   'u',
 );
+/*
+ * Настоящие страховые. Демо их программ не знает, и молча считать такую просьбу
+ * обычным ДМС нельзя: человек решит, что покрытие проверено.
+ */
+const INSURERS = [
+  ['СберСтрахование', 'сбер\\s*-?\\s*страхован\\p{L}*'],
+  ['СОГАЗ', 'согаз\\p{L}*'],
+  ['РЕСО-Гарантия', 'ресо(?:\\s*-?\\s*гаранти\\p{L}*)?'],
+  ['Ингосстрах', 'ингосстрах\\p{L}*'],
+  ['АльфаСтрахование', 'альфа\\s*-?\\s*страхован\\p{L}*'],
+  ['ВСК', 'вск'],
+  ['Росгосстрах', 'росгосстрах\\p{L}*'],
+  ['Ренессанс Страхование', 'ренессанс\\s+страхован\\p{L}*'],
+  ['Энергогарант', 'энергогарант\\p{L}*'],
+  ['ВТБ Страхование', 'втб\\s*-?\\s*страхован\\p{L}*'],
+  ['Т-Страхование', '(?:т\\s*-\\s*|тинькофф\\s*-?\\s*)страхован\\p{L}*'],
+  ['Совкомбанк Страхование', 'совкомбанк\\s*-?\\s*страхован\\p{L}*'],
+  ['Зетта Страхование', 'зетта(?:\\s*-?\\s*страхован\\p{L}*)?'],
+].map(([name, pattern]) => [name, new RegExp(`(?<![\\p{L}\\p{N}])(?:${pattern})(?![\\p{L}\\p{N}])`, 'u')]);
+const SBER_IN_DMS = /(?<![\p{L}\p{N}])сбер(?:а|е|у|ом|банк\p{L}*)?(?![\p{L}\p{N}])/u;
+const namedInsurer = (lower, dmsContext) => INSURERS.find(([, pattern]) => pattern.test(lower))?.[0]
+  || (dmsContext && SBER_IN_DMS.test(lower) ? 'СберСтрахование' : null);
+
 const DMS_ON = new RegExp(`(?<!${WORD})(?:дмс|по\\s+(?:моей\\s+)?страховк\\p{L}*|по\\s+(?:моему\\s+)?полису(?!\\s+омс))(?!${WORD})`, 'u');
 
 /* ------------------------- Время суток ---------------------------------- */
@@ -1595,7 +1618,9 @@ export const extractBookingConstraints = (text, { nested = false } = {}) => {
   if (city) result.city = city;
 
   const dmsOff = DMS_OFF.test(lower) || Boolean(result.preferDms);
-  const dmsOn = !dmsOff && (Boolean(planId) || (DMS_ON.test(lower) && findTrigger(lower, 'дмс', 'страховк', 'полис') !== 'negated'));
+  const insurer = planId ? null : namedInsurer(lower, DMS_ON.test(lower));
+  if (!dmsOff && insurer) result.insurer = insurer;
+  const dmsOn = !dmsOff && (Boolean(planId) || Boolean(insurer) || (DMS_ON.test(lower) && findTrigger(lower, 'дмс', 'страховк', 'полис') !== 'negated'));
   if (dmsOff) result.dms = false;
   else if (dmsOn) result.dms = true;
 
@@ -1769,6 +1794,7 @@ export const mergeBookingTurns = (turns) => {
     minExperience: null,
     unsupported: [],
     planId: null,
+    insurer: null,
     originHint: null,
     originPlace: null,
     doctorIds: [],
@@ -2072,7 +2098,11 @@ export const mergeBookingTurns = (turns) => {
     if (booking.afterHours) merged.afterHours = booking.afterHours;
     // Новый день или время снимают «через час» прошлой реплики.
     else if ('date' in booking || booking.timeExact || booking.timeAround || constraints.availableAfter || booking.spokenAfter) merged.afterHours = null;
-    if (booking.planId) merged.planId = booking.planId;
+    if (booking.planId) {
+      merged.planId = booking.planId;
+      merged.insurer = null;
+    }
+    if (booking.insurer) merged.insurer = booking.insurer;
     if (booking.originHint) {
       merged.originHint = booking.originHint;
       merged.originPlace = booking.originPlace || null;
@@ -2283,8 +2313,10 @@ export const mergeBookingTurns = (turns) => {
 
     // «Можно и платно» после «по ДМС» — ДМС становится пожеланием: покрытые первыми.
     if (booking.allowPaid && merged.dms === true) merged.preferDms = true;
-    if (booking.dms === false) merged.dms = false;
-    else if (booking.dms === true || constraints.dmsOnly) merged.dms = true;
+    if (booking.dms === false) {
+      merged.dms = false;
+      merged.insurer = null;
+    } else if (booking.dms === true || constraints.dmsOnly) merged.dms = true;
 
     if (booking.travelAny) {
       merged.maxTravelMinutes = null;

@@ -77,7 +77,7 @@ export const createSettingsService = ({ store, env = process.env, now = () => Da
   const envDaily = Number.parseInt(env.AI_DAILY_CALL_LIMIT ?? '', 10);
   const envDefaults = {
     'assistant.requiresAccount': env.CHAT_REQUIRES_ACCOUNT !== 'off',
-    'ai.dailyCallLimit': Number.isFinite(envDaily) && envDaily >= 0 ? Math.min(envDaily, 100000) : 2000,
+    'ai.dailyCallLimit': Number.isFinite(envDaily) && envDaily >= 0 ? Math.min(envDaily, 100000) : 300,
   };
   let cache = null;
   const load = () => {

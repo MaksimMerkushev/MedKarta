@@ -300,7 +300,7 @@ export const createBudget = ({ windowMs = WINDOW_MS, max = MAX_PER_INSTANCE } = 
 };
 
 /*
- * Суточный потолок обращений к модели (AI_DAILY_CALL_LIMIT, по умолчанию 2000):
+ * Суточный потолок обращений к модели (AI_DAILY_CALL_LIMIT, по умолчанию 300):
  * пятиминутный бюджет сам по себе допускает до 86 тысяч вызовов в сутки.
  * Когда потолок выбран, ассистент отвечает по локальному плану. Жёсткий лимит
  * расходов стоит включить и в кабинете провайдера модели.
@@ -308,7 +308,36 @@ export const createBudget = ({ windowMs = WINDOW_MS, max = MAX_PER_INSTANCE } = 
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const dailyCallLimit = () => {
   const value = Number.parseInt(process.env.AI_DAILY_CALL_LIMIT ?? '', 10);
-  return Number.isFinite(value) && value >= 0 ? value : 2000;
+  return Number.isFinite(value) && value >= 0 ? value : 300;
+};
+
+/*
+ * Обращений к модели с одного адреса в сутки (AI_DAILY_CALLS_PER_IP, по умолчанию 60):
+ * ассистент открыт и гостям, а один адрес не должен выбирать общий суточный потолок.
+ * Сверх лимита этот адрес получает ответ по локальному плану.
+ */
+export const dailyCallsPerIp = () => {
+  const value = Number.parseInt(process.env.AI_DAILY_CALLS_PER_IP ?? '', 10);
+  return Number.isFinite(value) && value >= 0 ? value : 60;
+};
+
+export const createIpCallBudget = ({ max = dailyCallsPerIp, maxTracked = 20_000, now = () => Date.now() } = {}) => {
+  const used = new Map();
+  let day = null;
+  return (address) => {
+    const today = Math.floor(now() / DAY_MS);
+    if (today !== day) {
+      day = today;
+      used.clear();
+    }
+    const key = rateLimitKey(address);
+    const count = used.get(key) || 0;
+    if (count >= max()) return false;
+    used.delete(key);
+    used.set(key, count + 1);
+    while (used.size > maxTracked) used.delete(used.keys().next().value);
+    return true;
+  };
 };
 
 export const createExternalBudget = ({ windowMs = WINDOW_MS, max = MAX_PER_INSTANCE, dailyLimit = dailyCallLimit } = {}) => {

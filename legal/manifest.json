@@ -1,7 +1,7 @@
 {
   "documents": {
     "privacy_policy": {
-      "current": "2026-11-05",
+      "current": "2026-11-06",
       "status": "published",
       "versions": [
         {
@@ -21,11 +21,17 @@
           "file": "privacy-policy/2026-11-05.md",
           "sha256": "590c1129bfb68ca02b2a365029565864628816d7f1939eac64bbdf0ebe749ecf",
           "publishedAt": "2026-11-05"
+        },
+        {
+          "version": "2026-11-06",
+          "file": "privacy-policy/2026-11-06.md",
+          "sha256": "17d8b939809dc83d3a8ecd5d8f5245b1f90b6254dd4a042b51d21065ccc3358e",
+          "publishedAt": "2026-11-06"
         }
       ]
     },
     "terms": {
-      "current": "2026-11-05",
+      "current": "2026-11-06",
       "status": "published",
       "versions": [
         {
@@ -39,6 +45,12 @@
           "file": "terms/2026-11-05.md",
           "sha256": "571b413e5faaa672723ab3ad461c4af74eba95abcefb67ea815fb212984b6d4f",
           "publishedAt": "2026-11-05"
+        },
+        {
+          "version": "2026-11-06",
+          "file": "terms/2026-11-06.md",
+          "sha256": "7fad20a3bac8ddb72b914ddf2807ca662c1fc11fb40c5e711efe911d309f2e7e",
+          "publishedAt": "2026-11-06"
         }
       ]
     },

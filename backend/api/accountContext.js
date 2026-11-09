@@ -24,7 +24,7 @@ import { createAdminService } from '../accounts/adminService.js';
 import { createConsentRegistry } from '../accounts/consents.js';
 import { createErasureLog } from '../accounts/erasureLog.js';
 import { createPrivacyService } from '../accounts/privacyRequests.js';
-import { bootstrapSuperadmin, DEFAULT_SUPERADMIN } from '../accounts/bootstrap.js';
+import { bootstrapSuperadmin } from '../accounts/bootstrap.js';
 import { createBreachChecker } from '../accounts/breachedPasswords.js';
 import { createDelivery } from '../accounts/delivery.js';
 import { createEmailChangeService } from '../accounts/emailChange.js';
@@ -183,10 +183,14 @@ export const startupBootstrap = async ({ store, env = process.env }) => {
     logger.warn('account.bootstrap_ignored', { status: 'production' });
     return 'ignored';
   }
+  if (!env.ADMIN_BOOTSTRAP_EMAIL) {
+    logger.warn('account.bootstrap_ignored', { status: 'no_email' });
+    return 'ignored';
+  }
   try {
     const result = await bootstrapSuperadmin({
       store,
-      email: env.ADMIN_BOOTSTRAP_EMAIL || DEFAULT_SUPERADMIN.email,
+      email: env.ADMIN_BOOTSTRAP_EMAIL,
       password: env.ADMIN_BOOTSTRAP_PASSWORD,
     });
     logger.event('account.bootstrap', { status: result.status });

@@ -16,6 +16,7 @@ import { createCpuQueue } from '../backend/api/chat.js';
 import {
   createCostLimiter,
   createExternalBudget,
+  createIpCallBudget,
   createRateLimiter,
   ipLimitScale,
   liveSetting,
@@ -50,18 +51,29 @@ describe('настройки нагрузки в админ-панели', () =>
       'limits.ipScale': 1,
       'limits.chatQueue': 16,
       'ai.callsPer5Min': 300,
-      'ai.dailyCallLimit': 2000,
+      'ai.dailyCallLimit': 300,
     });
     for (const item of items) assert.ok(item.demoValue > item.defaultValue, `${item.key}: «Для показа» поднимает лимит`);
     assert.equal(settings.list().find((item) => item.key === 'app.name').demoValue, null);
     assert.equal(settingDefinition('limits.ipScale').public, false, 'в /api/config не попадает');
   });
 
+  it('один адрес не выбирает весь суточный потолок обращений к модели', () => {
+    let t = Date.parse('2026-11-06T10:00:00Z');
+    const budget = createIpCallBudget({ max: () => 2, now: () => t });
+    assert.equal(budget('203.0.113.1'), true);
+    assert.equal(budget('203.0.113.1'), true);
+    assert.equal(budget('203.0.113.1'), false, 'сверх лимита этот адрес получает локальный план');
+    assert.equal(budget('198.51.100.1'), true, 'другому адресу лимит не мешает');
+    t += 24 * 60 * 60 * 1000;
+    assert.equal(budget('203.0.113.1'), true, 'на следующие сутки счётчик обнуляется');
+  });
+
   it('суточный лимит по умолчанию — из AI_DAILY_CALL_LIMIT', () => {
     assert.equal(createSettingsService({ store: memoryStore(), env: { AI_DAILY_CALL_LIMIT: '750' } }).get('ai.dailyCallLimit'), 750);
     assert.equal(createSettingsService({ store: memoryStore(), env: { AI_DAILY_CALL_LIMIT: '0' } }).get('ai.dailyCallLimit'), 0);
-    assert.equal(createSettingsService({ store: memoryStore(), env: { AI_DAILY_CALL_LIMIT: 'много' } }).get('ai.dailyCallLimit'), 2000);
-    assert.equal(createSettingsService({ store: memoryStore(), env: { AI_DAILY_CALL_LIMIT: '-5' } }).get('ai.dailyCallLimit'), 2000);
+    assert.equal(createSettingsService({ store: memoryStore(), env: { AI_DAILY_CALL_LIMIT: 'много' } }).get('ai.dailyCallLimit'), 300);
+    assert.equal(createSettingsService({ store: memoryStore(), env: { AI_DAILY_CALL_LIMIT: '-5' } }).get('ai.dailyCallLimit'), 300);
     assert.equal(createSettingsService({ store: memoryStore(), env: { AI_DAILY_CALL_LIMIT: '900000' } }).get('ai.dailyCallLimit'), 100000);
   });
 

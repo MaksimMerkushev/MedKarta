@@ -52,6 +52,9 @@ const MAX_BODY_BYTES = 16 * 1024;
 const defaultSearchLimit = createRateLimiter({ maxPerIp: 120, maxPerInstance: Number.POSITIVE_INFINITY, scaled: true });
 const defaultReadLimit = createRateLimiter({ maxPerIp: 600, maxPerInstance: Number.POSITIVE_INFINITY, scaled: true });
 const defaultWriteLimit = createRateLimiter({ maxPerIp: 60, maxPerInstance: Number.POSITIVE_INFINITY, scaled: true });
+/* Запись доступна гостю: без этих лимитов один адрес занимал расписание всего демо за несколько часов. */
+const defaultHoldLimit = createRateLimiter({ maxPerIp: 20, maxPerInstance: Number.POSITIVE_INFINITY, scaled: true });
+const defaultBookLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, maxPerIp: 10, maxPerInstance: Number.POSITIVE_INFINITY, scaled: true });
 
 const OPERATIONS = [
   ['search', { POST: 'search' }],
@@ -214,6 +217,8 @@ export const createDemoBookingHandler = ({
   searchLimit = defaultSearchLimit,
   readLimit = defaultReadLimit,
   writeLimit = defaultWriteLimit,
+  holdLimit = writeLimit === defaultWriteLimit ? defaultHoldLimit : writeLimit,
+  bookLimit = writeLimit === defaultWriteLimit ? defaultBookLimit : writeLimit,
   getAccountUser = currentAccountUser,
 } = {}) =>
   async function demoBookingHandler(req, res) {
@@ -226,7 +231,10 @@ export const createDemoBookingHandler = ({
       return;
     }
 
-    const limiter = operation === 'search' ? searchLimit : ['slots', 'lookup', 'mine'].includes(operation) ? readLimit : writeLimit;
+    const limiter = operation === 'search' ? searchLimit
+      : ['slots', 'lookup', 'mine'].includes(operation) ? readLimit
+        : operation === 'hold' ? holdLimit
+          : operation === 'book' ? bookLimit : writeLimit;
     const limit = limiter(getClientIp(req));
     if (!limit.allowed) {
       res.setHeader('Retry-After', String(limit.retryAfterSeconds));

@@ -63,7 +63,20 @@ const EMPTY_ESTIMATE = Object.freeze({ distanceKm: null, durationSeconds: null, 
  * @param {object} params.graph результат createGraph
  * @param {number} [params.maxExpansions]
  */
-export const createRoutingEngine = ({ graph, maxExpansions = DEFAULT_MAX_EXPANSIONS }) => {
+/*
+ * Граф знает только свободный поток, а по городу едут медленнее: на шести маршрутах
+ * Казани время оказалось в среднем в 1,9 раза короче, чем в Яндекс Картах (04.11.2026,
+ * разброс 1,5–2,3). Поправка общая для всех поездок на машине: путь она не меняет,
+ * пробки в конкретный час не учитывает, поэтому интерфейс показывает время как примерное.
+ */
+export const DEFAULT_DRIVING_FACTOR = 1.9;
+export const drivingFactorFromEnv = (env = process.env) => {
+  const value = Number.parseFloat(env.ROUTE_DRIVING_FACTOR ?? '');
+  return Number.isFinite(value) && value >= 1 && value <= 5 ? value : DEFAULT_DRIVING_FACTOR;
+};
+
+export const createRoutingEngine = ({ graph, maxExpansions = DEFAULT_MAX_EXPANSIONS, drivingFactor = 1 }) => {
+  const timeFactor = (profile) => (profile === 'driving' ? drivingFactor : 1);
   const search = createSearch(graph);
   const { lengths, speeds } = graph;
 
@@ -247,7 +260,7 @@ export const createRoutingEngine = ({ graph, maxExpansions = DEFAULT_MAX_EXPANSI
         durationS += result.durationS;
         legs.push({
           distanceM: Math.round(result.distanceM),
-          durationS: Math.round(result.durationS),
+          durationS: Math.round(result.durationS * timeFactor(name)),
           snapDistanceM: Math.round(a.distance),
         });
 
@@ -266,7 +279,7 @@ export const createRoutingEngine = ({ graph, maxExpansions = DEFAULT_MAX_EXPANSI
         profile: name,
         geometry,
         distanceM: Math.round(distanceM),
-        durationS: Math.round(durationS),
+        durationS: Math.round(durationS * timeFactor(name)),
         legs,
         // Где каждая точка встала на дорогу: интерфейс дорисует короткую
         // пунктирную «подводку» от здания до улицы.
@@ -302,7 +315,7 @@ export const createRoutingEngine = ({ graph, maxExpansions = DEFAULT_MAX_EXPANSI
         goals: hits.map((hit) => (hit ? arrivals(hit, settings) : null)),
         profile,
         maxExpansions,
-        maxCost: maxSeconds,
+        maxCost: maxSeconds / timeFactor(profile),
       });
 
       return hits.map((hit, index) => {
@@ -318,11 +331,11 @@ export const createRoutingEngine = ({ graph, maxExpansions = DEFAULT_MAX_EXPANSI
 
         // Хвост от узла до здания добавляется после обхода и может вывести
         // цель за потолок — такая цель за потолком и считается.
-        if (!Number.isFinite(duration) || duration > maxSeconds) return { ...EMPTY_ESTIMATE };
+        if (!Number.isFinite(duration) || duration * timeFactor(profile) > maxSeconds) return { ...EMPTY_ESTIMATE };
 
         return {
           distanceKm: Number((distance / 1000).toFixed(3)),
-          durationSeconds: Math.round(duration),
+          durationSeconds: Math.round(duration * timeFactor(profile)),
           approximate: false,
         };
       });
@@ -369,7 +382,7 @@ const loadEngine = async (filePath, event, failureEvent = 'routing.graph_unavail
   const started = Date.now();
   try {
     const graph = await loadGraph(filePath);
-    const engine = createRoutingEngine({ graph });
+    const engine = createRoutingEngine({ graph, drivingFactor: drivingFactorFromEnv() });
     const stats = engine.stats();
     logger.event(event, {
       status: 'ready',

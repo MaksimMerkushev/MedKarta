@@ -202,7 +202,9 @@ export const createActivationHandler = ({
           if (!registration.enabled) {
             const reason = registration.closedReason;
             respondJson(res, 403, {
-              error: reason === 'invite_only'
+              error: reason === 'operator_not_notified'
+                ? 'Регистрация пока закрыта. Карта, поиск и демо-запись работают без аккаунта.'
+                : reason === 'invite_only'
                 ? 'Регистрация в МедКарте — по приглашению. Если вам нужен доступ, обратитесь к администратору.'
                 : reason === 'mail_disabled'
                   ? 'Регистрация временно недоступна: не настроена отправка писем. Попробуйте позже.'

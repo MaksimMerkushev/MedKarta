@@ -1441,7 +1441,9 @@ export const createSqliteAccountStore = ({ DatabaseSync, file }) => {
     countMailFromSource: ({ sourceKey, since }) => db.prepare('SELECT COUNT(*) AS count FROM mail_outbox WHERE source_key = ? AND created_at >= ?').get(sourceKey, since).count,
     countPendingMail: () => db.prepare("SELECT COUNT(*) AS count FROM mail_outbox WHERE status IN ('pending', 'sending')").get().count,
     // Для суточной квоты: всё, что ушло или ещё уйдёт; не ушедшее совсем (failed) провайдер не считает.
-    countRecentMail: (since) => db.prepare("SELECT COUNT(*) AS count FROM mail_outbox WHERE created_at >= ? AND status != 'failed'").get(since).count,
+    countRecentMail: (since, kinds = null) => (kinds?.length
+      ? db.prepare(`SELECT COUNT(*) AS count FROM mail_outbox WHERE created_at >= ? AND status != 'failed' AND kind IN (${kinds.map(() => '?').join(', ')})`).get(since, ...kinds).count
+      : db.prepare("SELECT COUNT(*) AS count FROM mail_outbox WHERE created_at >= ? AND status != 'failed'").get(since).count),
     mailStats: (since) => Object.fromEntries(db.prepare('SELECT status, COUNT(*) AS count FROM mail_outbox WHERE created_at >= ? GROUP BY status').all(since)
       .map((row) => [row.status, row.count])),
     purgeMail: (before) => db.prepare("DELETE FROM mail_outbox WHERE created_at < ? AND status IN ('sent', 'failed')").run(before).changes,

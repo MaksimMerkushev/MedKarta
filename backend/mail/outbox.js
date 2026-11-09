@@ -44,11 +44,14 @@
  *   - уведомлений о действиях с аккаунтом (пароль, email, факторы входа) —
  *     20 в час: их вызывает сам владелец после входа, и шквал
  *     информационных писем их не вытесняет (как и ссылки — друг друга);
- *   - писем со ссылками с одного источника (сеть /24, /64) — 10 в час;
+ *   - писем со ссылками с одного источника (сеть /24, /64) — 10 в час и 30 в сутки;
  *   - в очереди не больше 500 неотправленных писем;
  *   - всех писем за 24 часа — не больше dailyLimit (квота Postbox — 200):
  *     сверх него письмо не ставится в очередь, а пользователь получает тот
- *     же ответ, что и при других лимитах.
+ *     же ответ, что и при других лимитах;
+ *   - писем о регистрации за 24 часа — не больше половины dailyLimit: их может
+ *     вызвать кто угодно, и поток заявок не должен отнимать квоту у сброса пароля
+ *     и уведомлений безопасности.
  */
 
 import { createHash, randomBytes } from 'node:crypto';
@@ -68,6 +71,8 @@ export const MAIL_LIMITS = Object.freeze({
   ALL_PER_ADDRESS_HOUR: 10,
   ACCOUNT_NOTICES_PER_ADDRESS_HOUR: 20,
   LINKS_PER_SOURCE_HOUR: 10,
+  LINKS_PER_SOURCE_DAY: 30,
+  REGISTRATION_QUOTA_SHARE: 0.5,
   MAX_QUEUE: 500,
   MAX_ATTEMPTS: 5,
   BACKOFF_MS: Object.freeze([30 * 1000, 2 * MINUTE, 10 * MINUTE, 30 * MINUTE]),
@@ -124,6 +129,7 @@ export const createMailer = ({
   const linkKinds = [...SECRET_KINDS];
   const accountKinds = MAIL_KINDS.filter((kind) => ACCOUNT_NOTICE_KINDS.has(kind));
   const infoKinds = MAIL_KINDS.filter((kind) => !SECRET_KINDS.has(kind) && !ACCOUNT_NOTICE_KINDS.has(kind));
+  const registrationKinds = ['register_confirm', 'register_exists', 'register_pending'];
 
   /**
    * Письма уходят по одному и не чаще раза в minIntervalMs — и из цикла
@@ -155,6 +161,10 @@ export const createMailer = ({
       }
       return { allowed: false, reason: 'daily_quota' };
     }
+    if (dailyLimit > 0 && registrationKinds.includes(kind)
+      && store.countRecentMail(stamp - DAY, registrationKinds) >= Math.ceil(dailyLimit * MAIL_LIMITS.REGISTRATION_QUOTA_SHARE)) {
+      return { allowed: false, reason: 'registration_quota' };
+    }
     if (store.countPendingMail() >= MAIL_LIMITS.MAX_QUEUE) return { allowed: false, reason: 'queue_full' };
     if (ACCOUNT_NOTICE_KINDS.has(kind)) {
       if (store.countMailTo({ toHash, since: stamp - HOUR, kinds: accountKinds }) >= MAIL_LIMITS.ACCOUNT_NOTICES_PER_ADDRESS_HOUR) return { allowed: false, reason: 'address_hour' };
@@ -165,6 +175,7 @@ export const createMailer = ({
       if (store.countMailTo({ toHash, since: stamp - HOUR, kinds: linkKinds }) >= MAIL_LIMITS.LINKS_PER_ADDRESS_HOUR) return { allowed: false, reason: 'links_hour' };
       if (store.countMailTo({ toHash, since: stamp - DAY, kinds: linkKinds }) >= MAIL_LIMITS.LINKS_PER_ADDRESS_DAY) return { allowed: false, reason: 'links_day' };
       if (sourceKey && store.countMailFromSource({ sourceKey, since: stamp - HOUR }) >= MAIL_LIMITS.LINKS_PER_SOURCE_HOUR) return { allowed: false, reason: 'source_hour' };
+      if (sourceKey && store.countMailFromSource({ sourceKey, since: stamp - DAY }) >= MAIL_LIMITS.LINKS_PER_SOURCE_DAY) return { allowed: false, reason: 'source_hour' };
     }
     return { allowed: true, reason: null };
   };
