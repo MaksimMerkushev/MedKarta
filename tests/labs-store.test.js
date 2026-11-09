@@ -13,7 +13,8 @@ import { describe, it } from 'node:test';
 
 import { loadSqlite } from '../backend/demo/bookingStore.js';
 import { addDays, moscowMoment } from '../backend/demo/time.js';
-import { CATEGORY_IDS, DEMO_RESULTS, TESTS } from '../backend/labs/catalog.js';
+import { buildLabSeed, CATEGORY_IDS, DEMO_RESULTS, LAB_BRANCH_POINTS, TESTS } from '../backend/labs/catalog.js';
+import { kazanFacilities } from '../data/facilities.js';
 import { createLabQuote, describeTurnaround } from '../backend/labs/quote.js';
 import { createLabStore, LabError } from '../backend/labs/store.js';
 
@@ -56,6 +57,24 @@ describe('Лаборатории: исходные данные', { skip: !Datab
     assert.equal(owners.get('оак'), 'CBC_DIFF');
     assert.equal(owners.get('оак без формулы'), 'CBC');
     store.close();
+  });
+
+  it('филиалы стоят в точках настоящих пунктов сдачи анализов из OSM, по одному в точке; адрес без номера дома', () => {
+    const facilities = new Map(kazanFacilities.map((item) => [item.id, item]));
+    const meters = (a, b) => Math.hypot((a.lat - b.lat) * 111_320, (a.lng - b.lng) * 111_320 * Math.cos((a.lat * Math.PI) / 180));
+    const branches = buildLabSeed().branches;
+    assert.equal(branches.length, LAB_BRANCH_POINTS.length);
+    for (const branch of branches) {
+      const point = facilities.get(branch.osmId);
+      assert.ok(point, `${branch.id}: нет объекта ${branch.osmId} в data/facilities.js`);
+      assert.match(point.name, /^(KDL|Инвитро|Ситилаб)$/u, `${branch.id}: в OSM здесь не пункт сдачи анализов`);
+      assert.ok(meters(branch, point) < 1, `${branch.id}: точка не совпадает с OSM`);
+      assert.ok(branch.district, `${branch.id}: нет района`);
+      assert.doesNotMatch(branch.address, /\d/u, `${branch.id}: в адресе номер дома`);
+      for (const other of branches) {
+        if (other !== branch) assert.ok(meters(branch, other) > 100, `${branch.id} и ${other.id} ближе 100 м`);
+      }
+    }
   });
 
   it('примеры бланков — синтетические и с пометкой «не для медицинских решений»', () => {

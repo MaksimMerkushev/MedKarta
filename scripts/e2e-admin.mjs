@@ -542,11 +542,11 @@ try {
 
   await step('24. Лаборатории в админ-панели: список, цена в филиале, отмена демо-записи — и всё в журнале', async () => {
     const booked = await admin.evaluate(async () => {
-      const slots = await fetch('/api/labs/slots?branchId=lab-probirka-koltso&days=3&tests=TSH').then((response) => response.json());
+      const slots = await fetch('/api/labs/slots?branchId=lab-probirka-ulyanova-lenina&days=3&tests=TSH').then((response) => response.json());
       const slot = slots.slots.find((item) => item.bookable);
       const response = await fetch('/api/labs/bookings', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ branchId: 'lab-probirka-koltso', slotId: slot.id, tests: ['TSH'], idempotencyKey: 'e2e-admin-labs-000001', expectedTotal: slots.quote.total }),
+        body: JSON.stringify({ branchId: 'lab-probirka-ulyanova-lenina', slotId: slot.id, tests: ['TSH'], idempotencyKey: 'e2e-admin-labs-000001', expectedTotal: slots.quote.total }),
       });
       return { status: response.status, body: await response.json() };
     });
@@ -555,13 +555,13 @@ try {
     await goto(admin, '/admin/labs');
     await admin.waitForSelector('[data-testid=admin-labs-list] >> text=Медиана');
     await admin.getByRole('tab', { name: 'Цены' }).click();
-    await admin.getByLabel('Филиал').selectOption('lab-probirka-koltso');
+    await admin.getByLabel('Филиал').selectOption('lab-probirka-ulyanova-lenina');
     const price = admin.getByLabel('Цена: Тиреотропный гормон (ТТГ)');
     await price.waitFor();
     await price.fill('555');
     await admin.locator('tr', { has: price }).getByRole('button', { name: 'Сохранить' }).click();
     await admin.waitForFunction(async () => {
-      const data = await fetch('/api/labs/branches/lab-probirka-koltso').then((response) => response.json());
+      const data = await fetch('/api/labs/branches/lab-probirka-ulyanova-lenina').then((response) => response.json());
       return data.offerings.find((item) => item.testCode === 'TSH')?.price === 555;
     }, null, { timeout: 10_000 });
     await admin.getByRole('tab', { name: 'Записи' }).click();

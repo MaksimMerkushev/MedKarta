@@ -7,19 +7,18 @@
  * сроки и слоты вымышлены. Совпадение названий с действующими сетями случайно,
  * партнёрства нет.
  *
- * Филиалы стоят рядом с известными местами Казани (shared/kazanPlaces.js,
- * координаты OpenStreetMap). Точка филиала смещена от места на 50–250 м
- * детерминированно, поэтому адрес не выдаётся за настоящий: «около метро …».
+ * Филиалы стоят в точках настоящих пунктов сдачи анализов из OpenStreetMap
+ * (LAB_BRANCH_POINTS): на карте — там, где в Казани действительно сдают
+ * анализы. Адрес — до улицы, без номера дома.
  *
  * Тексты о подготовке — общие правила, заранее подготовленные и проверяемые;
  * ассистент их не сочиняет. В интерфейсе к ним приписано, что правила нужно
  * сверить с лабораторией.
  */
 
-import { KAZAN_PLACES } from '../../shared/kazanPlaces.js';
 import { createRandom } from '../demo/random.js';
 
-export const LAB_CATALOG_VERSION = 1;
+export const LAB_CATALOG_VERSION = 2;
 
 export const CATEGORIES = Object.freeze([
   { id: 'clinical', name: 'Общеклинические исследования' },
@@ -206,34 +205,40 @@ const SCHEDULES = Object.freeze({
 });
 export const SCHEDULE_PRESETS = Object.freeze(Object.keys(SCHEDULES));
 
-/* Где стоят филиалы: лаборатория, место из kazanPlaces, расписание, вместимость слота. */
-const PLACE_LABELS = Object.freeze({
-  tukay: { label: 'около площади Тукая', district: 'Вахитовский', short: 'площадь Тукая' },
-  kremlin: { label: 'около Кремля', district: 'Вахитовский', short: 'Кремлёвская' },
-  center: { label: 'в центре, у метро «Кремлёвская»', district: 'Вахитовский', short: 'Центр' },
-  vokzal: { label: 'около Центрального вокзала', district: 'Вахитовский', short: 'Вокзал' },
-  avtovokzal: { label: 'около автовокзала', district: 'Приволжский', short: 'Автовокзал' },
-  aviastroitelnaya: { label: 'около метро «Авиастроительная»', district: 'Авиастроительный', short: 'Авиастроительная' },
-  severny: { label: 'около метро «Северный вокзал»', district: 'Московский', short: 'Северный вокзал' },
-  yashlek: { label: 'около метро «Яшьлек»', district: 'Московский', short: 'Яшьлек' },
-  kozya: { label: 'около метро «Козья слобода»', district: 'Кировский', short: 'Козья слобода' },
-  sukonnaya: { label: 'около метро «Суконная слобода»', district: 'Вахитовский', short: 'Суконная слобода' },
-  ametyevo: { label: 'около метро «Аметьево»', district: 'Приволжский', short: 'Аметьево' },
-  gorki: { label: 'около метро «Горки»', district: 'Приволжский', short: 'Горки' },
-  pobedy: { label: 'около метро «Проспект Победы»', district: 'Приволжский', short: 'Проспект Победы' },
-  dubravnaya: { label: 'около метро «Дубравная»', district: 'Приволжский', short: 'Дубравная' },
-  koltso: { label: 'около ТЦ «Кольцо»', district: 'Вахитовский', short: 'ТЦ «Кольцо»' },
-  bauman: { label: 'около улицы Баумана', district: 'Вахитовский', short: 'Баумана' },
-  mega: { label: 'около ТЦ «Мега»', district: 'Советский', short: 'ТЦ «Мега»' },
-});
-
-const BRANCH_PLAN = Object.freeze([
-  ['lab-labtochka', 'tukay', 'morning', 3], ['lab-labtochka', 'yashlek', 'morning', 2], ['lab-labtochka', 'gorki', 'morning', 2], ['lab-labtochka', 'avtovokzal', 'morning', 2], ['lab-labtochka', 'aviastroitelnaya', 'morning', 2],
-  ['lab-probirka', 'koltso', 'allday', 3], ['lab-probirka', 'kozya', 'allday', 2], ['lab-probirka', 'pobedy', 'allday', 2], ['lab-probirka', 'severny', 'morning', 2],
-  ['lab-mediana', 'kremlin', 'allday', 3], ['lab-mediana', 'sukonnaya', 'weekdays', 2], ['lab-mediana', 'mega', 'allday', 3], ['lab-mediana', 'yashlek', 'weekdays', 2],
-  ['lab-eritro', 'vokzal', 'morning', 2], ['lab-eritro', 'ametyevo', 'morning', 2], ['lab-eritro', 'dubravnaya', 'morning', 2], ['lab-eritro', 'kozya', 'weekdays', 2],
-  ['lab-analitika24', 'center', 'early', 3], ['lab-analitika24', 'gorki', 'early', 2], ['lab-analitika24', 'severny', 'early', 2], ['lab-analitika24', 'tukay', 'early', 2],
-  ['lab-kristall', 'bauman', 'allday', 2], ['lab-kristall', 'pobedy', 'weekdays', 2], ['lab-kristall', 'mega', 'allday', 2],
+/*
+ * Где стоят филиалы. Точка — настоящий пункт сдачи анализов по OpenStreetMap
+ * (снимок из data/facilities.js, ODbL; osmId — объект OSM): на карте филиал
+ * стоит там, где в городе действительно сдают анализы, а не во дворе или на
+ * заводе. Вымышлены лаборатория, цены и расписание; номер дома не выдаётся,
+ * чтобы адрес не читался как адрес настоящей сети.
+ * Поля: лаборатория, ключ, короткое имя, улица, район (по OSM), lat, lng,
+ * osmId, расписание, вместимость слота.
+ */
+export const LAB_BRANCH_POINTS = Object.freeze([
+  ['lab-labtochka', 'peterburgskaya', 'Петербургская', 'Петербургская улица', 'Вахитовский', 55.7856113, 49.1263318, 'osm-node-7606751896', 'morning', 3],
+  ['lab-labtochka', 'vosstaniya', 'Восстания', 'улица Восстания', 'Московский', 55.8332141, 49.0815888, 'osm-node-5252303701', 'morning', 2],
+  ['lab-labtochka', 'karbysheva', 'Карбышева', 'улица Карбышева', 'Советский', 55.7607774, 49.1775679, 'osm-node-12452918027', 'morning', 2],
+  ['lab-labtochka', 'leningradskaya', 'Ленинградская', 'Ленинградская улица', 'Авиастроительный', 55.8652998, 49.0864474, 'osm-node-11104707558', 'morning', 2],
+  ['lab-labtochka', 'ershova', 'Николая Ершова', 'улица Николая Ершова', 'Советский', 55.8011212, 49.1836721, 'osm-node-9612516630', 'morning', 2],
+  ['lab-probirka', 'ulyanova-lenina', 'Ульянова-Ленина', 'улица Ульянова-Ленина', 'Вахитовский', 55.7852451, 49.1346394, 'osm-node-9776584508', 'allday', 3],
+  ['lab-probirka', 'vakhitova', 'Мулланура Вахитова', 'улица Мулланура Вахитова', 'Московский', 55.816621, 49.0914395, 'osm-node-9867034318', 'allday', 2],
+  ['lab-probirka', 'pobedy', 'Проспект Победы', 'проспект Победы', 'Приволжский', 55.7508399, 49.2126168, 'osm-node-9612517216', 'allday', 2],
+  ['lab-probirka', 'chistopolskaya', 'Чистопольская', 'Чистопольская улица', 'Ново-Савиновский', 55.8189852, 49.141202, 'osm-node-8938851935', 'morning', 2],
+  ['lab-mediana', 'tatarstan', 'Татарстан', 'улица Татарстан', 'Вахитовский', 55.78239, 49.1150147, 'osm-node-9612517212', 'allday', 3],
+  ['lab-mediana', 'salimzhanova', 'Салимжанова', 'улица Марселя Салимжанова', 'Вахитовский', 55.7767222, 49.132175, 'osm-node-9612516629', 'weekdays', 2],
+  ['lab-mediana', 'zakieva', 'Закиева', 'улица Закиева', 'Советский', 55.7767722, 49.2225534, 'osm-node-7606751789', 'allday', 3],
+  ['lab-mediana', 'bolotnikova', 'Болотникова', 'улица Болотникова', 'Кировский', 55.8196035, 49.0526586, 'osm-node-7606751883', 'weekdays', 2],
+  ['lab-eritro', 'khakima', 'Сибгата Хакима', 'улица Сибгата Хакима', 'Ново-Савиновский', 55.8166796, 49.1362694, 'osm-node-11594126319', 'morning', 2],
+  ['lab-eritro', 'gvardeyskaya', 'Гвардейская', 'Гвардейская улица', 'Советский', 55.7662076, 49.1802223, 'osm-node-9612516628', 'morning', 2],
+  ['lab-eritro', 'urmanche', 'Баки Урманче', 'улица Баки Урманче', 'Приволжский', 55.7308965, 49.1758733, 'osm-node-11594126322', 'morning', 2],
+  ['lab-eritro', 'yamasheva', 'Ямашева', 'проспект Ямашева', 'Ново-Савиновский', 55.8263031, 49.1326729, 'osm-node-11112523417', 'weekdays', 2],
+  ['lab-analitika24', 'kutuya', 'Аделя Кутуя', 'улица Аделя Кутуя', 'Советский', 55.7868463, 49.1717443, 'osm-node-13457511473', 'early', 3],
+  ['lab-analitika24', 'kamaya', 'Профессора Камая', 'улица Профессора Камая', 'Приволжский', 55.7505255, 49.1848474, 'osm-node-7606751878', 'early', 2],
+  ['lab-analitika24', 'adoratskogo', 'Адоратского', 'улица Адоратского', 'Ново-Савиновский', 55.8371365, 49.146916, 'osm-node-9612516632', 'early', 2],
+  ['lab-analitika24', 'krasnokokshayskaya', 'Краснококшайская', 'Краснококшайская улица', 'Кировский', 55.8248171, 49.0444472, 'osm-node-9612516631', 'early', 2],
+  ['lab-kristall', 'vishnevskogo', 'Вишневского', 'улица Вишневского', 'Вахитовский', 55.7875254, 49.1519855, 'osm-node-9612517218', 'allday', 2],
+  ['lab-kristall', 'sakharova', 'Академика Сахарова', 'улица Академика Сахарова', 'Советский', 55.780358, 49.2301985, 'osm-node-9612516633', 'weekdays', 2],
+  ['lab-kristall', 'pobedy', 'Проспект Победы', 'проспект Победы', 'Советский', 55.7658526, 49.2205263, 'osm-node-11668776225', 'allday', 2],
 ]);
 
 /* Тесты, которых нет в маленьких пунктах: посевы, мазки и длительные пробы требуют процедурного кабинета. */
@@ -249,26 +254,15 @@ export const buildLabSeed = ({ seed = 'medkarta-labs-v1', priceDate = '2026-11-0
   const branches = [];
   const fees = [];
   const offerings = [];
-  const counter = new Map();
-  for (const [labId, placeKey, preset, capacity] of BRANCH_PLAN) {
+  for (const [labId, key, short, street, district, lat, lng, osmId, preset, capacity] of LAB_BRANCH_POINTS) {
     const lab = LABS.find((item) => item.id === labId);
-    const place = KAZAN_PLACES[placeKey];
-    const labels = PLACE_LABELS[placeKey];
-    if (!lab || !place || !labels) continue;
-    const number = (counter.get(labId) || 0) + 1;
-    counter.set(labId, number);
-    const random = createRandom(seed, `${labId}|${placeKey}`);
-    // Смещение 50–250 м: филиал рядом с местом, а не на нём.
-    const angle = random.next() * Math.PI * 2;
-    const meters = 50 + random.next() * 200;
-    const lat = Number((place.lat + (meters * Math.cos(angle)) / 111_320).toFixed(6));
-    const lng = Number((place.lng + (meters * Math.sin(angle)) / (111_320 * Math.cos((place.lat * Math.PI) / 180))).toFixed(6));
-    const id = `${labId}-${placeKey}`;
+    if (!lab) continue;
+    const id = `${labId}-${key}`;
     const large = capacity >= 3 || preset === 'allday';
     const schedule = SCHEDULES[preset];
     branches.push({
-      id, labId, name: `${lab.name} · ${labels.short}`,
-      address: `Казань, ${labels.label} (демо-филиал, адрес условный)`, district: labels.district, lat, lng,
+      id, labId, name: `${lab.name} · ${short}`,
+      address: `Казань, ${street} (демо-филиал, номер дома не указан)`, district, lat, lng, osmId,
       phone: lab.phone, hours: schedule.hours, collection: schedule.collection, slotMinutes: 10, slotCapacity: capacity,
       bookingModes: ['online', 'walk_in'], large,
     });
@@ -284,7 +278,7 @@ export const buildLabSeed = ({ seed = 'medkarta-labs-v1', priceDate = '2026-11-0
       if (!offered) continue;
       const noise = 0.92 + createRandom(seed, `${labId}|price|${test.code}`).next() * 0.16;
       // Филиал в центре у премиальной сети — дороже на 5 %.
-      const local = labId === 'lab-kristall' && placeKey === 'bauman' ? 1.05 : 1;
+      const local = id === 'lab-kristall-vishnevskogo' ? 1.05 : 1;
       const price = roundTo(test.price * lab.tier * noise * local, 10);
       let hours = Math.round(test.hours * lab.hoursFactor);
       if (lab.sameDay && ['CBC_DIFF', 'CBC', 'ESR', 'GLUCOSE', 'CRP'].includes(test.code)) hours = 6;

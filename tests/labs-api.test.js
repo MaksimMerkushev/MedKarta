@@ -76,7 +76,7 @@ describe('Лаборатории: публичный API', { skip: !DatabaseSync
   });
 
   it('расписание, запись, повтор, просмотр по коду и отмена с освобождением места', async () => {
-    const branchId = 'lab-probirka-koltso';
+    const branchId = 'lab-probirka-ulyanova-lenina';
     const schedule = await labs.call(`/api/labs/slots?branchId=${branchId}&days=3&tests=CBC_DIFF,TSH`);
     assert.equal(schedule.status, 200);
     const slot = schedule.body.slots.find((item) => item.bookable && item.day === addDays('2026-11-09', 1));
@@ -95,7 +95,7 @@ describe('Лаборатории: публичный API', { skip: !DatabaseSync
   });
 
   it('запись с чужого сайта (Origin или Sec-Fetch-Site) и без JSON — 403; сверх лимита — 429', async () => {
-    const body = { branchId: 'lab-probirka-koltso', slotId: 'x', tests: ['CBC_DIFF'], idempotencyKey: 'k'.repeat(20) };
+    const body = { branchId: 'lab-probirka-ulyanova-lenina', slotId: 'x', tests: ['CBC_DIFF'], idempotencyKey: 'k'.repeat(20) };
     assert.equal((await labs.call('/api/labs/bookings', { method: 'POST', body, origin: 'https://evil.example' })).status, 403);
     assert.equal((await labs.call('/api/labs/bookings', { method: 'POST', body, contentType: 'text/plain' })).status, 403);
     // Без Origin запрос проходит, как и у записи к врачам (часть браузеров его не шлёт), но браузер с чужого сайта выдаёт Sec-Fetch-Site.
@@ -156,17 +156,17 @@ describe('Лаборатории: админ-API и права', { skip: !Databa
     const overview = await root.call('/api/admin/labs');
     assert.equal(overview.status, 200);
     assert.equal(overview.body.labs.length, 6);
-    const price = await root.call('/api/admin/labs/branches/lab-mediana-kremlin/offerings/FERRITIN', { method: 'PUT', body: { price: 777, turnaroundHours: 12 } });
+    const price = await root.call('/api/admin/labs/branches/lab-mediana-tatarstan/offerings/FERRITIN', { method: 'PUT', body: { price: 777, turnaroundHours: 12 } });
     assert.equal(price.status, 200, JSON.stringify(price.body));
     assert.equal(price.body.price, 777);
-    const branch = await root.call('/api/admin/labs/branches/lab-mediana-kremlin', { method: 'PATCH', body: { slotCapacity: 4 } });
+    const branch = await root.call('/api/admin/labs/branches/lab-mediana-tatarstan', { method: 'PATCH', body: { slotCapacity: 4 } });
     assert.equal(branch.status, 200);
     assert.equal(branch.body.slotCapacity, 4);
-    const fee = await root.call('/api/admin/labs/branches/lab-mediana-kremlin/fees/venous_blood', { method: 'PUT', body: { price: 199 } });
+    const fee = await root.call('/api/admin/labs/branches/lab-mediana-tatarstan/fees/venous_blood', { method: 'PUT', body: { price: 199 } });
     assert.equal(fee.body.fee.price, 199);
     const test = await root.call('/api/admin/labs/tests', { method: 'POST', body: { code: 'DEMO_ADMIN', name: 'Тест от администратора', category: 'clinical', biomaterial: 'venous_blood', turnaroundHours: 24, synonyms: ['админ тест'] } });
     assert.equal(test.status, 201);
-    const bad = await root.call('/api/admin/labs/branches/lab-mediana-kremlin/offerings/FERRITIN', { method: 'PUT', body: { price: 'дорого' } });
+    const bad = await root.call('/api/admin/labs/branches/lab-mediana-tatarstan/offerings/FERRITIN', { method: 'PUT', body: { price: 'дорого' } });
     assert.equal(bad.status, 400);
     const audit = await root.call('/api/admin/audit?q=labs');
     const actions = (audit.body.items || []).map((item) => item.action);
@@ -177,15 +177,15 @@ describe('Лаборатории: админ-API и права', { skip: !Databa
     const user = await createActive({ email: 'user.labs@medkarta.test', role: 'user' });
     const result = await user.call('/api/admin/labs');
     assert.equal(result.status, 403);
-    const write = await user.call('/api/admin/labs/branches/lab-mediana-kremlin/offerings/FERRITIN', { method: 'PUT', body: { price: 1 } });
+    const write = await user.call('/api/admin/labs/branches/lab-mediana-tatarstan/offerings/FERRITIN', { method: 'PUT', body: { price: 1 } });
     assert.equal(write.status, 403);
-    assert.notEqual(store.branchOfferings('lab-mediana-kremlin').find((item) => item.testCode === 'FERRITIN').price, 1);
+    assert.notEqual(store.branchOfferings('lab-mediana-tatarstan').find((item) => item.testCode === 'FERRITIN').price, 1);
   });
 
   it('модератор: смотреть можно, менять цены и записи — нет; попытка изменения — в журнале', async () => {
     const moderator = await createActive({ email: 'moderator.labs@medkarta.test', role: 'moderator' });
     assert.equal((await moderator.call('/api/admin/labs/tests')).status, 200);
-    const write = await moderator.call('/api/admin/labs/branches/lab-mediana-kremlin/offerings/FERRITIN', { method: 'PUT', body: { price: 2 } });
+    const write = await moderator.call('/api/admin/labs/branches/lab-mediana-tatarstan/offerings/FERRITIN', { method: 'PUT', body: { price: 2 } });
     assert.equal(write.status, 403);
     assert.equal((await moderator.call('/api/admin/labs/bookings')).status, 403);
     const audit = await root.call('/api/admin/audit?q=labs');
@@ -193,7 +193,7 @@ describe('Лаборатории: админ-API и права', { skip: !Databa
   });
 
   it('записи: список и отмена администратором освобождают место', async () => {
-    const branchId = 'lab-eritro-vokzal';
+    const branchId = 'lab-eritro-khakima';
     const slot = store.freeSlots({ branchIds: [branchId], days: [addDays('2026-11-09', 2)], at: NOW }).get(branchId)[0];
     const booking = store.book({ branchId, slotId: slot.id, testCodes: ['CBC_DIFF'], idempotencyKey: randomBytes(12).toString('hex'), at: NOW });
     const list = await root.call('/api/admin/labs/bookings?status=CONFIRMED');
