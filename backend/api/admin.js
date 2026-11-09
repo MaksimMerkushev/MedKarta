@@ -58,6 +58,9 @@ import { logger } from '../observability/safeLogger.js';
 import { getAccountContext } from './accountContext.js';
 import { isTrustedWrite, pathOf, queryOf, readJsonObject, requestOrigin, requireFresh, requireSession, sendError } from './accountHttp.js';
 import { sendImage } from './me.js';
+import { userLabel } from '../accounts/service.js';
+import { createLabAdmin, LAB_ADMIN_ROUTES, LAB_ADMIN_WITH_BODY } from '../labs/admin.js';
+import { getDefaultLabService } from '../labs/service.js';
 
 const MAX_BODY_BYTES = 32 * 1024;
 const defaultLimit = createRateLimiter({ maxPerIp: 600, maxPerInstance: Number.POSITIVE_INFINITY });
@@ -104,10 +107,12 @@ const route = createRouter([
   ['GET', '/api/admin/system', 'system'],
   ['GET', '/api/admin/settings', 'settings'],
   ['PATCH', '/api/admin/settings', 'updateSettings'],
+  // Лаборатории (labs/admin.js): разрешения labs.view, labs.manage, labs.bookings.
+  ...LAB_ADMIN_ROUTES,
 ]);
 
 // Операции с телом запроса: остальные тело не читают.
-const WITH_BODY = new Set(['createUser', 'bulk', 'updateUser', 'deleteUser', 'setRole', 'block', 'updateRole', 'updateSettings', 'issueAccessLink', 'mfaReset', 'privacyRequestAction']);
+const WITH_BODY = new Set(['createUser', 'bulk', 'updateUser', 'deleteUser', 'setRole', 'block', 'updateRole', 'updateSettings', 'issueAccessLink', 'mfaReset', 'privacyRequestAction', ...LAB_ADMIN_WITH_BODY]);
 
 /*
  * Критические действия: нужно свежее явное подтверждение личности (пароль
@@ -151,7 +156,7 @@ const CRITICAL_PERMISSION = Object.freeze({
 
 const collectSystemInfo = async () => (await import('./systemInfo.js')).collectSystemInfo();
 
-export const createAdminHandler = ({ getContext = getAccountContext, limit = defaultLimit, systemInfo = collectSystemInfo } = {}) =>
+export const createAdminHandler = ({ getContext = getAccountContext, limit = defaultLimit, systemInfo = collectSystemInfo, getLabService = getDefaultLabService } = {}) =>
   async function adminHandler(req, res) {
     const url = req.originalUrl || req.url;
     const match = route(req.method, pathOf(url));
@@ -289,6 +294,18 @@ export const createAdminHandler = ({ getContext = getAccountContext, limit = def
         case 'settings': result = admin.settings(actor); break;
         case 'updateSettings': result = admin.updateSettings(actor, body); break;
         default:
+          if (operation.startsWith('labs')) {
+            const labAdmin = createLabAdmin({
+              getService: getLabService,
+              audit: (who, action, fields = {}) => context.store.addAudit({
+                at: Date.now(), action, actorId: who?.id || null, actorLabel: who ? userLabel(who) : 'Система',
+                targetId: fields.targetId || null, targetLabel: fields.targetLabel || null, result: fields.result || 'ok', details: fields.details || null,
+              }),
+            });
+            result = await labAdmin.run(actor, operation, { params, query, body });
+            if (operation.endsWith('Create')) res.statusCode = 201;
+            break;
+          }
           respondJson(res, 404, { error: 'Not found' });
           return;
       }
@@ -296,6 +313,10 @@ export const createAdminHandler = ({ getContext = getAccountContext, limit = def
       respondJson(res, res.statusCode && res.statusCode !== 200 ? res.statusCode : 200, result);
     } catch (error) {
       if (req.method !== 'GET') logger.event('admin.action', { action: operation, status: 'failed', code: error?.code || 'error' });
+      if (error?.name === 'LabError') {
+        respondJson(res, error.status || 400, { error: error.message, code: error.code });
+        return;
+      }
       sendError(res, error, 'admin.request_failed');
     }
   };
