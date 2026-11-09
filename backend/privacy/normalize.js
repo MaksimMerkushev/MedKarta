@@ -336,6 +336,13 @@ const NEGATION_TAIL = /(?:^|[^\p{L}])(?:не|нет|без|кроме|никак
 export const isNegatedBefore = (text, index, window = 28) =>
   NEGATION_TAIL.test(String(text || '').slice(Math.max(0, index - window), index));
 
+/*
+ * Отказ сразу после условия: «утром не смогу», «завтра не получится». Окно короткое и только
+ * глаголы возможности: «утром не болит» к этому не относится.
+ */
+const REFUSAL_HEAD = /^\s*(?:я\s+)?(?:никак\s+)?не\s+(?:смогу|могу|получится|выйдет|подойдет|подходит|удобно|успею|вариант)(?![\p{L}])/iu;
+export const isRefusedAfter = (text, end) => REFUSAL_HEAD.test(String(text || '').slice(end, end + 30).replace(/ё/gu, 'е'));
+
 /* Опечатки в словах дня («завтро», «седня»): иначе день теряется, а время из фразы остаётся. */
 const TYPOS = [
   [/(?<!\p{L})(после)?за(?:втро|фтра|втр|вра)(?!\p{L})/gu, (_, after) => `${after || ''}завтра`],

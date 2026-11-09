@@ -36,6 +36,7 @@ import { demoNow } from './demo/time.js';
 import { publicClinicsHidden } from './demo/flags.js';
 import { logger as defaultLogger } from './observability/safeLogger.js';
 import { metrics as defaultMetrics } from './observability/metrics.js';
+import { isExplicitRequest } from './understanding/turnRoles.js';
 
 /** Причины решения шлюза, которые сами говорят о здоровье: в журнал — как «policy». */
 const HEALTH_REASONS = new Set([FAIL_CLOSED_REASON.EMERGENCY, FAIL_CLOSED_REASON.MEDICAL_TEXT, FAIL_CLOSED_REASON.LOW_CLASSIFIER_CONFIDENCE]);
@@ -175,6 +176,8 @@ export const createPipeline = ({
       origin = null,
       takeExternalBudget = () => true,
       runExclusive = (task) => task(),
+      // Только для локальной диагностики: куда записать понятый запрос (understanding/frame.js).
+      probe = null,
     }) {
       const started = Date.now();
       /*
@@ -194,6 +197,7 @@ export const createPipeline = ({
           }
         });
       const gate = await exclusive(() => gateway.process({ messages, sessionId }));
+      if (probe) probe.gate = gate;
 
       metrics.increment('gateway.decision', { decision: gate.decision });
       /*
@@ -235,6 +239,7 @@ export const createPipeline = ({
           metrics.increment('planner.budget_exhausted');
         }
       }
+      if (probe) probe.triaged = triaged;
       if (triaged?.status === 'emergency') {
         metrics.increment('gateway.emergency');
         return {
@@ -273,6 +278,11 @@ export const createPipeline = ({
         } else {
           dropGuess(gate.context);
         }
+      }
+      const modelRoles = applyModelRoles(gate, triaged);
+      if (probe) {
+        probe.triaged = triaged;
+        probe.modelRoles = modelRoles;
       }
       const triageNote = triaged && triaged.status !== 'not_medical'
         ? applyTriage(gate.context, triaged, { unsure: triaged.status === 'clarify' })
@@ -530,6 +540,40 @@ const START_WITH = { therapist: 'терапевта', pediatrician: 'педиа�
  * раньше. Взрослого не записываем к педиатру, ребёнка с общей жалобой — к
  * терапевту. Возвращает фразу для ответа.
  */
+/*
+ * Модель отнесла фрагмент к симптому или биографии: условие из него снимается. Создать или
+ * изменить условие модель не может. Фрагмент учитывается, только если он дословно есть в
+ * переданном ей тексте; метка места переводится в исходный текст только здесь, на сервере.
+ */
+/* Роли, по которым модель может снять условие. Создать условие она не может ни одной ролью. */
+const REMOVING_ROLES = new Set(['symptom_time', 'event_time', 'biography_place']);
+
+export const applyModelRoles = (gate, triaged) => {
+  const mentions = triaged?.frame?.mentions || [];
+  const sent = (gate.context.triageTurns || []).join('\n');
+  const places = gate.context.triagePlaces;
+  const originals = gate.context.turnInfo?.userTexts || [];
+  const fragments = [];
+  const ignored = [];
+  const kept = [];
+  for (const mention of mentions) {
+    if (!REMOVING_ROLES.has(mention.role)) continue;
+    if (!sent.includes(mention.text)) {
+      ignored.push(mention.text);
+      continue;
+    }
+    const raw = mention.text.replace(/\[место_\d+\]/gu, (label) => places?.get(label) || label);
+    // Прямо названное условие остаётся: здесь правила сервера надёжнее догадки модели.
+    if (originals.some((text) => isExplicitRequest(text, raw))) {
+      kept.push(raw);
+      continue;
+    }
+    fragments.push(raw);
+  }
+  if (fragments.length > 0) gate.context.withoutFragments?.(fragments);
+  return { fragments, ignored, kept };
+};
+
 const applyTriage = (context, triaged, { unsure = false } = {}) => {
   const child = Boolean(context.booking ? context.booking.child : context.classification?.isChild);
   const keys = triaged.specialties

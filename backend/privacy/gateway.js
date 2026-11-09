@@ -23,7 +23,8 @@ import { randomUUID } from 'node:crypto';
 
 import { findTrigger, fixCommonTypos, isNegatedBefore, rewriteNegatedTimeBounds, ruStem } from './normalize.js';
 import { detectEntities, detectObfuscation, ENTITY_KIND, isKinshipWord } from './detectors.js';
-import { hasSensitiveCondition, minimizeComplaint } from './complaintScrub.js';
+import { bookingView, expandCorrections } from '../understanding/turnRoles.js';
+import { deidentifyComplaint, hasSensitiveCondition } from './deidentify.js';
 import { classifySymptoms } from './symptoms.js';
 import { looksLikeSurname } from './morphology.js';
 import {
@@ -472,7 +473,8 @@ export const createPrivacyGateway = ({
      * условиях, ни в плане.
      */
     const resetAt = userMessages.findLastIndex((message) => CONTEXT_RESET.test(String(message.content || '').toLowerCase()));
-    const recent = (resetAt > 0 ? userMessages.slice(resetAt) : userMessages).slice(-MAX_CONTEXT_TURNS);
+    // Реплика с исправлением внутри («Хотя нет, болит колено») — как две реплики подряд.
+    const recent = expandCorrections(resetAt > 0 ? userMessages.slice(resetAt) : userMessages).slice(-MAX_CONTEXT_TURNS);
     /*
      * Вопрос не по теме («какая погода в субботу?») в разбор не идёт: его «в
      * субботу» не должно менять день приёма. Ответ — «это не ко мне», прежний
@@ -665,7 +667,12 @@ export const createPrivacyGateway = ({
      * бы и «рядом», и детский приём.
      */
     const userTexts = messages.map((message) => message.content);
-    const turnConstraints = userTexts.map((text) => extractConstraints(text));
+    /*
+     * Условия записи — только из частей реплики, относящихся к записи (understanding/turnRoles.js):
+     * «с утра тошнит» не становится временем приёма, а «работаю в центре» — местом поиска.
+     */
+    const bookingViews = userTexts.map((text) => bookingView(text));
+    const turnConstraints = bookingViews.map((text) => extractConstraints(text));
     const constraints = Object.assign({}, ...turnConstraints);
 
     /*
@@ -724,7 +731,7 @@ export const createPrivacyGateway = ({
     const unknownWins = lastUnknownIndex >= 0 && lastUnknownIndex >= lastSpecialtyIndex;
     const unknownOnly = unknownWins && analyses[lastUnknownIndex].specialties.length === 0;
     const lastSpecialties = unknownOnly ? [] : perTurnSpecialties[lastSpecialtyIndex] || [];
-    const turnBookings = userTexts.map((text, index) => ({ ...extractBookingConstraints(text), ...demoRefsOf(analyses[index]), reply: extractReplySignals(text) }));
+    const turnBookings = bookingViews.map((text, index) => ({ ...extractBookingConstraints(text), ...demoRefsOf(analyses[index]), reply: extractReplySignals(text) }));
     /*
      * «В Разумед на Пушкина» → «а на Ленинградской?»: улица без названия
      * клиники — другой филиал той же клиники.
@@ -828,10 +835,12 @@ export const createPrivacyGateway = ({
 
     const catalogSpecialties = new Set();
     const catalogDistricts = new Set();
-    for (const analysis of analyses) {
+    analyses.forEach((analysis, index) => {
       analysis.specialties.forEach((item) => catalogSpecialties.add(item));
-      analysis.districts.forEach((item) => catalogDistricts.add(item));
-    }
+      // Район считается условием, только если назван в части реплики о записи.
+      const named = bookingViews[index] === userTexts[index] ? analysis.districts : resolver.resolve(bookingViews[index]).districts;
+      named.forEach((item) => catalogDistricts.add(item));
+    });
 
     let redactedTurns;
     let totalRedacted = 0;
@@ -963,7 +972,7 @@ export const createPrivacyGateway = ({
      */
     const placeText = analyses
       .filter((analysis) => !analysis.entities.some((entity) => entity.kind === ENTITY_KIND.ADDRESS))
-      .map((analysis) => analysis.message.content)
+      .map((analysis) => bookingViews[analyses.indexOf(analysis)])
       .join('\n');
     const places = [...new Set([...findKnownPlaces(placeText), ...findStreetMentions(placeText)])];
 
@@ -1030,27 +1039,54 @@ export const createPrivacyGateway = ({
 
     /*
      * Жалоба для триажа (planner/triage.js): реплики пользователя после
-     * редактуры, сокращённые до слов о самочувствии (complaintScrub.js). Реплика
-     * с диагнозом из особого списка наружу не уходит. Остаточное «имя»
+     * редактуры и обезличивания (deidentify.js): значения заменены метками, фраза
+     * цела. Реплика с диагнозом из особого списка или редким обстоятельством наружу не уходит. Остаточное «имя»
      * проверяется во всех репликах, а не только в последней: модели уходит
      * вся история. Поле неперечислимое — случайная сериализация контекста
      * (журнал, ответ) его не вытащит. Нужен ли триаж, решает pipeline.
      */
+    const triagePlaces = new Map();
+    const deidentifiedTurns = redactedTurns.slice(triageStart).map((turn) => deidentifyComplaint(turn.text, { places: triagePlaces }));
     const triage = Boolean(decision.triage)
       && redactedTurns.every((turn) => countResidualNameLike(turn.text, streetWords) <= POLICY.maxResidualNameLike)
       // По исходному тексту: «ВИЧ» заглавными редактура может принять за имя и вырезать.
-      && !analyses.some((analysis) => hasSensitiveCondition(analysis.message.content));
+      && !analyses.some((analysis) => hasSensitiveCondition(analysis.message.content))
+      && !deidentifiedTurns.some((turn) => turn.blocked);
     if (triage) {
       Object.defineProperty(context, 'triageTurns', {
-        // Только текущий запрос: прошлый («кардиолог» перед «болит колено») модель не должен сбивать.
-        value: Object.freeze(redactedTurns.slice(triageStart).map((turn) => minimizeComplaint(turn.text)).filter(Boolean)),
+        // Только текущий запрос: прошлый («кардиолог» перед «болит колено») модели не нужен.
+        value: Object.freeze(deidentifiedTurns.map((turn) => turn.text).filter(Boolean)),
         enumerable: false,
       });
+      // Метка места и её значение остаются на сервере: модель видит только метку.
+      Object.defineProperty(context, 'triagePlaces', { value: triagePlaces, enumerable: false });
       Object.defineProperty(context, 'triageTokens', {
         value: Object.freeze([...placeholders.map((item) => item.token), ...locationTokens]),
         enumerable: false,
       });
     }
+
+    /*
+     * Подсказка модели о роли фрагмента («с утра» — про симптом) может только снять условие:
+     * значения фильтров всегда берутся из текста пользователя правилами на этом сервере.
+     */
+    // Для представления запроса (understanding/frame.js): в журналы и наружу не идёт.
+    Object.defineProperty(context, 'turnInfo', {
+      enumerable: false,
+      value: { userTexts, perTurnSpecialties, named: analyses.map((analysis) => analysis.specialties), newRequestStart },
+    });
+    Object.defineProperty(context, 'withoutFragments', {
+      enumerable: false,
+      value: (fragments) => {
+        const merged = mergeBookingTurns(userTexts.map((text, index) => {
+          const view = bookingView(text, { blanks: fragments });
+          return { booking: { ...extractBookingConstraints(view), ...demoRefsOf(analyses[index]) }, constraints: extractConstraints(view) };
+        }));
+        for (const field of ['date', 'timeFrom', 'timeTo', 'evening', 'timeWindows', 'dayWindows', 'districts', 'excludeDistricts', 'preferDistricts', 'originPlace', 'originHint', 'originConfirmed', 'nearest']) {
+          if (field in merged) context.booking[field] = merged[field];
+        }
+      },
+    });
 
     if (decision.decision !== GATEWAY_DECISION.ALLOW_EXTERNAL) {
       return { ...decision, triage, request: null, requestId, sessionId: session, context };
