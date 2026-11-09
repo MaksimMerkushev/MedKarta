@@ -15,76 +15,18 @@
  * «дешевле всего среди демо-филиалов МедКарты», а не по городу.
  */
 
-import { normalizeSearchRequest } from '../../shared/demoSearch.js';
+import { normalizeLabRequest } from '../../shared/labSearch.js';
 import { distanceMeters } from '../routing/graph.js';
 import { resolveDays } from '../demo/search.js';
 import { addDays, moscowDay, moscowParts } from '../demo/time.js';
 import { LAB_WINDOW_DAYS } from './store.js';
 import { PREPARATION_NOTE } from './catalog.js';
 
-export const LAB_SORTS = Object.freeze(['total', 'distance', 'turnaround', 'soonest']);
-export const LAB_TIMES_OF_DAY = Object.freeze({ morning: ['06:00', '12:00'], afternoon: ['12:00', '17:00'], evening: ['17:00', '23:59'] });
-const CODE = /^[A-Z0-9_]{2,40}$/;
-const ID = /^[a-z0-9][a-z0-9-]{1,79}$/;
-const MAX_TESTS = 25;
+export { LAB_SORTS, LAB_TIMES_OF_DAY, normalizeLabRequest } from '../../shared/labSearch.js';
 const FASTING_UNTIL = '12:00';
 const SHOW_SLOTS = 4;
 const MAX_OPTIONS = 10;
 export const LAB_DISCLAIMER = 'Демонстрационные данные: лаборатории, цены, сроки и время вымышлены, запись в лабораторию не уходит.';
-
-const uniqueList = (list, valid, max) => (Array.isArray(list) ? [...new Set(list.filter((item) => typeof item === 'string' && valid(item)))].slice(0, max) : []);
-
-/**
- * Запрос подбора лаборатории. Корзина — коды из каталога; дата, время, точка
- * отправления и время в пути — как у подбора врача.
- */
-export const normalizeLabRequest = (raw = {}) => {
-  const input = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
-  const errors = [];
-  const tests = uniqueList(input.tests, (code) => CODE.test(code), MAX_TESTS);
-  if (Array.isArray(input.tests) && input.tests.length > MAX_TESTS) errors.push('too_many_tests');
-  const timeOfDay = Object.hasOwn(LAB_TIMES_OF_DAY, input.timeOfDay) ? input.timeOfDay : null;
-  const base = normalizeSearchRequest({
-    date: input.date,
-    timeFrom: input.timeFrom ?? (timeOfDay ? LAB_TIMES_OF_DAY[timeOfDay][0] : null),
-    timeTo: input.timeTo ?? (timeOfDay && timeOfDay !== 'evening' ? LAB_TIMES_OF_DAY[timeOfDay][1] : null),
-    evening: input.evening === true || timeOfDay === 'evening',
-    weekend: input.weekend === true,
-    workdays: input.workdays === true,
-    excludeWeekdays: input.excludeWeekdays,
-    excludeDates: input.excludeDates,
-    origin: input.origin,
-    originPlace: input.originPlace,
-    travel: input.travel,
-  });
-  errors.push(...base.errors.filter((code) => !['specialty'].includes(code)));
-  const maxTotalPrice = Number.isInteger(input.maxTotalPrice) && input.maxTotalPrice > 0 && input.maxTotalPrice <= 500_000 ? input.maxTotalPrice : null;
-  const maxTurnaroundHours = Number.isInteger(input.maxTurnaroundHours) && input.maxTurnaroundHours > 0 && input.maxTurnaroundHours <= 720 ? input.maxTurnaroundHours : null;
-  const sort = LAB_SORTS.includes(input.sort) ? input.sort : null;
-  return {
-    request: {
-      tests,
-      date: base.request.date,
-      timeFrom: base.request.timeFrom,
-      timeTo: base.request.timeTo,
-      evening: base.request.evening,
-      timeOfDay,
-      weekend: base.request.weekend,
-      workdays: base.request.workdays,
-      excludeWeekdays: base.request.excludeWeekdays,
-      excludeDates: base.request.excludeDates,
-      origin: base.request.origin,
-      originPlace: base.request.originPlace,
-      travel: base.request.travel,
-      maxTotalPrice,
-      maxTurnaroundHours,
-      sort,
-      labIds: uniqueList(input.labIds, (id) => ID.test(id), 6),
-      branchIds: uniqueList(input.branchIds, (id) => ID.test(id), 24),
-    },
-    errors,
-  };
-};
 
 /** Готовность для человека: «в день сдачи», «через 1 день», «через 5 дней». */
 export const describeTurnaround = (hours) => {
