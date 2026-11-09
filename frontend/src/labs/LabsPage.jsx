@@ -106,7 +106,7 @@ function Shell({ children, title, back = null, onMyBookings }) {
         </button>
       </header>
       <p className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-[12.5px] text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
-        <Info size={13} className="mr-1 inline" aria-hidden="true" />Демо-режим: лаборатории, цены, сроки и время вымышлены, запись никуда не уходит. Филиалы стоят около реальных мест Казани, адреса условные.
+        <Info size={13} className="mr-1 inline" aria-hidden="true" />Демо-режим: лаборатории, цены, сроки и время вымышлены, запись никуда не уходит. Филиалы стоят там, где в Казани действительно есть пункты сдачи анализов (OpenStreetMap), но сами лаборатории вымышлены; адрес — без номера дома.
       </p>
       <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
     </div>
