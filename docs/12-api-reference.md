@@ -13,7 +13,7 @@ charset=utf-8`); ответы API не кешируются (`Cache-Control: no-
 (ответы ассистента — локальный планировщик), граф дорог загружен. Длинные
 массивы сокращены (`…`), одноразовые токены заменены на `<holdToken>`,
 `<cancelToken>`, `<token>`. Врачи в примерах — **вымышленные демо-врачи**,
-в том числе в реальной клинике «Будь здоров» ([demo.md](demo.md)).
+в том числе в реальной клинике «Будь здоров» (`internal-docs/demo.md`).
 
 OpenAPI-спецификация не приводится: запросы `/api/chat` и `/api/booking/search`
 определяются функциями нормализации с десятками условных полей
@@ -77,7 +77,7 @@ OpenAPI-спецификация не приводится: запросы `/api
 Нужен действующий пропуск — cookie `mk_ai` (`Path=/api/chat`, час), который
 выдаёт `POST /api/account/assistant-pass` вошедшему пользователю без
 временного пароля; сессию `/api/chat` не читает, и в пропуске нет id
-аккаунта ([privacy/04-health-data.md](privacy/04-health-data.md)). Если в
+аккаунта (`internal-docs/privacy/04-health-data.md`). Если в
 настройках админ-панели выключено «Ассистент только после входа» (по
 умолчанию — из `CHAT_REQUIRES_ACCOUNT`), пропуск не нужен. Выключенный в
 настройках ассистент отвечает `503 assistant_disabled`, без пропуска —
@@ -286,7 +286,7 @@ Content-Type: application/json
 ## POST /api/events
 
 Пачка событий продуктовой аналитики из закрытого словаря
-([shared/analytics.js](../shared/analytics.js), [analytics.md](analytics.md)).
+([shared/analytics.js](../shared/analytics.js), `internal-docs/analytics.md`).
 
 **Тело** (до 8 КБ): `{"events":[…]}` (1–20 событий) или одно событие.
 Событие с любым лишним полем отбрасывается целиком. Сверх 1500 событий в
@@ -333,7 +333,7 @@ Content-Type: application/json
 
 Сессия — cookie `__Host-mk_sid` по HTTPS (`HttpOnly; Secure; SameSite=Lax;
 Path=/`, без `Domain`) или `mk_sid` по HTTP (разработка). Подробности —
-[accounts.md](accounts.md#сессии).
+`internal-docs/accounts.md`.
 
 | Метод и путь | Тело | Ответ | Лимит на адрес |
 |---|---|---|---|
@@ -447,7 +447,7 @@ Set-Cookie: __Host-mk_sid=<token>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-A
 ### Приглашения и ссылки для входа
 
 Логика — [invitations.js](../backend/accounts/invitations.js), устройство и
-гарантии — [accounts.md](accounts.md#приглашения-и-ссылки-для-входа). Токен
+гарантии — `internal-docs/accounts.md`. Токен
 ссылки (`/activate#token=…`, 43 символа base64url) передаётся только в теле
 `POST`. Все `POST` — с той же защитой от CSRF, что и вход (`application/json`,
 свой `Origin`).
@@ -535,7 +535,7 @@ Set-Cookie: __Host-mk_sid=<token>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-A
 ## Админ-панель: /api/admin/*
 
 Каждый маршрут проверяет разрешение роли на сервере (список и умолчания —
-[accounts.md](accounts.md#роли-и-разрешения)). Без сессии — `401`, без
+`internal-docs/accounts.md`). Без сессии — `401`, без
 `admin.access` или нужного разрешения — `403 forbidden`. **Второй фактор
 обязателен:** у сотрудника нет ни одного — `403 mfa_setup_required`, сессия
 без второго фактора — `403 mfa_required`. Критичные маршруты — ссылка для

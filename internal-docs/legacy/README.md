@@ -19,7 +19,7 @@ HSTS, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy` — жил
 и при следующем переезде набор не потеряется.
 
 Если статику отдаёт nginx, а не `backend/server.js`, заголовки для HTML
-обязан выставлять nginx — см. `docs/deployment.md`.
+обязан выставлять nginx — см. `internal-docs/deployment.md`.
 
 ## `old-system-prompt.js`
 

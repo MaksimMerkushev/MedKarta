@@ -32,7 +32,7 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
 > Важно: если `data/doctors.full.js` существует, он попадает в бандл и
 > скачивается браузером. Это публичные сведения со страниц учреждений, но
 > «закрытой» базу делает только отдельный API, которого нет
-> ([deployment.md](deployment.md)).
+> (`internal-docs/deployment.md`).
 
 ### Dev-режим
 
@@ -108,7 +108,7 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
 
 Текст поиска в адресе — сведения о здоровье («невролог после инсульта»),
 поэтому рекомендуемый формат журнала nginx пишет путь без строки запроса
-([deployment.md](deployment.md)).
+(`internal-docs/deployment.md`).
 
 ### localStorage и sessionStorage
 

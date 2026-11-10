@@ -102,7 +102,7 @@ const resolveStaticPath = (requestUrl) => {
  * Без сжатия main.js уходит целиком (3,7 МБ против ~0,3 МБ), и одно ядро
  * упирается в отдачу статики раньше, чем в API. Сжатый вариант считается один
  * раз и живёт в памяти, пока файл не изменился. В продакшене статику отдаёт
- * nginx (gzip, см. docs/deployment.md); это запасной путь.
+ * nginx (gzip, см. internal-docs/deployment.md); это запасной путь.
  */
 const COMPRESSIBLE = new Set(['.html', '.js', '.css', '.json', '.svg', '.webmanifest']);
 const MAX_GZIP_SOURCE_BYTES = 8 * 1024 * 1024;

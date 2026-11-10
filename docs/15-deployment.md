@@ -2,7 +2,7 @@
 
 Пошаговая инструкция: локальный запуск, сервер и публикация документации.
 Полные конфигурации nginx и systemd с пояснениями — в
-[deployment.md](deployment.md); здесь — порядок действий и проверки. Все
+`internal-docs/deployment.md`; здесь — порядок действий и проверки. Все
 адреса и секреты ниже — заглушки.
 
 ## Требования
@@ -49,7 +49,7 @@ DEMO_DATA=on DEMO_NOW=2026-10-12T12:00:00+03:00 npm start
 ### Граф дорог
 
 Собирается один раз, на машине с сетью, **не** на боевом сервере
-([routing.md](routing.md)):
+(`internal-docs/routing.md`):
 
 ```bash
 npm run build:graph                 # Казань и все точки справочника
@@ -102,7 +102,7 @@ curl -s http://127.0.0.1:3001/api/config
    sudo -u medkarta mkdir -p var data/collected data/review
    ```
 
-5. **systemd:** unit-файл `medkarta.service` из [deployment.md](deployment.md)
+5. **systemd:** unit-файл `medkarta.service` из `internal-docs/deployment.md`
    (`NODE_ENV=production`, `HOST=127.0.0.1`, `PORT=3001`,
    `SERVE_STATIC=off`, `TRUST_PROXY=1`, `Restart=always`, `MemoryMax=1200M`,
    песочница `ProtectSystem=strict` с `ReadWritePaths` для `var/` и каталогов
@@ -114,7 +114,7 @@ curl -s http://127.0.0.1:3001/api/config
    ```
 
 6. **nginx и HTTPS:** сертификат Let's Encrypt (`certbot --nginx`), сниппет
-   заголовков безопасности и конфигурация сайта из [deployment.md](deployment.md):
+   заголовков безопасности и конфигурация сайта из `internal-docs/deployment.md`:
    статика из `dist/`, `location /api/` с `proxy_pass` и `limit_req`,
    журнал **без строки запроса** и без тел.
 7. **Межсетевой экран:** открыть только SSH, 80 и 443; порт 3001 снаружи
@@ -210,15 +210,15 @@ cd /srv/medkarta/app && sudo -u medkarta git pull && sudo -u medkarta npm ci \
 3. **Окружение** (`/srv/medkarta/app/.env`): `PUBLIC_BASE_URL=https://<домен>`,
    `MFA_SECRET_KEY=` (`openssl rand -base64 32`; копию — в менеджер паролей,
    отдельно от базы), `REGISTRATION_MODE=invite_only`. Почта — по желанию:
-   [mail-setup.md](mail-setup.md).
+   `internal-docs/mail-setup.md`.
 4. **nginx:** обновить сниппет заголовков (`Permissions-Policy` с ключами
    доступа) и добавить блок для страниц ссылок с `Referrer-Policy:
-   no-referrer` — [deployment.md](deployment.md). `nginx -t`, затем reload.
+   no-referrer` — `internal-docs/deployment.md`. `nginx -t`, затем reload.
 5. **Перезапуск** — миграция при открытии базы. Все сессии завершатся: каждый
    войдёт один раз заново; пароли и роли не меняются.
 6. **Суперадминистратор:** вход в `/admin` → «Включите двухфакторную
    защиту» → ключ доступа (и второй способ) → сохранить резервные коды —
-   [admin-security-runbook.md](admin-security-runbook.md).
+   `internal-docs/admin-security-runbook.md`.
 7. **Проверка:** `npm run accounts -- status` — схема 5, регистрация «только
    по приглашению», «Сотрудников без второго фактора: 0».
 
@@ -244,14 +244,14 @@ cd /srv/medkarta/app && sudo -u medkarta git pull && sudo -u medkarta npm ci \
    MFA завершатся при первом запросе).
 5. `npm run accounts -- status` — схема 6. Сотрудникам — предупредить, что
    перед ключевыми действиями панель будет спрашивать пароль и второй
-   фактор ([admin-security-runbook.md](admin-security-runbook.md)).
+   фактор (`internal-docs/admin-security-runbook.md`).
 
 Откат — прежний код и копия базы шага 1 (схема 5 не откроет базу схемы 6).
 
 Потеря доступа к админ-панели — `npm run accounts -- access-link --email …`
 (ссылка в терминал, если почта не настроена), `reset-password --email …`
 (то же и завершить все сессии) или `restore-admin --email …` на сервере
-([accounts.md](accounts.md#потеря-доступа)).
+(`internal-docs/accounts.md`).
 
 ### Персональные данные: документы, журнал согласий, обращения (схема 7)
 
@@ -259,7 +259,7 @@ cd /srv/medkarta/app && sudo -u medkarta git pull && sudo -u medkarta npm ci \
 регистрации и первой установке пароля, журнал согласий, «Мои данные» в
 профиле, «Обращения по ПДн» в админ-панели, пропуск к ассистенту без id
 аккаунта, сведения о здоровье — только локально. Подробности и что остаётся
-за оператором — [privacy/README.md](privacy/README.md). Порядок:
+за оператором — `internal-docs/privacy/README.md`. Порядок:
 
 1. Копия базы (`backup --encrypt --out /backup/accounts-before-v7.enc`, ключ
    `BACKUP_ENCRYPTION_KEY`); сервер сам сделает `medkarta.sqlite.before-v7-….bak`.
@@ -278,7 +278,7 @@ cd /srv/medkarta/app && sudo -u medkarta git pull && sudo -u medkarta npm ci \
    убрать: такой адрес теперь игнорируется (`token_vault.foreign_storage_blocked`).
 6. `npm run accounts -- status` — схема 7; `consents-verify` — цепочки целы.
 7. Сотрудникам с правом `privacy.requests` — порядок ответа на обращения
-   ([privacy/06-subject-requests.md](privacy/06-subject-requests.md)).
+   (`internal-docs/privacy/06-subject-requests.md`).
 
 Откат — прежний код и копия базы шага 1 (схема 6 не откроет базу схемы 7).
 Метки удаления (`erasures.jsonl`) после отката оставить: они нужны для
@@ -290,7 +290,7 @@ cd /srv/medkarta/app && sudo -u medkarta git pull && sudo -u medkarta npm ci \
 `data/collected/`, `var/analytics/`, `var/demo/booking.sqlite`,
 `var/accounts/erasures.jsonl` и **зашифрованная** копия базы аккаунтов
 (целостный снимок через `VACUUM INTO`, AES-256-GCM). Секреты из `.env` —
-отдельно от копий базы ([deployment.md](deployment.md)):
+отдельно от копий базы (`internal-docs/deployment.md`):
 
 ```bash
 sudo -u medkarta BACKUP_ENCRYPTION_KEY=… npm run accounts -- backup --encrypt --out /backup/accounts-$(date +%F).enc
@@ -316,7 +316,7 @@ sudo -u medkarta BACKUP_ENCRYPTION_KEY=… npm run accounts -- backup --encrypt 
 к модели (и только он) идёт через прокси `AI_PROXY_URL`: туннель HTTP CONNECT
 или SOCKS5, внутри — TLS до провайдера с проверкой сертификата. Проверка
 связи — `npm run ai:check`; подробности и замечания по стране прокси — в
-[deployment.md](deployment.md).
+`internal-docs/deployment.md`.
 
 ## Публикация документации (GitHub Pages)
 

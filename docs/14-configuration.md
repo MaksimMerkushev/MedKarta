@@ -51,7 +51,7 @@
 | `PRIVACY_OUTBOUND_MODE` | `structured` | `structured` или `hybrid` ([07-privacy.md](07-privacy.md)) | [gateway.js](../backend/privacy/gateway.js) |
 | `PRIVACY_TOKEN_SECRET` | случайный секрет процесса | ключ HMAC для Token Vault, не короче 16 символов | [tokenVault.js](../backend/storage/tokenVault.js) |
 | `PRIVACY_TOKEN_TTL_SECONDS` | `120` | время жизни соответствия метки | [tokenVault.js](../backend/storage/tokenVault.js) |
-| `TOKEN_VAULT_BACKEND` | `memory` | `upstash` (или `redis`) — Redis по REST. Адреса облачного Upstash (`*.upstash.io`) **не используются**: хранилище вне РФ (ч. 5 ст. 18 152-ФЗ) — сервер берёт память процесса и пишет в журнал `token_vault.foreign_storage_blocked` ([privacy/10](privacy/10-processors-and-localization.md)) | [tokenVault.js](../backend/storage/tokenVault.js) |
+| `TOKEN_VAULT_BACKEND` | `memory` | `upstash` (или `redis`) — Redis по REST. Адреса облачного Upstash (`*.upstash.io`) **не используются**: хранилище вне РФ (ч. 5 ст. 18 152-ФЗ) — сервер берёт память процесса и пишет в журнал `token_vault.foreign_storage_blocked` (privacy/10 (`internal-docs/privacy/10-processors-and-localization.md`)) | [tokenVault.js](../backend/storage/tokenVault.js) |
 | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | — | доступ к Upstash | [tokenVault.js](../backend/storage/tokenVault.js) |
 | `PRIVACY_CATALOG_FACILITIES` | включено | `off` — не загружать учреждения OSM в справочник ассистента | [catalog.js](../backend/privacy/catalog.js) |
 | `ALLOW_COARSE_ORIGIN` | выключено | `on` — принимать в `/api/chat` огрублённую точку (интерфейс её не шлёт) | [chat.js](../backend/api/chat.js) |
@@ -83,7 +83,7 @@
 | `ACCOUNTS` | включено | `off` — выключить аккаунты и админ-панель | [accountContext.js](../backend/api/accountContext.js) |
 | `ACCOUNTS_DB_PATH` | `var/accounts/medkarta.sqlite` | файл базы | [accountContext.js](../backend/api/accountContext.js) |
 | `OPERATOR_NOTIFIED` | выключено | `on` — оператор уведомил Роскомнадзор; без этого регистрация закрыта и при `REGISTRATION_MODE=open` | [registration.js](../backend/accounts/registration.js) |
-| `LEGAL_DRAFTS_ALLOWED` | выключено | `on` — открыть регистрацию, хотя в политике и соглашении остались метки `[ТРЕБУЕТСЯ ЗАПОЛНИТЬ ОПЕРАТОРОМ]`. **Только для тестового стенда и автотестов**: при `NODE_ENV=production` или `APP_ENV=production` не действует ([privacy/13](privacy/13-operator-checklist.md)) | [registration.js](../backend/accounts/registration.js) |
+| `LEGAL_DRAFTS_ALLOWED` | выключено | `on` — открыть регистрацию, хотя в политике и соглашении остались метки `[ТРЕБУЕТСЯ ЗАПОЛНИТЬ ОПЕРАТОРОМ]`. **Только для тестового стенда и автотестов**: при `NODE_ENV=production` или `APP_ENV=production` не действует (privacy/13 (`internal-docs/privacy/13-operator-checklist.md`)) | [registration.js](../backend/accounts/registration.js) |
 | `BACKUP_ENCRYPTION_KEY` | — | 32 байта (base64 или hex): ключ для `npm run accounts -- backup --encrypt` и `decrypt-backup` (AES-256-GCM). Храните **отдельно** от копий и от `MFA_SECRET_KEY`; нужен только там, где делают и восстанавливают копии | [backupCrypto.js](../backend/accounts/backupCrypto.js) |
 | `REGISTRATION_MODE` | `invite_only` | `open` — регистрация по email (нужна настроенная почта), `invite_only` — аккаунты только по приглашению; другое значение — `invite_only` | [registration.js](../backend/accounts/registration.js) |
 | `MFA_SECRET_KEY` | файл `var/accounts/secrets/mfa.key` | 32 байта (base64 или hex, `openssl rand -base64 32`): шифрование секретов приложений-аутентификаторов и HMAC резервных кодов; из него же выводится ключ писем со ссылками в очереди (письма переживают перезапуск). Без переменной ключ создаётся в файле (права 600) рядом с базой. **Храните копию отдельно от базы**; смена ключа делает существующие коды недействительными, а неотправленные письма со ссылками — неотправляемыми (`key_changed`) | [secrets.js](../backend/accounts/secrets.js) |
@@ -111,7 +111,7 @@
 видит администратор, который её выдал; регистрация и «Нет пароля или забыли
 его?» выключены. Фиктивной отправки нет. Что не так с настройками — раздел
 «Система» админ-панели и `npm run accounts -- status`. Подробно, с SPF, DKIM
-и DMARC, — [mail-setup.md](mail-setup.md).
+и DMARC, — `internal-docs/mail-setup.md`.
 
 | Переменная | По умолчанию | Что делает | Где |
 |---|---|---|---|
@@ -127,7 +127,7 @@
 | `MAIL_MIN_INTERVAL_MS` | `1000` для SMTP | пауза между письмами (Postbox — не больше одного в секунду) | [outbox.js](../backend/mail/outbox.js) |
 | `MAIL_TEST_RECIPIENTS` | — | только для `npm run mail:check -- --send`: свои адреса через запятую | [mail-check.mjs](../scripts/mail-check.mjs) |
 
-Настройка Yandex Cloud Postbox и проверка — [mail-setup.md](mail-setup.md).
+Настройка Yandex Cloud Postbox и проверка — `internal-docs/mail-setup.md`.
 Сертификат почтового сервера проверяется всегда (TLS не ниже 1.2); вход (AUTH) без TLS
 запрещён. Пароль SMTP — секрет: только в `.env` или в окружении сервиса, не
 в git и не в админ-панели.
@@ -166,9 +166,9 @@
 | `npm run test:hybrid` | то же при `PRIVACY_OUTBOUND_MODE=hybrid` |
 | `npm run test:security` | оба прогона подряд |
 | `npm run test:e2e` | сквозные проверки в Chromium: админ-панель ([e2e-admin.mjs](../scripts/e2e-admin.mjs)) и вход с приглашениями ([e2e-auth.mjs](../scripts/e2e-auth.mjs)); нужны `dist/` и Playwright |
-| `npm run accounts -- <команда>` | суперадминистратор, тестовые пользователи, сброс пароля, восстановление доступа, резервная копия ([accounts.md](accounts.md#первый-запуск)) |
+| `npm run accounts -- <команда>` | суперадминистратор, тестовые пользователи, сброс пароля, восстановление доступа, резервная копия (`internal-docs/accounts.md`) |
 | `npm run lint`, `npm run lint:fix` | ESLint |
-| `npm run eval:privacy` | проверка обезличивания на размеченном наборе ([privacy-evaluation.md](privacy-evaluation.md)) |
+| `npm run eval:privacy` | проверка обезличивания на размеченном наборе (`internal-docs/privacy-evaluation.md`) |
 | `npm run ai:check`, `ai:bench`, `ai:trace` | проверка связи, замер и трассировка внешней модели |
 | `npm run build:graph` | сборка графа дорог из OpenStreetMap |
 | `npm run demo:generate`, `demo:reset` | генерация демо-набора; сброс демо-записей |

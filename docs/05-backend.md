@@ -26,7 +26,7 @@ npm-зависимостей в рантайме. Точка входа —
 Необработанное отклонение обещания пишется в журнал; необработанное
 исключение — запись `process.uncaught_exception` и выход с кодом 1 в расчёте
 на перезапуск менеджером процессов (`Restart=always` в unit-файле
-[deployment.md](deployment.md)).
+`internal-docs/deployment.md`).
 
 ### Таймауты и соединения
 
@@ -181,5 +181,5 @@ N-е значение с конца `X-Forwarded-For`. IPv6 считается �
 | Privacy Gateway и Token Vault | [07-privacy.md](07-privacy.md) |
 | Движок маршрутизации | [09-routing-engine.md](09-routing-engine.md) |
 | Строгий подбор, слой коннекторов записи ([booking/](../backend/booking)) и хранилище записи | [11-demo-booking.md](11-demo-booking.md) |
-| Аккаунты, роли, админ-панель | [accounts.md](accounts.md) |
-| Аналитика | [analytics.md](analytics.md), [17-performance-and-observability.md](17-performance-and-observability.md) |
+| Аккаунты, роли, админ-панель | `internal-docs/accounts.md` |
+| Аналитика | `internal-docs/analytics.md`, [17-performance-and-observability.md](17-performance-and-observability.md) |

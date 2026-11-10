@@ -3,7 +3,7 @@
 - **Статус:** принято
 - **Дата:** 2026-09-21
 - **Контекст проекта:** «МедКарта Казань», ИИ-навигатор по врачам и клиникам
-- **Связанные документы:** [`docs/privacy-architecture.md`](../privacy-architecture.md), `SECURITY.md`
+- **Связанные документы:** `internal-docs/privacy-architecture.md`, `SECURITY.md`
 
 ## Контекст
 

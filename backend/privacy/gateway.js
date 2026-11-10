@@ -327,7 +327,7 @@ const crossTurnEntities = (contents) => {
  *   hybrid     — слова пользователя уходят, если все они из закрытого словаря,
  *                иначе то же описание. Модель видит формулировку, но словарь
  *                пропускает совпадения вроде «Жене» (жена / Женя).
- * Цифры обоих режимов на размеченном наборе — docs/privacy-evaluation.md.
+ * Цифры обоих режимов на размеченном наборе — internal-docs/privacy-evaluation.md.
  */
 export const OUTBOUND_MODES = Object.freeze(['structured', 'hybrid']);
 const outboundModeFromEnv = () => (OUTBOUND_MODES.includes(process.env.PRIVACY_OUTBOUND_MODE) ? process.env.PRIVACY_OUTBOUND_MODE : 'structured');

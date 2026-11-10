@@ -38,7 +38,7 @@ grep -R "sk-" dist/ || echo "Секретов в сборке нет"
 
 ## 2. Архитектура обращения к модели
 
-Полное описание — [`docs/privacy-architecture.md`](docs/privacy-architecture.md),
+Полное описание — [`internal-docs/privacy-architecture.md`](internal-docs/privacy-architecture.md),
 решение и отвергнутые варианты — [ADR 001](docs/adr/001-external-llm-privacy-boundary.md).
 
 ```
@@ -74,11 +74,11 @@ grep -R "sk-" dist/ || echo "Секретов в сборке нет"
 По умолчанию (`PRIVACY_OUTBOUND_MODE=structured`) в запросе нет ни одного
 слова пользователя — только описание из перечислимых значений и меток.
 Проверка на размеченном наборе (`npm run eval:privacy`,
-[`docs/privacy-evaluation.md`](docs/privacy-evaluation.md)): 0 утечек на
+[`internal-docs/privacy-evaluation.md`](internal-docs/privacy-evaluation.md)): 0 утечек на
 14 728 примерах с персональными данными; её десятая часть входит в
 `npm test`. `npm run test:security` прогоняет все тесты в обоих режимах.
 
-**Личный кабинет** (`docs/accounts.md`) хранит email, имя, хэш пароля
+**Личный кабинет** (`internal-docs/accounts.md`) хранит email, имя, хэш пароля
 (scrypt), факторы входа (секреты TOTP — зашифрованы), id программы ДМС и
 избранное — в SQLite на сервере. Сессия — cookie `__Host-mk_sid`
 (`HttpOnly; Secure; SameSite=Lax`), в базе только SHA-256 от токена.
@@ -87,7 +87,7 @@ grep -R "sk-" dist/ || echo "Секретов в сборке нет"
 обязателен сотрудникам. С ассистентом кабинет не связан: в `/api/chat` ничего
 из него не уходит. Регистрация по email по умолчанию выключена
 (`REGISTRATION_MODE=invite_only`) до юридической подготовки (152-ФЗ). Модель
-угроз — `docs/auth-threat-model.md`.
+угроз — `internal-docs/auth-threat-model.md`.
 
 Что делает функция `backend/api/chat.js`:
 
@@ -159,7 +159,7 @@ XSS в этой части не возникает: весь текст моде
 ## 4. Заголовки
 
 Выставляются в `backend/http/securityHeaders.js` на каждом ответе сервера;
-если статику отдаёт nginx — сниппетом из `docs/deployment.md`:
+если статику отдаёт nginx — сниппетом из `internal-docs/deployment.md`:
 
 - `Content-Security-Policy` — `default-src 'self'`, единственный внешний
   хост — тайлы `*.tile.openstreetmap.org` в `img-src`; `connect-src 'self'`;
@@ -183,7 +183,7 @@ XSS в этой части не возникает: весь текст моде
   Внешней модели они не передаются, в журнал сервера не пишутся. Расстояние
   по прямой и порядок топ-3 считаются в браузере.
 - Маршруты строит собственный движок (`backend/routing`, см.
-  `docs/routing.md`): координаты не покидают доверенный контур. Прежнее
+  `internal-docs/routing.md`): координаты не покидают доверенный контур. Прежнее
   обращение к публичному OSRM убрано, вместе с ним из `connect-src`
   исчез последний сторонний хост.
 - Остались тайлы OpenStreetMap: по запросу тайла видно лишь то, какой
@@ -194,7 +194,7 @@ XSS в этой части не возникает: весь текст моде
   повреждённые данные заменяются значением по умолчанию.
 - Текст поиска отражается в адресе страницы (`?q=`), чтобы ссылкой можно
   было поделиться. Поэтому журнал nginx пишется без строки запроса
-  (`log_format` в `docs/deployment.md`).
+  (`log_format` в `internal-docs/deployment.md`).
 - Персональных данных пациентов приложение не собирает и не хранит.
 - Текст запроса к ИИ проходит Privacy Gateway до любого обращения к внешней
   модели: ФИО, телефоны, email, СНИЛС, ОМС, паспортные данные, координаты,
@@ -250,7 +250,7 @@ XSS в этой части не возникает: весь текст моде
    если reverse proxy пишет тела запросов, а Sentry или APM подключён
    с автоматическим захватом body. Это настраивается вне кода.
 8. **Юридическая проверка.** Раздел 10 в
-   [`docs/privacy-architecture.md`](docs/privacy-architecture.md) — список
+   [`internal-docs/privacy-architecture.md`](internal-docs/privacy-architecture.md) — список
    вопросов по 152-ФЗ, на которые код ответить не может.
 9. **Ошибки ESLint в `frontend/src/`** — закрыто: на коммите `d9c0de6`
    `npm run lint` проходит без ошибок и предупреждений (проверено 15.10.2026).
@@ -258,7 +258,7 @@ XSS в этой части не возникает: весь текст моде
     dev-сервер с `--host` отдавал файлы вне разрешённых каталогов. На
     `d9c0de6` в `package-lock.json` по-прежнему 8.0.0.
 11. **Свой поставщик тайлов карты** вместо `tile.openstreetmap.org`
-    (правила OSM, см. `docs/deployment.md`).
+    (правила OSM, см. `internal-docs/deployment.md`).
 12. **Политика обработки персональных данных** в интерфейсе — до того, как
     появится запись к врачу с именем и телефоном.
 
