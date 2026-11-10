@@ -19,7 +19,7 @@ import { normalizeLabRequest } from '../../shared/labSearch.js';
 import { distanceMeters } from '../routing/graph.js';
 import { resolveDays } from '../demo/search.js';
 import { addDays, moscowDay, moscowParts } from '../demo/time.js';
-import { LAB_WINDOW_DAYS } from './store.js';
+import { LAB_WINDOW_DAYS, normalizeLabText } from './store.js';
 import { PREPARATION_NOTE } from './catalog.js';
 
 export { LAB_SORTS, LAB_TIMES_OF_DAY, normalizeLabRequest } from '../../shared/labSearch.js';
@@ -28,14 +28,56 @@ const SHOW_SLOTS = 4;
 const MAX_OPTIONS = 10;
 export const LAB_DISCLAIMER = 'Демонстрационные данные: лаборатории, цены, сроки и время вымышлены, запись в лабораторию не уходит.';
 
-/** Готовность для человека: «в день сдачи», «через 1 день», «через 5 дней». */
+/*
+ * Готовность для человека: «в день сдачи», «через 1 день», «через 5 дней».
+ * Срок — в календарных днях от дня сдачи. Считаем, что сдали около 9:00, а
+ * результаты выдают до 20:00: 30 часов — это завтра днём («через 1 день»), а не
+ * «через 2 дня», как дало бы деление с округлением вверх.
+ */
 export const describeTurnaround = (hours) => {
   if (!Number.isFinite(hours) || hours <= 0) return null;
-  if (hours <= 10) return 'в день сдачи';
-  const days = Math.ceil(hours / 24);
+  const ready = 9 + hours;
+  const days = Math.floor(ready / 24) + (ready % 24 > 20 ? 1 : 0);
+  if (days === 0) return 'в день сдачи';
   const tail = days % 100;
   const word = tail >= 11 && tail <= 14 ? 'дней' : days % 10 === 1 ? 'день' : days % 10 >= 2 && days % 10 <= 4 ? 'дня' : 'дней';
   return `через ${days} ${word}`;
+};
+
+/**
+ * Пересечения состава в корзине: исследование, которое уже входит в другое
+ * (АЛТ — в печёночные пробы, ОАК без формулы — в ОАК с формулой). Подбор
+ * ничего не убирает сам — направление важнее, — но предупреждает, что можно
+ * не платить дважды.
+ * @param {object[]} tests исследования корзины (с components)
+ * @param {{code: string, normalized: string}[]} synonyms индекс синонимов
+ */
+export const findLabOverlaps = (tests, synonyms) => {
+  const codeOf = new Map(synonyms.map((item) => [item.normalized, item.code]));
+  const overlaps = [];
+  for (const panel of tests) {
+    if (!panel?.components?.length) continue;
+    const inside = new Set(panel.components.map((name) => codeOf.get(normalizeLabText(name))).filter(Boolean));
+    for (const test of tests) {
+      if (!test || test.code === panel.code || overlaps.some((item) => item.code === test.code)) continue;
+      const contained = inside.has(test.code) || (test.components?.length > 0 && test.components.every((name) => panel.components.includes(name)));
+      if (contained) overlaps.push({ code: test.code, name: test.name, insideCode: panel.code, insideName: panel.name });
+    }
+  }
+  return overlaps;
+};
+
+/** «АЛТ и АСТ уже входят в «Печёночные пробы» — …»: одна фраза на каждое большое исследование. */
+export const describeLabOverlaps = (overlaps, nameOf = (code, name) => name) => {
+  const groups = new Map();
+  for (const item of overlaps) {
+    if (!groups.has(item.insideCode)) groups.set(item.insideCode, { inside: nameOf(item.insideCode, item.insideName), names: [] });
+    groups.get(item.insideCode).names.push(nameOf(item.code, item.name));
+  }
+  return [...groups.values()].map(({ inside, names }) => {
+    const list = names.length > 1 ? `${names.slice(0, -1).join(', ')} и ${names.at(-1)}` : names[0];
+    return `${list} уже ${names.length > 1 ? 'входят' : 'входит'} в «${inside}» — если врач не назначил ${names.length > 1 ? 'их' : 'это исследование'} отдельно, можно убрать из списка и не платить дважды.`;
+  });
 };
 
 /**
@@ -195,7 +237,8 @@ export const createLabQuote = ({ store, getEngine = async () => null, now = () =
       ...(entry.missing ? { missing: entry.missing } : {}),
     });
 
-    const notes = [];
+    const overlaps = findLabOverlaps(tests, store.synonymIndex());
+    const notes = [...describeLabOverlaps(overlaps)];
     if (fasting) notes.push(fastingConflict
       ? `${tests.filter((test) => test.fasting).map((test) => test.name).join(', ')} ${tests.filter((test) => test.fasting).length > 1 ? 'сдаются' : 'сдаётся'} натощак — вечером это обычно невозможно. Посмотрите утреннее время.`
       : 'В корзине есть анализы натощак — показываю время до 12:00.');
@@ -219,6 +262,7 @@ export const createLabQuote = ({ store, getEngine = async () => null, now = () =
       cheapestComplete,
       blockedBy: status === 'empty' ? blockedBy(funnel, request, dateAsked || timeAsked) : null,
       notes,
+      overlaps,
       comparisonScope: `Сравнение среди ${funnel.branches} демо-филиалов МедКарты — не по всему городу.`,
       disclaimer: LAB_DISCLAIMER,
       generatedAt: new Date(at).toISOString(),

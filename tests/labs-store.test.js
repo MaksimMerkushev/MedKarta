@@ -77,6 +77,24 @@ describe('Лаборатории: исходные данные', { skip: !Datab
     }
   });
 
+  it('процедура взятия есть только для биоматериала, анализы на который делает филиал; дешевле всех — разные сети', () => {
+    const seed = buildLabSeed();
+    const bio = new Map(TESTS.map((test) => [test.code, test.biomaterial]));
+    for (const branch of seed.branches) {
+      const kinds = new Set(seed.offerings.filter((item) => item.branchId === branch.id).map((item) => bio.get(item.testCode)));
+      const fees = seed.fees.filter((item) => item.branchId === branch.id);
+      assert.deepEqual(fees.map((item) => item.kind).sort(), [...kinds].sort(), branch.id);
+    }
+    const wins = new Map();
+    for (const test of TESTS) {
+      const offers = seed.offerings.filter((item) => item.testCode === test.code);
+      const min = Math.min(...offers.map((item) => item.price));
+      for (const lab of new Set(offers.filter((item) => item.price === min).map((item) => seed.branches.find((branch) => branch.id === item.branchId).labId))) wins.set(lab, (wins.get(lab) || 0) + 1);
+    }
+    assert.ok(wins.size >= 4, `дешевле всех только ${wins.size} сети`);
+    for (const [lab, count] of wins) assert.ok(count <= TESTS.length / 2, `${lab} дешевле всех в ${count} из ${TESTS.length}`);
+  });
+
   it('примеры бланков — синтетические и с пометкой «не для медицинских решений»', () => {
     assert.ok(DEMO_RESULTS.length >= 3);
     assert.ok(DEMO_RESULTS.every((item) => /не подходят для медицинских решений/u.test(item.disclaimer) && item.rows.every((row) => row.reference)));
@@ -319,6 +337,24 @@ describe('Лаборатории: подбор корзины', { skip: !Databas
     assert.ok(sameDay.options.length > 0 && sameDay.options.every((option) => option.turnaroundHours <= 10));
     assert.equal(describeTurnaround(6), 'в день сдачи');
     assert.equal(describeTurnaround(120), 'через 5 дней');
+    // Сдали утром — 30 часов значит завтра днём, а не «через 2 дня».
+    assert.equal(describeTurnaround(24), 'через 1 день');
+    assert.equal(describeTurnaround(30), 'через 1 день');
+    assert.equal(describeTurnaround(36), 'через 2 дня');
+    assert.equal(describeTurnaround(48), 'через 2 дня');
+    store.close();
+  });
+
+  it('пересечение состава: АЛТ и АСТ внутри печёночных проб, ОАК без формулы внутри ОАК с формулой — предупреждение, корзина не меняется', async () => {
+    const { store, quote } = setup();
+    const liver = await quote.quote({ tests: ['LIVER_PANEL', 'ALT', 'AST', 'TSH'] });
+    assert.deepEqual(liver.overlaps.map((item) => [item.code, item.insideCode]), [['ALT', 'LIVER_PANEL'], ['AST', 'LIVER_PANEL']]);
+    assert.match(liver.notes[0], /входят в «Печёночные пробы».*не платить дважды/u);
+    assert.equal(liver.options[0].lines.length, 4);
+    const cbc = await quote.quote({ tests: ['CBC', 'CBC_DIFF'] });
+    assert.deepEqual(cbc.overlaps.map((item) => [item.code, item.insideCode]), [['CBC', 'CBC_DIFF']]);
+    const plain = await quote.quote({ tests: ['IRON', 'TIBC', 'FERRITIN'] });
+    assert.deepEqual(plain.overlaps, []);
     store.close();
   });
 

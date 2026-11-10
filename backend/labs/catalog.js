@@ -18,7 +18,7 @@
 
 import { createRandom } from '../demo/random.js';
 
-export const LAB_CATALOG_VERSION = 2;
+export const LAB_CATALOG_VERSION = 3;
 
 export const CATEGORIES = Object.freeze([
   { id: 'clinical', name: 'Общеклинические исследования' },
@@ -125,7 +125,7 @@ export const TESTS = Object.freeze([
   { code: 'FOLATE', name: 'Фолиевая кислота в сыворотке', category: 'vitamins', biomaterial: 'venous_blood', price: 720, hours: 48, prep: 'fasting', fasting: true, synonyms: ['фолиевая кислота', 'фолаты', 'витамин B9', 'витамин В9'], unit: 'нг/мл' },
   { code: 'FERRITIN', name: 'Ферритин', category: 'vitamins', biomaterial: 'venous_blood', price: 620, hours: 24, prep: 'fasting', fasting: true, synonyms: ['ферритин'], unit: 'мкг/л', description: 'Белок, по которому врач оценивает запасы железа в организме.' },
   { code: 'IRON', name: 'Железо сыворотки', category: 'vitamins', biomaterial: 'venous_blood', price: 260, hours: 24, prep: 'fasting', fasting: true, synonyms: ['железо сыворотки', 'сывороточное железо', 'железо в сыворотке', 'железо сывороточное'], unit: 'мкмоль/л' },
-  { code: 'TIBC', name: 'Общая железосвязывающая способность сыворотки (ОЖСС)', category: 'vitamins', biomaterial: 'venous_blood', price: 320, hours: 24, prep: 'fasting', fasting: true, synonyms: ['ОЖСС', 'железосвязывающая способность', 'общая железосвязывающая способность'], unit: 'мкмоль/л' },
+  { code: 'TIBC', name: 'Общая железосвязывающая способность сыворотки (ОЖСС)', category: 'vitamins', biomaterial: 'venous_blood', price: 320, hours: 24, prep: 'fasting', fasting: true, synonyms: ['ОЖСС', 'железосвязывающая способность', 'общая железосвязывающая способность', 'железосвязывающая способность сыворотки'], unit: 'мкмоль/л' },
   { code: 'TRANSFERRIN', name: 'Трансферрин', category: 'vitamins', biomaterial: 'venous_blood', price: 480, hours: 24, prep: 'fasting', fasting: true, synonyms: ['трансферрин'], unit: 'г/л' },
   { code: 'ZINC', name: 'Цинк в сыворотке', category: 'vitamins', biomaterial: 'venous_blood', price: 480, hours: 72, prep: 'fasting', fasting: true, synonyms: ['цинк', 'цинк в крови'], unit: 'мкмоль/л' },
   // Гемостаз
@@ -182,14 +182,18 @@ export const AMBIGUOUS_TERMS = Object.freeze([
   { id: 'blood', pattern: 'сдать\\s+кровь|анализ\\p{L}*\\s+крови(?!\\s+на)|кровь\\s+из\\s+вены|кровь\\s+из\\s+пальца', options: [], question: 'Какое исследование нужно? Напишите название из направления, например «общий анализ крови» или «ферритин».' },
 ]);
 
-/* Вымышленные лаборатории. tier — ценовая категория (множитель цены). */
+/*
+ * Вымышленные лаборатории. tier — ценовая категория (множитель цены), strengths —
+ * категории, где сеть дешевле или дороже своего уровня: так дешевле всех в
+ * разных корзинах оказываются разные сети, как и в жизни.
+ */
 export const LABS = Object.freeze([
-  { id: 'lab-labtochka', name: 'ЛабТочка', tier: 0.88, hoursFactor: 1, sameDay: false, description: 'Демо-сеть пунктов забора у метро: короткая очередь, базовые анализы по доступной цене.', phone: '+7 (843) 000-01-01', fees: { venous_blood: 150, capillary_blood: 100, urine: 0, feces: 0, swab: 250 }, coverage: 0.84 },
-  { id: 'lab-probirka', name: 'Пробирка', tier: 1.0, hoursFactor: 1, sameDay: true, description: 'Демо-лаборатория с результатами общего анализа крови в день сдачи.', phone: '+7 (843) 000-02-02', fees: { venous_blood: 200, capillary_blood: 120, urine: 0, feces: 0, swab: 300 }, coverage: 0.95 },
-  { id: 'lab-mediana', name: 'Медиана', tier: 1.15, hoursFactor: 0.75, sameDay: true, description: 'Демо-лаборатория полного цикла: гормоны, витамины и посевы, быстрые сроки.', phone: '+7 (843) 000-03-03', fees: { venous_blood: 250, capillary_blood: 150, urine: 50, feces: 50, swab: 350 }, coverage: 1 },
-  { id: 'lab-eritro', name: 'Эритро', tier: 0.95, hoursFactor: 1.25, sameDay: false, description: 'Демо-сеть с невысокими ценами и сроками от одного рабочего дня.', phone: '+7 (843) 000-04-04', fees: { venous_blood: 180, capillary_blood: 100, urine: 0, feces: 0, swab: 280 }, coverage: 0.88 },
-  { id: 'lab-analitika24', name: 'Аналитика 24', tier: 1.05, hoursFactor: 1, sameDay: false, description: 'Демо-лаборатория с ранним открытием и работой в выходные.', phone: '+7 (843) 000-05-05', fees: { venous_blood: 190, capillary_blood: 110, urine: 0, feces: 0, swab: 300 }, coverage: 0.9 },
-  { id: 'lab-kristall', name: 'Кристалл-Лаб', tier: 1.22, hoursFactor: 0.9, sameDay: true, description: 'Демо-лаборатория премиум-класса: забор без очереди, выезд не предусмотрен.', phone: '+7 (843) 000-06-06', fees: { venous_blood: 300, capillary_blood: 180, urine: 60, feces: 60, swab: 400 }, coverage: 0.97 },
+  { id: 'lab-labtochka', name: 'ЛабТочка', tier: 0.88, hoursFactor: 1, sameDay: false, description: 'Демо-сеть пунктов забора у метро: короткая очередь, базовые анализы по доступной цене.', strengths: { clinical: 0.95, hormones: 1.14, vitamins: 1.16, immunology: 1.12, infections: 1.1 }, phone: '+7 (843) 000-01-01', fees: { venous_blood: 150, capillary_blood: 100, urine: 0, feces: 0, swab: 250 }, coverage: 0.84 },
+  { id: 'lab-probirka', name: 'Пробирка', tier: 1.0, hoursFactor: 1, sameDay: true, description: 'Демо-лаборатория с результатами общего анализа крови в день сдачи и недорогими гормонами.', strengths: { hormones: 0.82, coagulation: 0.9 }, phone: '+7 (843) 000-02-02', fees: { venous_blood: 200, capillary_blood: 120, urine: 0, feces: 0, swab: 300 }, coverage: 0.95 },
+  { id: 'lab-mediana', name: 'Медиана', tier: 1.15, hoursFactor: 0.75, sameDay: true, description: 'Демо-лаборатория полного цикла: гормоны, витамины и посевы, быстрые сроки.', strengths: { vitamins: 0.74, urine: 0.86 }, phone: '+7 (843) 000-03-03', fees: { venous_blood: 250, capillary_blood: 150, urine: 50, feces: 50, swab: 350 }, coverage: 1 },
+  { id: 'lab-eritro', name: 'Эритро', tier: 0.95, hoursFactor: 1.25, sameDay: false, description: 'Демо-сеть с недорогой биохимией; сроки выполнения немного дольше, чем у других.', strengths: { biochemistry: 0.84, coagulation: 0.9 }, phone: '+7 (843) 000-04-04', fees: { venous_blood: 180, capillary_blood: 100, urine: 0, feces: 0, swab: 280 }, coverage: 0.88 },
+  { id: 'lab-analitika24', name: 'Аналитика 24', tier: 1.05, hoursFactor: 1, sameDay: false, description: 'Демо-лаборатория с ранним открытием, работой в выходные и недорогими анализами на инфекции.', strengths: { infections: 0.8, feces: 0.84, immunology: 0.9 }, phone: '+7 (843) 000-05-05', fees: { venous_blood: 190, capillary_blood: 110, urine: 0, feces: 0, swab: 300 }, coverage: 0.9 },
+  { id: 'lab-kristall', name: 'Кристалл-Лаб', tier: 1.22, hoursFactor: 0.9, sameDay: true, description: 'Демо-лаборатория премиум-класса: забор без очереди, выезд не предусмотрен.', strengths: {}, phone: '+7 (843) 000-06-06', fees: { venous_blood: 300, capillary_blood: 180, urine: 60, feces: 60, swab: 400 }, coverage: 0.97 },
 ].map((lab) => Object.freeze(lab)));
 
 /*
@@ -266,24 +270,27 @@ export const buildLabSeed = ({ seed = 'medkarta-labs-v1', priceDate = '2026-11-0
       phone: lab.phone, hours: schedule.hours, collection: schedule.collection, slotMinutes: 10, slotCapacity: capacity,
       bookingModes: ['online', 'walk_in'], large,
     });
-    for (const [kind, price] of Object.entries(lab.fees)) {
-      if (kind === 'swab' && !large) continue;
-      fees.push({ branchId: id, kind, name: BIOMATERIALS[kind].fee, price });
-    }
+    const kinds = new Set();
     for (const test of TESTS) {
       if (LARGE_ONLY.has(test.code) && !large) continue;
       if (test.biomaterial === 'swab' && !large) continue;
       // Не все сети делают всё: доля покрытия задана у лаборатории, выбор детерминирован.
       const offered = createRandom(seed, `${labId}|cover|${test.code}`).next() < lab.coverage;
       if (!offered) continue;
-      const noise = 0.92 + createRandom(seed, `${labId}|price|${test.code}`).next() * 0.16;
+      const noise = 0.9 + createRandom(seed, `${labId}|price|${test.code}`).next() * 0.2;
+      const strength = lab.strengths[test.category] ?? 1;
       // Филиал в центре у премиальной сети — дороже на 5 %.
       const local = id === 'lab-kristall-vishnevskogo' ? 1.05 : 1;
-      const price = roundTo(test.price * lab.tier * noise * local, 10);
+      const price = roundTo(test.price * lab.tier * strength * noise * local, 10);
+      kinds.add(test.biomaterial);
       let hours = Math.round(test.hours * lab.hoursFactor);
       if (lab.sameDay && ['CBC_DIFF', 'CBC', 'ESR', 'GLUCOSE', 'CRP'].includes(test.code)) hours = 6;
       hours = Math.max(4, hours);
       offerings.push({ branchId: id, testCode: test.code, price, hours, available: true, conditions: test.requiresBooking ? 'Только по предварительной записи' : null, priceDate });
+    }
+    // Процедура — только там, где есть анализы на этот биоматериал: «взятие капиллярной крови» без таких анализов вводит в заблуждение.
+    for (const [kind, price] of Object.entries(lab.fees)) {
+      if (kinds.has(kind)) fees.push({ branchId: id, kind, name: BIOMATERIALS[kind].fee, price });
     }
   }
   return { labs, branches, fees, offerings };

@@ -18,6 +18,7 @@ import { sanitizeAiAction } from '../../shared/contract.js';
 import { validateLabParse } from '../planner/labParser.js';
 import { deidentifyComplaint, hasSensitiveCondition } from '../privacy/deidentify.js';
 import { PREPARATION_NOTE } from './catalog.js';
+import { describeLabOverlaps, findLabOverlaps } from './quote.js';
 import { createLabUnderstanding } from './understanding.js';
 
 /* Просьба о враче: «нужен эндокринолог», «запишите к терапевту», «к неврологу». Врач в роли «назначил» — не просьба. */
@@ -149,6 +150,8 @@ export const createLabAssistant = ({ getService, parser = null, logger = null, m
       if (added.length) parts.push(`Добавил в список: ${joinNames(added)}.`);
       if (removed.length) parts.push(`Убрал из списка: ${joinNames(removed)}.`);
       parts.push(`Подбираю лабораторию: ${summary.join(', ')}. Сравниваю полную стоимость визита — анализы и взятие биоматериала — только там, где можно сдать всё сразу.`);
+      const overlaps = findLabOverlaps(cart.map((test) => tests.get(test.code)), store.synonymIndex());
+      for (const sentence of describeLabOverlaps(overlaps, (code) => shortName(tests.get(code)))) parts.push(sentence);
       if (cart.some((test) => test.byModel)) parts.push(`Название «${analysis.unresolved.join('», «')}» сопоставил с каталогом: ${joinNames(cart.filter((test) => test.byModel).map((test) => shortName(tests.get(test.code))))}. Если в направлении другое — поправьте.`);
       const fasting = cartTests.filter((test) => test.fasting);
       if (fasting.length) {

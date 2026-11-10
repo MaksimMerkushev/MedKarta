@@ -73,6 +73,18 @@ describe('Лаборатории в ассистенте', { skip: !DatabaseSync
     assert.equal(validateLabParse('не json', { fragments: [], codes: [] }), null);
   });
 
+  it('АЛТ вместе с печёночными пробами — ассистент предупреждает, что АЛТ уже входит, и ничего не убирает сам', async () => {
+    const { action } = await run(['Нужно сдать печёночные пробы и АЛТ']);
+    assert.deepEqual(action.labs.tests.map((test) => test.code), ['LIVER_PANEL', 'ALT']);
+    assert.match(action.replyText, /АЛТ уже входит в «Печёночные пробы».*не платить дважды/u);
+  });
+
+  it('«железосвязывающая способность сыворотки» — ОЖСС целиком, без нераспознанного хвоста', async () => {
+    const { action, fragments } = await run(['Сдать железосвязывающую способность сыворотки']);
+    assert.deepEqual(action.labs.tests.map((test) => test.code), ['TIBC']);
+    assert.deepEqual(fragments, []);
+  });
+
   it('разбор устойчив к падежам и порядку: «общего анализа крови», «Т4 свободного»', () => {
     const tests = new Map(service.store.listTests().map((test) => [test.code, test]));
     const understanding = createLabUnderstanding({ synonyms: service.store.synonymIndex(), tests });
