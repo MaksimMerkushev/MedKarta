@@ -38,7 +38,7 @@ grep -R "sk-" dist/ || echo "Секретов в сборке нет"
 
 ## 2. Архитектура обращения к модели
 
-Полное описание — [`internal-docs/privacy-architecture.md`](internal-docs/privacy-architecture.md),
+Полное описание — `internal-docs/privacy-architecture.md`,
 решение и отвергнутые варианты — [ADR 001](docs/adr/001-external-llm-privacy-boundary.md).
 
 ```
@@ -74,7 +74,7 @@ grep -R "sk-" dist/ || echo "Секретов в сборке нет"
 По умолчанию (`PRIVACY_OUTBOUND_MODE=structured`) в запросе нет ни одного
 слова пользователя — только описание из перечислимых значений и меток.
 Проверка на размеченном наборе (`npm run eval:privacy`,
-[`internal-docs/privacy-evaluation.md`](internal-docs/privacy-evaluation.md)): 0 утечек на
+`internal-docs/privacy-evaluation.md`): 0 утечек на
 14 728 примерах с персональными данными; её десятая часть входит в
 `npm test`. `npm run test:security` прогоняет все тесты в обоих режимах.
 
@@ -250,7 +250,7 @@ XSS в этой части не возникает: весь текст моде
    если reverse proxy пишет тела запросов, а Sentry или APM подключён
    с автоматическим захватом body. Это настраивается вне кода.
 8. **Юридическая проверка.** Раздел 10 в
-   [`internal-docs/privacy-architecture.md`](internal-docs/privacy-architecture.md) — список
+   `internal-docs/privacy-architecture.md` — список
    вопросов по 152-ФЗ, на которые код ответить не может.
 9. **Ошибки ESLint в `frontend/src/`** — закрыто: на коммите `d9c0de6`
    `npm run lint` проходит без ошибок и предупреждений (проверено 15.10.2026).

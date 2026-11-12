@@ -174,7 +174,7 @@ flowchart LR
 | Token Vault | соответствия `@DOCTOR_A → id справочника`, ключ — HMAC от сессии и запроса, TTL | [07-privacy.md](07-privacy.md) |
 | Внешний планировщик | единственный исходящий вызов модели; принимает только `SanitizedPlannerRequest`; повторная проверка тела перед отправкой | [06-ai-assistant.md](06-ai-assistant.md) |
 | Локальный планировщик | детерминированный план по уже извлечённым структурам | [06-ai-assistant.md](06-ai-assistant.md) |
-| Validator и Policy Engine | строгая проверка JSON-плана; авторизация токенов в сессии, бюджет сложности | [06-ai-assistant.md](06-ai-assistant.md), [08-security.md](08-security.md) |
+| Validator и Policy Engine | строгая проверка JSON-плана; авторизация токенов в сессии, бюджет сложности | [06-ai-assistant.md](06-ai-assistant.md), `internal-docs/08-security.md` |
 | Executor и Result Builder | исполнение плана по справочнику, выбор ближайшего, шаблонный ответ | [06-ai-assistant.md](06-ai-assistant.md) |
 | chatBridge и строгий подбор | превращение понятых условий в запрос подбора; исполнение подбора по демо-набору | [11-demo-booking.md](11-demo-booking.md) |
 | Коннекторы записи | единый интерфейс к источнику слотов и записи (пока демо), кэш слотов для внешних МИС | [11-demo-booking.md](11-demo-booking.md) |
@@ -323,7 +323,7 @@ flowchart TB
 | Fail-closed | при сомнении — локальный план, а не отправка | [policies.js](../backend/privacy/policies.js), [outbound-leakage.test.js](../tests/outbound-leakage.test.js) |
 | Детерминированные условия | подбор исполняет код по разбору текста, модель выбирает только действие | [chatBridge.js](../backend/demo/chatBridge.js), [demo-scenarios.test.js](../tests/demo-scenarios.test.js) |
 | Безопасность в коде, а не в настройках хостинга | заголовки ставит сервер; лимиты — в процессе | [securityHeaders.js](../backend/http/securityHeaders.js), [boundary.test.js](../tests/boundary.test.js) |
-| Общий контракт фронтенда и сервера | `shared/` — единственное место общих правил; фронтенд и бэкенд не импортируют друг друга | проверено поиском по импортам при аудите; отдельного теста нет ([18-known-limitations.md](18-known-limitations.md)) |
+| Общий контракт фронтенда и сервера | `shared/` — единственное место общих правил; фронтенд и бэкенд не импортируют друг друга | проверено поиском по импортам при аудите; отдельного теста нет (`internal-docs/18-known-limitations.md`) |
 | Слабый сервер как ограничение | один поток разбора, бюджеты процессорного времени, плоские массивы в движке | [rateLimit.js](../backend/http/rateLimit.js), [astar.js](../backend/routing/astar.js) |
 
 Решения и рассмотренные альтернативы — в [adr/](adr/README.md).

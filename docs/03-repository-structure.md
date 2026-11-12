@@ -26,7 +26,7 @@
 
 `TECHNICAL_PASSPORT.md` описывает раннюю версию проекта (Vercel, прежняя
 структура каталогов) и не соответствует текущему коду — см.
-[18-known-limitations.md](18-known-limitations.md).
+`internal-docs/18-known-limitations.md`.
 
 ## backend/ — сервер
 

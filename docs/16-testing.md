@@ -89,7 +89,7 @@ Windows Hello, аппаратные ключи) не проверялись.
 и `DEMO_DATA=on`; пользователи синтетические (`qa.*@medkarta.test`), модель не
 подключена — ассистент работает локальным планировщиком (это его настоящий путь,
 когда модель недоступна). Найденное и исправленное —
-[18-known-limitations.md](18-known-limitations.md#qa-аудит-в-браузере-19102026).
+`internal-docs/18-known-limitations.md`.
 
 | Проверка | Результат |
 |---|---|
@@ -338,5 +338,5 @@ node --test tests/secure-auth-audit.test.js  # исправления аудит
 Синтаксис диаграмм проверялся рендером каждой диаграммы через
 `@mermaid-js/mermaid-cli` (Mermaid 11.14.0), разметка — `markdownlint-cli`
 с конфигурацией [docs/.markdownlint.jsonc](.markdownlint.jsonc). Результаты —
-в [18-known-limitations.md](18-known-limitations.md), раздел «Проверка
+в `internal-docs/18-known-limitations.md`, раздел «Проверка
 документации».

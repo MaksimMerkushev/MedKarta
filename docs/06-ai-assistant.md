@@ -171,7 +171,7 @@ flowchart TD
   не больше 50 записей на выборку (`limit` в
   [catalogRepository.js](../backend/executor/catalogRepository.js)); поля
   `maxCandidatesPerStep` и `maxCandidatesTotal` в `COMPLEXITY_BUDGET`
-  объявлены, но в коде не применяются ([18-known-limitations.md](18-known-limitations.md));
+  объявлены, но в коде не применяются (`internal-docs/18-known-limitations.md`);
 - токен разыменовывается в Token Vault **с ключом этой сессии и запроса**;
   не найден (выдуман, истёк, чужой) — отказ всего плана;
 - специальность должна существовать в справочнике;
@@ -358,4 +358,4 @@ flowchart TD
 - Качество плана внешней модели на описании вместо текста автоматическими
   тестами не измеряется: тесты и оценка обезличивания используют заглушку
   модели (`internal-docs/privacy-evaluation.md`).
-- Все ограничения и риски — [18-known-limitations.md](18-known-limitations.md).
+- Все ограничения и риски — `internal-docs/18-known-limitations.md`.

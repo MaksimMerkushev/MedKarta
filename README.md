@@ -106,7 +106,7 @@ npm run accounts -- bootstrap          # пароль вводится в тер
 npm run accounts -- seed-test-users    # только локально и на staging: ссылки-приглашения в терминал
 ```
 
-Подробно — [internal-docs/accounts.md](internal-docs/accounts.md).
+Подробно — `internal-docs/accounts.md`.
 
 ## Приватность
 
@@ -129,10 +129,10 @@ npm run accounts -- seed-test-users    # только локально и на s
   14 728 примерах с персональными данными автоматическая проверка не нашла
   ни одной утечки размеченных значений. Это результат по заданным критериям,
   а не доказательство полной безопасности: утечки «по смыслу» эта метрика не
-  измеряет ([методика](internal-docs/privacy-evaluation.md)).
+  измеряет (методика (`internal-docs/privacy-evaluation.md`)).
 - Персональные данные и 152-ФЗ: карта данных, основания, сроки, обращения
   субъектов, что сделано в коде и что остаётся за оператором —
-  [internal-docs/privacy/](internal-docs/privacy/README.md). Соответствие закону не заявляется:
+  internal-docs/privacy/ (`internal-docs/privacy/README.md`). Соответствие закону не заявляется:
   реквизиты оператора и местоположение сервера не заполнены, документы не
   прошли юридическую проверку.
 
@@ -143,9 +143,9 @@ npm run accounts -- seed-test-users    # только локально и на s
 открытых источниках нет, и приложение их не выдумывает: врачи, расписание,
 цены и программы ДМС демо-режима вымышлены и помечены «Демо».
 
-Запуск, настройка и устройство — в [docs/](docs/) и [internal-docs/](internal-docs/): [демо-режим](internal-docs/demo.md),
-[развёртывание](internal-docs/deployment.md), [приватность](internal-docs/privacy-architecture.md),
-[аккаунты и админ-панель](internal-docs/accounts.md), [маршруты](internal-docs/routing.md), [безопасность](SECURITY.md).
+Запуск, настройка и устройство — в [docs/](docs/); внутренняя документация (`internal-docs/`) хранится в отдельном приватном репозитории: демо-режим (`internal-docs/demo.md`),
+развёртывание (`internal-docs/deployment.md`), приватность (`internal-docs/privacy-architecture.md`),
+аккаунты и админ-панель (`internal-docs/accounts.md`), маршруты (`internal-docs/routing.md`), [безопасность](SECURITY.md).
 
 ## Техническая документация
 

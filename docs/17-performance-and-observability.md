@@ -106,7 +106,7 @@
 **Статус: Partially Implemented.** Метрики собираются в памяти процесса, но
 наружу не отдаются: у экземпляра по умолчанию нет приёмника (`sink`), а
 `snapshot()` в коде нигде не вызывается — эндпоинта метрик нет
-([18-known-limitations.md](18-known-limitations.md)).
+(`internal-docs/18-known-limitations.md`).
 
 ## История запросов
 

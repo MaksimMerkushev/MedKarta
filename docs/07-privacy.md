@@ -194,7 +194,7 @@ flowchart TD
 > В [policies.js](../backend/privacy/policies.js) есть поле
 > `POLICY.tokenTtlSeconds` со значением по умолчанию 900, но оно нигде не
 > используется: фактический TTL задаёт Token Vault (120 с). См.
-> [18-known-limitations.md](18-known-limitations.md).
+> `internal-docs/18-known-limitations.md`.
 
 ## Прочие каналы данных
 
@@ -270,4 +270,4 @@ flowchart TD
 | Провайдер модели | расположение серверов, хранение запросов и обучение на них определяются договором, а не кодом |
 | `hybrid` | известны утечки имён-слов («Жене») — режим не по умолчанию |
 
-Полный список — [18-known-limitations.md](18-known-limitations.md).
+Полный список — `internal-docs/18-known-limitations.md`.
