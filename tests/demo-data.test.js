@@ -86,6 +86,22 @@ describe('Демо-набор: объём', () => {
   });
 });
 
+describe('Демо-набор: где стоят вымышленные клиники', () => {
+  it('в доме на улице, не на месте настоящего учреждения с карты и не вплотную друг к другу', () => {
+    const meters = (a, b) => Math.hypot((a.lat - b.lat) * 111_320, (a.lng - b.lng) * 111_320 * Math.cos((a.lat * Math.PI) / 180));
+    const branches = catalog.clinics.filter((item) => !item.real).flatMap((clinic) => clinic.branches);
+    const points = [...new Map(branches.map((branch) => [`${branch.lat},${branch.lng}`, branch])).values()];
+    for (const branch of branches) {
+      assert.match(branch.address, /^Казань, [^,]*(улица|проспект|магистраль)[^,]*, демо-адрес \(номер дома не указан\)$/u, branch.address);
+      const nearest = Math.min(...kazanFacilities.map((item) => meters(item, branch)));
+      assert.ok(nearest >= 60, `${branch.id}: ближе 60 м к учреждению с карты (${Math.round(nearest)} м)`);
+    }
+    for (const point of points) {
+      for (const other of points) if (other !== point) assert.ok(meters(point, other) >= 300, `${point.id} и ${other.id} ближе 300 м`);
+    }
+  });
+});
+
 describe('Демо-набор: маркировка и отделение от реальных данных', () => {
   it('каждая запись явно демонстрационная', () => {
     assert.equal(catalog.meta.source, 'demo');
