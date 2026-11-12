@@ -39,8 +39,16 @@ describe('хранение записей гостя', () => {
     delete globalThis.localStorage;
   });
 
-  it('«не найдена» переживает запись и чтение, неизвестный статус становится «подтверждена»', () => {
-    writeMyBookings([booking({ status: 'NOT_FOUND' }), booking({ number: 'DEMO-261019-ZZ99Z', status: 'WHATEVER' })]);
-    assert.deepEqual(readMyBookings().map((item) => item.status), ['NOT_FOUND', 'CONFIRMED']);
+  it('«не найдена» переживает запись и чтение; неизвестный статус — «уточняется», а не «подтверждена»', () => {
+    // С записью через МИС «подтверждена» говорит только ответ МИС: неизвестное значение не повышается до CONFIRMED.
+    writeMyBookings([booking({ status: 'NOT_FOUND' }), booking({ number: 'DEMO-261019-ZZ99Z', status: 'WHATEVER' }), booking({ number: 'MK-261112-AB2CD', status: 'PENDING' })]);
+    assert.deepEqual(readMyBookings().map((item) => item.status), ['NOT_FOUND', 'PENDING', 'PENDING']);
+  });
+
+  it('старая запись без статуса — подтверждённая демо-запись; номер МИС (MK-…) сохраняется', () => {
+    const { status, ...withoutStatus } = booking({ number: 'DEMO-261019-OLD11' });
+    assert.ok(status !== undefined);
+    writeMyBookings([withoutStatus, booking({ number: 'MK-261112-XY9ZQ', status: 'CONFIRMED' })]);
+    assert.deepEqual(readMyBookings().map((item) => [item.number, item.status]), [['DEMO-261019-OLD11', 'CONFIRMED'], ['MK-261112-XY9ZQ', 'CONFIRMED']]);
   });
 });

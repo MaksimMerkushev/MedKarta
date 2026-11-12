@@ -253,7 +253,7 @@ describe('МИС: без удержания, без сверки по ключу
       const booking = await ctx.book(slot.id);
       assert.equal(booking.state, 'pending_reconciliation');
       assert.equal(booking.stateText, 'Статус уточняется');
-      assert.equal(booking.status, 'pending');
+      assert.equal(booking.status, 'PENDING');
       assert.equal(ctx.sim.state.appointments.size, 1);
       await assert.rejects(ctx.connector.cancel({ number: booking.number, cancelToken: booking.cancelToken }), { code: 'booking_pending' });
       assert.ok(ctx.ledger.recentEvents('sim-test').some((item) => item.code === 'manual_reconciliation_required'));

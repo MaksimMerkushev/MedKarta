@@ -128,5 +128,11 @@ export const STATE_TEXT = Object.freeze({
   completed: 'Приём состоялся',
 });
 
-/* Статус записи в общем виде (как у демо-записи: confirmed | cancelled). */
-export const publicStatus = (state) => (state === 'cancelled' ? 'cancelled' : state === 'confirmed' || state === 'completed' || state === 'cancel_pending' ? 'confirmed' : state === 'failed' ? 'failed' : 'pending');
+/*
+ * Статус записи в словаре демо-записи (CONFIRMED | CANCELLED), плюс PENDING —
+ * «уточняется» и FAILED — «не удалось». Интерфейс считает подтверждённой
+ * только CONFIRMED.
+ */
+export const publicStatus = (state) => (state === 'cancelled' ? 'CANCELLED'
+  : state === 'confirmed' || state === 'completed' || state === 'cancel_pending' ? 'CONFIRMED'
+    : state === 'failed' ? 'FAILED' : 'PENDING');

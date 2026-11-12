@@ -386,21 +386,31 @@ export default function BookingDialog({ target, planId = null, onClose, onBooked
                 <div className="mt-1.5"><CoverageLine coverage={coverage} /></div>
               </div>
               <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                {remaining > 0
-                  ? `Время удержано за вами ещё ${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, '0')}.`
-                  : 'Удержание истекло: запись пройдёт, только если время ещё свободно.'}
+                {hold.guaranteed === false
+                  // МИС не умеет удерживать время: не обещаем того, чего нет.
+                  ? 'Клиника не удерживает время заранее: перед записью проверим, что оно ещё свободно.'
+                  : remaining > 0
+                    ? `Время удержано за вами ещё ${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, '0')}.`
+                    : 'Удержание истекло: запись пройдёт, только если время ещё свободно.'}
               </p>
-              <p className="mt-1 text-[11px] leading-4 text-slate-400">
-                Это демонстрация: запись появится только в МедКарте. В клинику, страховую и МИС ничего не отправляется, персональные данные не нужны.
+              <p className="mt-1 text-[11px] leading-4 text-slate-400" data-testid="booking-disclaimer">
+                {hold.slot?.source === 'mis'
+                  ? 'Запись уйдёт в МИС клиники (сейчас — в симулятор МИС, это демонстрация). Подтверждённой она станет, только когда её подтвердит МИС.'
+                  : 'Это демонстрация: запись появится только в МедКарте. В клинику, страховую и МИС ничего не отправляется, персональные данные не нужны.'}
               </p>
             </div>
           )}
 
           {(step === 'done' || step === 'cancelled') && booking && (
             <div data-testid="booking-done">
-              {step === 'done' ? (
+              {step === 'done' && booking.status !== 'CONFIRMED' ? (
+                // Запись через МИС: подтверждение — только от клиники. «Уточняется» и «не удалось» — не «подтверждена».
+                <p className={`flex items-center gap-2 text-base font-bold ${booking.status === 'FAILED' ? 'text-red-700 dark:text-red-300' : 'text-amber-700 dark:text-amber-300'}`} data-testid="booking-unconfirmed">
+                  <XCircle size={20} aria-hidden="true" /> {booking.status === 'FAILED' ? 'Не удалось подтвердить запись' : 'Статус уточняется: клиника ещё не подтвердила запись'}
+                </p>
+              ) : step === 'done' ? (
                 <p className="flex items-center gap-2 text-base font-bold text-emerald-700 dark:text-emerald-300">
-                  <CheckCircle2 size={20} aria-hidden="true" /> Демонстрационная запись подтверждена
+                  <CheckCircle2 size={20} aria-hidden="true" /> {booking.demo === false ? 'Запись подтверждена клиникой' : 'Демонстрационная запись подтверждена'}
                 </p>
               ) : (
                 <p className="flex items-center gap-2 text-base font-bold text-slate-700 dark:text-slate-200">
@@ -419,7 +429,7 @@ export default function BookingDialog({ target, planId = null, onClose, onBooked
                 <dt className="text-slate-400">Услуга</dt>
                 <dd className="text-slate-800 dark:text-white">{booking.service.name}, {formatPrice(booking.price)}</dd>
                 <dt className="text-slate-400">Статус</dt>
-                <dd className="text-slate-800 dark:text-white" data-testid="booking-status">{booking.status === 'CONFIRMED' ? 'Подтверждена (демо)' : 'Отменена'}</dd>
+                <dd className="text-slate-800 dark:text-white" data-testid="booking-status">{booking.stateText ? `${booking.stateText}${booking.demo ? ' (демо)' : ''}` : booking.status === 'CONFIRMED' ? 'Подтверждена (демо)' : 'Отменена'}</dd>
               </dl>
               {booking.coverage && <div className="mt-2"><CoverageLine coverage={booking.coverage} /></div>}
               <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-[11px] leading-4 text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
@@ -444,9 +454,9 @@ export default function BookingDialog({ target, planId = null, onClose, onBooked
           )}
           {step === 'done' && (
             <>
-              <button type="button" onClick={cancel} disabled={busy} className="rounded-xl border border-red-200 px-3 py-2 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-950/40" data-testid="booking-cancel-button">
+              {booking.status === 'CONFIRMED' && <button type="button" onClick={cancel} disabled={busy} className="rounded-xl border border-red-200 px-3 py-2 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-950/40" data-testid="booking-cancel-button">
                 Отменить запись
-              </button>
+              </button>}
               <button type="button" onClick={() => onRoute?.(booking)} className="inline-flex items-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200" data-testid="booking-route-button">
                 <Navigation size={15} aria-hidden="true" /> Построить маршрут
               </button>
