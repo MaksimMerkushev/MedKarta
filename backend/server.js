@@ -24,7 +24,7 @@ import privacyHandler, { LEGAL_PREFIX, PRIVACY_PREFIX } from './api/privacy.js';
 import chatHandler from './api/chat.js';
 import { withChatAccess } from './api/chatAccess.js';
 import configHandler from './api/config.js';
-import { healthHandler } from './api/health.js';
+import { healthHandler, readyHandler } from './api/health.js';
 import demoBookingHandler, { BOOKING_PATHS } from './api/demoBooking.js';
 import labsHandler, { LABS_PREFIX } from './api/labs.js';
 import eventsHandler from './api/events.js';
@@ -216,6 +216,7 @@ const API_HANDLERS = new Map([
   ['/api/events', eventsHandler],
   ['/api/config', configHandler],
   ['/api/health', healthHandler],
+  ['/api/health/ready', readyHandler],
   // Личный кабинет: вход, программа ДМС, избранное (backend/api/account.js).
   ...ACCOUNT_PATHS.map((apiPath) => [apiPath, accountHandler]),
   // Приглашения, активация аккаунта и ссылки для смены пароля (backend/api/activation.js).

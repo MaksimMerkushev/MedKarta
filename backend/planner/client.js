@@ -11,6 +11,7 @@
  * уходят наружу, только если одновременно ошиблись Gateway и эта проверка.
  */
 
+import { aiHealth } from '../observability/aiHealth.js';
 import { aiTraceSink } from '../observability/aiTrace.js';
 import { isSanitizedPlannerRequest } from '../privacy/models.js';
 import { detectEntities } from '../privacy/detectors.js';
@@ -152,6 +153,14 @@ export const requestCompletion = async ({
 }) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // Исход вызова для раздела «Система» и проверки готовности: код и время, без текста.
+  const started = Date.now();
+  let recorded = false;
+  const outcome = (ok, code = null, usage = null) => {
+    if (recorded) return;
+    recorded = true;
+    aiHealth.record({ ok, code, ms: Date.now() - started, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens });
+  };
   // Локальная диагностика: тот же запрос и настоящий ответ, без ключа и заголовков авторизации.
   const sink = aiTraceSink();
   const wire = sink && /openrouter\.ai/u.test(String(url)) ? { ...body, usage: { include: true } } : body;
@@ -185,6 +194,7 @@ export const requestCompletion = async ({
       // Тело ошибки не логируется и не пересылается: провайдеры часто
       // возвращают в нём фрагмент запроса.
       logger?.event('planner.upstream_error', { status: response.status, provider });
+      outcome(false, `http_${response.status}`);
       // Непрочитанное тело держит сокет: после серии 429 копятся соединения.
       try {
         await response.body?.cancel();
@@ -203,30 +213,32 @@ export const requestCompletion = async ({
         : '';
 
     if (!raw.trim()) {
+      outcome(false, 'empty');
       throw new PlannerError('empty completion', PLANNER_ERROR.EMPTY);
     }
 
-    return {
-      raw: raw.trim(),
-      provider,
-      usage: {
-        promptTokens: payload?.usage?.prompt_tokens ?? null,
-        completionTokens: payload?.usage?.completion_tokens ?? null,
-      },
+    const usage = {
+      promptTokens: payload?.usage?.prompt_tokens ?? null,
+      completionTokens: payload?.usage?.completion_tokens ?? null,
     };
+    outcome(true, null, usage);
+    return { raw: raw.trim(), provider, usage };
   } catch (error) {
     if (exchange && !exchange.response) {
       exchange.error = error?.code || error?.name || 'error';
       sink(exchange);
     }
     if (error?.name === 'AbortError') {
+      outcome(false, 'timeout');
       throw new PlannerError('planner timeout', PLANNER_ERROR.TIMEOUT);
     }
     if (error instanceof PlannerError) {
+      outcome(false, String(error.code || 'upstream').toLowerCase());
       throw error;
     }
     // Код транспорта (proxy_auth, proxy_timeout, tls…) — без сообщения: в нём бывают адреса.
     const code = typeof error?.code === 'string' && /^[a-z_]{2,32}$/i.test(error.code) ? error.code : 'unknown';
+    outcome(false, code);
     logger?.event('planner.transport_error', { provider, code });
     throw new PlannerError('planner transport error', PLANNER_ERROR.UPSTREAM);
   } finally {

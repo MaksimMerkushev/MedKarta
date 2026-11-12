@@ -11,6 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { allowedHostsFromEnv } from '../http/request.js';
+import { aiHealth } from '../observability/aiHealth.js';
 import { metrics } from '../observability/metrics.js';
 import { requestStats } from '../observability/requestStats.js';
 
@@ -63,6 +64,33 @@ const fileInfo = (relative, label) => {
 };
 
 const status = (ok, detail, extra = {}) => ({ status: ok === null ? 'off' : ok ? 'ok' : 'error', detail, ...extra });
+
+/**
+ * Внешняя модель на деле: исходы вызовов за последний час (observability/aiHealth.js).
+ * «Настроена» без единого успешного вызова — не «работает».
+ */
+export const aiComponent = (env = process.env, health = aiHealth) => {
+  const configured = Boolean(env.OPENROUTER_API_KEY || env.AI_API_KEY);
+  if (!configured) return { key: 'ai', label: 'Внешняя модель', ...status(null, 'не настроена — ассистент работает на локальных правилах') };
+  const snap = health.snapshot();
+  const errors = Object.entries(snap.errors).map(([code, count]) => `${code} ×${count}`).join(', ');
+  const detail = snap.status === 'idle'
+    ? `за ${snap.windowMinutes} мин вызовов не было${snap.lastOkAt ? `; последний успешный — ${snap.lastOkAt}` : ''}`
+    : `за ${snap.windowMinutes} мин: ${snap.calls} вызовов, успешных ${snap.ok}${errors ? `; ошибки: ${errors}` : ''}${snap.p50Ms !== null ? `; медиана ${snap.p50Ms} мс` : ''}`;
+  return { key: 'ai', label: 'Внешняя модель', ...status(snap.status === 'idle' ? null : snap.status === 'ok', detail, { ai: snap }) };
+};
+
+/** Свежесть резервных копий: BACKUP_DIR/LATEST.json пишет npm run backup -- create. */
+export const backupComponent = (env = process.env, nowMs = Date.now()) => {
+  if (!env.BACKUP_DIR) return { key: 'backups', label: 'Резервные копии', ...status(null, 'BACKUP_DIR не задан — свежесть копий не отслеживается') };
+  try {
+    const latest = JSON.parse(fs.readFileSync(path.join(env.BACKUP_DIR, 'LATEST.json'), 'utf8'));
+    const hours = (nowMs - Date.parse(latest.createdAt)) / 3_600_000;
+    return { key: 'backups', label: 'Резервные копии', ...status(hours <= 26, `последняя — ${hours.toFixed(1)} ч назад`) };
+  } catch {
+    return { key: 'backups', label: 'Резервные копии', ...status(false, 'копий нет (LATEST.json не найден)') };
+  }
+};
 
 /**
  * Проверка имени сайта (ALLOWED_HOSTS). Без неё API отвечает на запросы с
@@ -121,8 +149,8 @@ export const collectComponentHealth = async () => {
     components.push({ key: 'routing', label: 'Маршрутизация (граф дорог)', ...status(false, 'файла графа нет') });
   }
 
-  const hasModel = Boolean(process.env.OPENROUTER_API_KEY || process.env.AI_API_KEY);
-  components.push({ key: 'planner', label: 'Планировщик ассистента', status: 'ok', detail: hasModel ? 'внешняя модель настроена' : 'только локальный планировщик' });
+  components.push(aiComponent());
+  components.push(backupComponent());
   components.push({ key: 'vault', label: 'Хранилище меток Token Vault', status: 'ok', detail: process.env.TOKEN_VAULT_BACKEND === 'upstash' || process.env.TOKEN_VAULT_BACKEND === 'redis' ? 'Upstash Redis' : 'память процесса' });
   components.push({ key: 'analytics', label: 'Журнал аналитики', ...status(process.env.ANALYTICS === 'off' ? null : true, process.env.ANALYTICS === 'off' ? 'выключен' : 'включён') });
   components.push(hostCheckComponent());
