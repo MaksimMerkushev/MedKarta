@@ -56,6 +56,33 @@ const DOCTOR_WORDS = /(?<!\p{L})(?:врач\p{L}*|доктор\p{L}*|специ�
  * @param {object} deps инъектируются, чтобы тесты подставляли фикстуру
  *   справочника и фальшивый планировщик без сети и реальной базы.
  */
+/*
+ * Объём разбора одного запроса. Разбор реплик синхронный: пока он идёт,
+ * Node не отвечает никому. Обычный диалог из 20 реплик — 1–2 тыс. символов,
+ * а 20 реплик по 1000 символов разбирались бы сотни миллисекунд. Поэтому в
+ * разбор идут последние реплики пользователя, пока их сумма не больше
+ * MAX_HISTORY_CHARS; самая свежая остаётся всегда (её длину и так ограничивает
+ * shared/contract.js). Реплики ассистента между оставленными сохраняются.
+ */
+export const MAX_HISTORY_CHARS = 6000;
+export const limitHistory = (messages, maxChars = MAX_HISTORY_CHARS) => {
+  if (!Array.isArray(messages)) return [];
+  let total = 0;
+  let start = messages.length;
+  let keptUser = 0;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === 'user') {
+      const length = String(message.content ?? '').length;
+      if (keptUser > 0 && total + length > maxChars) break;
+      total += length;
+      keptUser += 1;
+    }
+    start = index;
+  }
+  return start === 0 ? messages : messages.slice(start);
+};
+
 export const createPipeline = ({
   catalog,
   vault,
@@ -188,6 +215,7 @@ export const createPipeline = ({
       probe = null,
     }) {
       const started = Date.now();
+      messages = limitHistory(messages);
       /*
        * Оценка процессорного времени: только тяжёлые участки (разбор реплик,
        * исполнение плана), без ожидания модели и очереди. По ней chat.js
