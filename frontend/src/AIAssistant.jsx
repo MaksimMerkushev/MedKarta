@@ -9,6 +9,7 @@ import { analyzeSymptoms } from './services/ai';
 import { LIMITS } from '@shared/contract.js';
 import TopPicks from './TopPicks';
 import DemoOffers from './DemoOffers';
+import LabOffers from './labs/LabOffers';
 
 /*
  * Движение отвечает на действия: окно вырастает из кнопки ассистента (снизу
@@ -115,6 +116,7 @@ export default function AIAssistant({
   onRoutePick,
   onShowAllPicks,
   bookings = null,
+  labs = null,
   bookingOrigin = null,
   bookingPlanId = null,
   bookingsRefresh = 0,
@@ -298,6 +300,14 @@ export default function AIAssistant({
               onRoute={onRouteOption}
               onRequestOrigin={onRequestOrigin}
               onAnswer={isLoading ? null : sendText}
+            />
+          )}
+          {msg.role === 'assistant' && labs?.[msg.id] && (
+            <LabOffers
+              labs={labs[msg.id]}
+              origin={bookingOrigin}
+              compact={!isMobile}
+              autoScroll={msg.id === messages[messages.length - 1]?.id}
             />
           )}
           {msg.role === 'assistant' && !bookings?.[msg.id] && picks?.[msg.id] && (

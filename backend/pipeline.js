@@ -37,6 +37,9 @@ import { publicClinicsHidden } from './demo/flags.js';
 import { logger as defaultLogger } from './observability/safeLogger.js';
 import { metrics as defaultMetrics } from './observability/metrics.js';
 import { isExplicitRequest } from './understanding/turnRoles.js';
+import { createLabAssistant } from './labs/assistant.js';
+import { getDefaultLabService } from './labs/service.js';
+import { createExternalLabParser } from './planner/labParser.js';
 
 /** Причины решения шлюза, которые сами говорят о здоровье: в журнал — как «policy». */
 const HEALTH_REASONS = new Set([FAIL_CLOSED_REASON.EMERGENCY, FAIL_CLOSED_REASON.MEDICAL_TEXT, FAIL_CLOSED_REASON.LOW_CLASSIFIER_CONFIDENCE]);
@@ -67,6 +70,11 @@ export const createPipeline = ({
    * классификатора (как при недоступной модели).
    */
   triage = null,
+  /*
+   * Лаборатории (labs/assistant.js): анализы, корзина, подбор лаборатории.
+   * null — ассистент о лабораториях не знает (как и было до модуля).
+   */
+  labs = null,
   /*
    * Демо-запись: ответ на «нужен ЛОР завтра после 18:00» несёт запрос
    * строгого подбора (action.booking), который интерфейс исполняет через
@@ -223,6 +231,30 @@ export const createPipeline = ({
           action: buildEmergencyAction(gate.context?.classification?.emergency?.id),
           diagnostics: { requestId: gate.requestId, decision: gate.decision, planSource: 'none', cpuMs: cpuMs() },
         };
+      }
+
+      /*
+       * Анализы и лаборатории: разбор на сервере, модель — только для неизвестных
+       * названий. Если в реплике нет просьбы о враче, ответ готов здесь; если есть —
+       * лабораторная часть добавится к ответу о записи к врачу.
+       */
+      let labAnswer = null;
+      if (labs) {
+        try {
+          labAnswer = await labs.handle({ messages, takeExternalBudget });
+        } catch (error) {
+          logger.error('labs.assistant_failed', error);
+          labAnswer = null;
+        }
+        if (probe) probe.labs = labAnswer;
+        if (labAnswer && !labAnswer.withDoctor) {
+          metrics.increment('labs.assistant', { kind: 'lab' });
+          logger.event('pipeline.done', { request_id: gate.requestId, action: 'FIND_LAB', plan_source: 'labs', latency_ms: Date.now() - started });
+          return {
+            action: labAnswer.action,
+            diagnostics: { requestId: gate.requestId, decision: gate.decision, reason: gate.reason, planSource: 'labs', stops: 0, cpuMs: cpuMs() },
+          };
+        }
       }
 
       /*
@@ -482,6 +514,13 @@ export const createPipeline = ({
         latency_ms: Date.now() - started,
       });
 
+      // «Нужен эндокринолог и анализ ТТГ»: к записи к врачу — подбор лаборатории.
+      if (labAnswer?.withDoctor && labAnswer.action.labs) {
+        action.labs = labAnswer.action.labs;
+        action.replyText = `${action.replyText}\n\n${labAnswer.action.replyText}`;
+        metrics.increment('labs.assistant', { kind: 'with_doctor' });
+      }
+
       return {
         action,
         diagnostics: {
@@ -720,6 +759,13 @@ const buildDefaultPipeline = async () => {
   const planner = createExternalPlanner(upstream);
   // Тот же провайдер и ключ; модель для жалоб можно задать отдельно (AI_TRIAGE_MODEL).
   const triage = createExternalTriage({ ...upstream, model: process.env.AI_TRIAGE_MODEL || upstream.model });
+  // Лаборатории: каталог и подбор — на сервере; модель — только для неизвестных названий анализов.
+  const labs = createLabAssistant({
+    getService: getDefaultLabService,
+    parser: createExternalLabParser({ ...upstream, model: process.env.AI_LAB_MODEL || process.env.AI_TRIAGE_MODEL || upstream.model }),
+    logger: defaultLogger,
+    metrics: defaultMetrics,
+  });
 
   return createPipeline({
     catalog,
@@ -728,6 +774,7 @@ const buildDefaultPipeline = async () => {
     triage,
     routing: await createRoutingProviderFromEnv(),
     booking: { enabled: bookingModeFromEnv(), publicHidden: publicClinicsHidden(), now: () => demoNow() },
+    labs,
   });
 };
 

@@ -26,6 +26,7 @@ import { withChatAccess } from './api/chatAccess.js';
 import configHandler from './api/config.js';
 import { healthHandler } from './api/health.js';
 import demoBookingHandler, { BOOKING_PATHS } from './api/demoBooking.js';
+import labsHandler, { LABS_PREFIX } from './api/labs.js';
 import eventsHandler from './api/events.js';
 import routeHandler from './api/route.js';
 import travelTimesHandler from './api/travelTimes.js';
@@ -237,6 +238,8 @@ const apiPathOf = (url) => {
 const PREFIX_HANDLERS = [
   [ADMIN_PREFIX, adminHandler],
   [ME_PREFIX, meHandler],
+  // Лаборатории: каталог, подбор корзины, расписание, демо-запись (backend/api/labs.js).
+  [LABS_PREFIX, labsHandler],
   // Документы (публично) и права субъекта ПДн (api/privacy.js).
   [LEGAL_PREFIX, privacyHandler],
   [PRIVACY_PREFIX, privacyHandler],
