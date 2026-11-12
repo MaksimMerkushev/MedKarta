@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { allowedHostsFromEnv } from '../http/request.js';
 import { metrics } from '../observability/metrics.js';
 import { requestStats } from '../observability/requestStats.js';
 
@@ -63,6 +64,23 @@ const fileInfo = (relative, label) => {
 
 const status = (ok, detail, extra = {}) => ({ status: ok === null ? 'off' : ok ? 'ok' : 'error', detail, ...extra });
 
+/**
+ * Проверка имени сайта (ALLOWED_HOSTS). Без неё API отвечает на запросы с
+ * любым заголовком Host — в production это ошибка настройки, вне его —
+ * просто «выключено». Сами имена не показываются: только их число.
+ */
+export const hostCheckComponent = (env = process.env) => {
+  const hosts = allowedHostsFromEnv(env);
+  const production = env.NODE_ENV === 'production' || env.APP_ENV === 'production';
+  return {
+    key: 'hosts',
+    label: 'Проверка имени сайта (ALLOWED_HOSTS)',
+    ...(hosts.length > 0
+      ? status(true, `разрешено имён: ${hosts.length}`)
+      : status(production ? false : null, 'не задана: API отвечает на запросы с любым именем сайта — задайте ALLOWED_HOSTS')),
+  };
+};
+
 /** Компоненты для дашборда: быстро, без тяжёлых загрузок. */
 export const collectComponentHealth = async () => {
   const components = [];
@@ -107,6 +125,7 @@ export const collectComponentHealth = async () => {
   components.push({ key: 'planner', label: 'Планировщик ассистента', status: 'ok', detail: hasModel ? 'внешняя модель настроена' : 'только локальный планировщик' });
   components.push({ key: 'vault', label: 'Хранилище меток Token Vault', status: 'ok', detail: process.env.TOKEN_VAULT_BACKEND === 'upstash' || process.env.TOKEN_VAULT_BACKEND === 'redis' ? 'Upstash Redis' : 'память процесса' });
   components.push({ key: 'analytics', label: 'Журнал аналитики', ...status(process.env.ANALYTICS === 'off' ? null : true, process.env.ANALYTICS === 'off' ? 'выключен' : 'включён') });
+  components.push(hostCheckComponent());
 
   const requests = requestStats.snapshot();
   return {

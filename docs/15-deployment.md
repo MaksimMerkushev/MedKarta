@@ -92,8 +92,10 @@ curl -s http://127.0.0.1:3001/api/config
    ```
 
 2. **Секреты:** `cp .env.example .env`, заполнить, `chmod 600 .env`.
-   Обязательно — `PRIVACY_TOKEN_SECRET`; за nginx — `TRUST_PROXY=1`;
-   рекомендуется — `ALLOWED_HOSTS` ([14-configuration.md](14-configuration.md)).
+   Обязательно — `PRIVACY_TOKEN_SECRET` и `ALLOWED_HOSTS` (имена сайта, на
+   которые отвечает API; без него сервер в production пишет в журнал
+   `server.allowed_hosts_missing`, а раздел «Система» админ-панели показывает
+   ошибку); за nginx — `TRUST_PROXY=1` ([14-configuration.md](14-configuration.md)).
 3. **Данные вне git:** скопировать `data/graph/kazan.graph` и, при наличии,
    `data/doctors.full.js`.
 4. **Каталоги для записи:**

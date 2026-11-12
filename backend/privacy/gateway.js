@@ -22,7 +22,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { findTrigger, fixCommonTypos, isNegatedBefore, rewriteNegatedTimeBounds, ruStem } from './normalize.js';
-import { detectEntities, detectObfuscation, ENTITY_KIND, isKinshipWord } from './detectors.js';
+import { detectEntities, detectObfuscation, ENTITY_KIND, isKinshipWord, trailingWord } from './detectors.js';
 import { bookingView, expandCorrections } from '../understanding/turnRoles.js';
 import { deidentifyComplaint, hasSensitiveCondition } from './deidentify.js';
 import { classifySymptoms } from './symptoms.js';
@@ -890,9 +890,9 @@ export const createPrivacyGateway = ({
     const splitAcrossTurns = messages.some((message, index) => {
       const next = messages[index + 1];
       if (!next) return false;
-      const tail = String(message.content).match(/(\p{L}{2,})\s*$/u);
+      const tail = trailingWord(message.content);
       const head = String(next.content).match(/^\s*(\p{Ll}{2,})/u);
-      return Boolean(tail && head) && looksLikeSurname(tail[1] + head[1]);
+      return Boolean(tail && head) && looksLikeSurname(tail + head[1]);
     });
 
     /*

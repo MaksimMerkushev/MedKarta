@@ -21,7 +21,7 @@
 | `MAX_CONNECTIONS_PER_IP` | `32` | соединений с адреса (IPv6 — сеть /64), только при `TRUST_PROXY=0` | [server.js](../backend/server.js) |
 | `TRUST_PROXY` | `0` | число прокси перед сервером, целое 0–5; иное — отказ запуска | [rateLimit.js](../backend/http/rateLimit.js) |
 | `TRUSTED_PROXIES` | loopback | адреса прокси, которым верится `X-Forwarded-For` | [rateLimit.js](../backend/http/rateLimit.js) |
-| `ALLOWED_HOSTS` | — | список имён хоста через запятую; другие `Host` получают `403` (DNS rebinding) | [request.js](../backend/http/request.js), [vite.config.js](../vite.config.js) |
+| `ALLOWED_HOSTS` | — | список имён хоста через запятую; другие `Host` получают `403` (DNS rebinding). В production обязателен: без него — предупреждение `server.allowed_hosts_missing` при запуске и ошибка в разделе «Система» | [request.js](../backend/http/request.js), [vite.config.js](../vite.config.js) |
 | `ALLOWED_ORIGINS` | — | дополнительные доверенные `Origin` через запятую | [request.js](../backend/http/request.js) |
 | `CHAT_MAX_CONCURRENCY` | `1` | одновременных разборов запросов ассистента | [chat.js](../backend/api/chat.js) |
 

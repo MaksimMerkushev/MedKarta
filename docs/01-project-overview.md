@@ -98,9 +98,10 @@
 | Внешняя модель | OpenAI-совместимый `chat/completions` с `response_format: json_schema` | [planner/client.js](../backend/planner/client.js) |
 | Тесты и качество | `node:test`, ESLint 9 (flat config) | [package.json](../package.json), [eslint.config.js](../eslint.config.js) |
 
-Версии Node: `engines` — `^20.19.0 || >=22.12.0`; `.nvmrc` — `22`. Кабинет и
-демо-запись требуют `node:sqlite` без флага, то есть Node **22.13+**; на более
-старом Node они выключаются сами, остальное работает
+Версии Node: `engines` — `>=22.13.0`; `.nvmrc` — `22`. Кабинет и демо-запись
+требуют `node:sqlite` без флага, то есть Node **22.13+**. На более старом Node
+они выключаются сами, а вместе с кабинетом недоступен и ассистент (он только
+для вошедших), поэтому такие версии в `engines` не заявлены
 ([accounts.md](accounts.md), [demo.md](demo.md)).
 
 Значения по умолчанию для внешней модели заданы в коде

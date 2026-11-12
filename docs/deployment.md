@@ -122,6 +122,8 @@ Environment=HOST=127.0.0.1
 Environment=PORT=3001
 Environment=SERVE_STATIC=off
 Environment=TRUST_PROXY=1
+# Имена сайта, на которые отвечает API (все, по которым он открывается).
+Environment=ALLOWED_HOSTS=medkarta.example
 ExecStart=/usr/bin/node backend/server.js
 Restart=always
 RestartSec=2
@@ -387,8 +389,14 @@ limit_req zone=route burst=200 nodelay;                           # в location 
 берёт адрес из сокета. Так и должно быть, если сервер открыт в интернет
 напрямую: тогда он сам ограничивает число соединений с одного адреса
 (`MAX_CONNECTIONS_PER_IP`, по умолчанию 32; IPv6 считается по сети /64),
-сжимает статику и отдаёт `304` по `ETag`. Задайте также `ALLOWED_HOSTS` —
-имена сайта, на которые отвечает API.
+сжимает статику и отдаёт `304` по `ETag`.
+
+**`ALLOWED_HOSTS`** — имена сайта, на которые отвечает API (через запятую,
+например `medkarta.example,www.medkarta.example`). В production задайте обязательно:
+без него сервер принимает запросы с любым заголовком `Host`, при запуске пишет
+в журнал `server.allowed_hosts_missing`, а раздел «Система» админ-панели
+показывает ошибку. Перечислите все имена, по которым открывается сайт: запросы
+на изменение с другим `Host` получат `403`.
 
 ## Карта: тайлы
 

@@ -31,6 +31,7 @@ import routeHandler from './api/route.js';
 import travelTimesHandler from './api/travelTimes.js';
 import { applySecurityHeaders, isTokenPage } from './http/securityHeaders.js';
 import { rateLimitKey, validateTrustProxy } from './http/rateLimit.js';
+import { allowedHostsFromEnv } from './http/request.js';
 import { getDefaultRoutingEngine } from './routing/engine.js';
 import { logger } from './observability/safeLogger.js';
 import { requestStats } from './observability/requestStats.js';
@@ -56,6 +57,16 @@ try {
 } catch (error) {
   logger.error('server.bad_config', error, { code: 'TRUST_PROXY' });
   process.exit(1);
+}
+
+/*
+ * Без ALLOWED_HOSTS API отвечает на запросы с любым заголовком Host (чужой
+ * домен, направленный на наш адрес). Запуск не прерывается — работающий сайт
+ * не должен упасть из-за пропущенной переменной, — но в журнале это видно, а
+ * в админ-панели («Система») компонент показан с ошибкой.
+ */
+if ((process.env.NODE_ENV === 'production' || process.env.APP_ENV === 'production') && allowedHostsFromEnv().length === 0) {
+  logger.warn('server.allowed_hosts_missing', { status: 'not_set' });
 }
 
 const PORT = Number(process.env.PORT) || 3001;
