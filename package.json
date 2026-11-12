@@ -42,7 +42,8 @@
     "prices:doctors": "node scripts/generate-doctor-service-prices.mjs",
     "ownership:facilities": "node scripts/reclassify-facility-ownership.mjs",
     "accounts": "node scripts/accounts.mjs",
-    "mail:check": "node scripts/mail-check.mjs"
+    "mail:check": "node scripts/mail-check.mjs",
+    "backup": "node --no-warnings scripts/backup.mjs"
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.2.1",
