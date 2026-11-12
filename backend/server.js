@@ -25,6 +25,7 @@ import chatHandler from './api/chat.js';
 import { withChatAccess } from './api/chatAccess.js';
 import configHandler from './api/config.js';
 import { healthHandler, readyHandler } from './api/health.js';
+import integrationsHandler, { INTEGRATIONS_PREFIX } from './api/integrations.js';
 import demoBookingHandler, { BOOKING_PATHS } from './api/demoBooking.js';
 import labsHandler, { LABS_PREFIX } from './api/labs.js';
 import eventsHandler from './api/events.js';
@@ -241,6 +242,8 @@ const PREFIX_HANDLERS = [
   [ME_PREFIX, meHandler],
   // Лаборатории: каталог, подбор корзины, расписание, демо-запись (backend/api/labs.js).
   [LABS_PREFIX, labsHandler],
+  // Интеграции с МИС: webhook-события (backend/api/integrations.js; без MIS_INTEGRATIONS=on — 404).
+  [INTEGRATIONS_PREFIX, integrationsHandler],
   // Документы (публично) и права субъекта ПДн (api/privacy.js).
   [LEGAL_PREFIX, privacyHandler],
   [PRIVACY_PREFIX, privacyHandler],

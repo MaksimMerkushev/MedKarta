@@ -60,6 +60,7 @@ import { isTrustedWrite, pathOf, queryOf, readJsonObject, requestOrigin, require
 import { sendImage } from './me.js';
 import { userLabel } from '../accounts/service.js';
 import { createLabAdmin, LAB_ADMIN_ROUTES, LAB_ADMIN_WITH_BODY } from '../labs/admin.js';
+import { createMisAdmin, MIS_ADMIN_ROUTES, MIS_ADMIN_WITH_BODY } from '../booking/mis/admin.js';
 import { getDefaultLabService } from '../labs/service.js';
 
 const MAX_BODY_BYTES = 32 * 1024;
@@ -109,10 +110,11 @@ const route = createRouter([
   ['PATCH', '/api/admin/settings', 'updateSettings'],
   // Лаборатории (labs/admin.js): разрешения labs.view, labs.manage, labs.bookings.
   ...LAB_ADMIN_ROUTES,
+  ...MIS_ADMIN_ROUTES,
 ]);
 
 // Операции с телом запроса: остальные тело не читают.
-const WITH_BODY = new Set(['createUser', 'bulk', 'updateUser', 'deleteUser', 'setRole', 'block', 'updateRole', 'updateSettings', 'issueAccessLink', 'mfaReset', 'privacyRequestAction', ...LAB_ADMIN_WITH_BODY]);
+const WITH_BODY = new Set(['createUser', 'bulk', 'updateUser', 'deleteUser', 'setRole', 'block', 'updateRole', 'updateSettings', 'issueAccessLink', 'mfaReset', 'privacyRequestAction', ...LAB_ADMIN_WITH_BODY, ...MIS_ADMIN_WITH_BODY]);
 
 /*
  * Критические действия: нужно свежее явное подтверждение личности (пароль
@@ -294,6 +296,16 @@ export const createAdminHandler = ({ getContext = getAccountContext, limit = def
         case 'settings': result = admin.settings(actor); break;
         case 'updateSettings': result = admin.updateSettings(actor, body); break;
         default:
+          if (operation.startsWith('integrations')) {
+            const misAdmin = createMisAdmin({
+              audit: (who, action, fields = {}) => context.store.addAudit({
+                at: Date.now(), action, actorId: who?.id || null, actorLabel: who ? userLabel(who) : 'Система',
+                targetId: fields.targetId || null, targetLabel: fields.targetLabel || null, result: fields.result || 'ok', details: fields.details || null,
+              }),
+            });
+            result = await misAdmin.run(actor, operation, { params, query, body });
+            break;
+          }
           if (operation.startsWith('labs')) {
             const labAdmin = createLabAdmin({
               getService: getLabService,
@@ -313,7 +325,7 @@ export const createAdminHandler = ({ getContext = getAccountContext, limit = def
       respondJson(res, res.statusCode && res.statusCode !== 200 ? res.statusCode : 200, result);
     } catch (error) {
       if (req.method !== 'GET') logger.event('admin.action', { action: operation, status: 'failed', code: error?.code || 'error' });
-      if (error?.name === 'LabError') {
+      if (error?.name === 'LabError' || error?.name === 'MisAdminError') {
         respondJson(res, error.status || 400, { error: error.message, code: error.code });
         return;
       }
