@@ -90,19 +90,19 @@ export default defineConfig([
               name: './models.js',
               importNames: ['mintSanitizedPlannerRequest'],
               message:
-                'SanitizedPlannerRequest создаётся только в privacy/gateway.js — см. docs/privacy-architecture.md.',
+                'SanitizedPlannerRequest создаётся только в privacy/gateway.js — см. internal-docs/privacy-architecture.md.',
             },
             {
               name: '../privacy/models.js',
               importNames: ['mintSanitizedPlannerRequest'],
               message:
-                'SanitizedPlannerRequest создаётся только в privacy/gateway.js — см. docs/privacy-architecture.md.',
+                'SanitizedPlannerRequest создаётся только в privacy/gateway.js — см. internal-docs/privacy-architecture.md.',
             },
             {
               name: './privacy/models.js',
               importNames: ['mintSanitizedPlannerRequest'],
               message:
-                'SanitizedPlannerRequest создаётся только в privacy/gateway.js — см. docs/privacy-architecture.md.',
+                'SanitizedPlannerRequest создаётся только в privacy/gateway.js — см. internal-docs/privacy-architecture.md.',
             },
           ],
         },

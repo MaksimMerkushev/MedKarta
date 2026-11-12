@@ -8,7 +8,7 @@
  * Тексты документов — в каталоге legal/ (по файлу на редакцию, редакции не
  * перезаписываются), список редакций и их SHA-256 — legal/manifest.json.
  *
- * Правовые основания расписаны в docs/privacy/02-legal-bases.md. Здесь —
+ * Правовые основания расписаны в internal-docs/privacy/02-legal-bases.md. Здесь —
  * только то, что нужно коду:
  *   acceptance       — принятие пользовательского соглашения (договор,
  *                      п. 5 ч. 1 ст. 6 152-ФЗ). Не согласие на обработку.
@@ -56,7 +56,7 @@ export const legalPath = (key, version = null) => {
  *              требует письменной формы (ч. 4 ст. 9, п. 1 ч. 2 ст. 10):
  *              отметка в веб-форме её не заменяет, поэтому цель не
  *              предлагается, а соответствующая обработка не ведётся
- *              (docs/privacy/04-health-data.md).
+ *              (internal-docs/privacy/04-health-data.md).
  */
 export const CONSENT_PURPOSES = Object.freeze({
   terms: Object.freeze({ kind: 'acceptance', document: 'terms', required: true, offered: true, label: 'Принятие пользовательского соглашения' }),

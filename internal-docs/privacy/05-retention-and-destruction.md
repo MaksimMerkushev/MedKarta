@@ -57,7 +57,7 @@
    `BACKUP_ENCRYPTION_KEY=… npm run accounts -- backup --encrypt --out /backup/accounts-$(date +%F).enc`
    (AES-256-GCM; ключ — 32 байта, `openssl rand -base64 32`).
 2. Ключ копий хранить **отдельно** от копий и **отдельно** от `.env` с
-   `MFA_SECRET_KEY` (сейчас `docs/deployment.md` советует копировать `.env`
+   `MFA_SECRET_KEY` (сейчас `internal-docs/deployment.md` советует копировать `.env`
    вместе с базой — это нужно изменить при настройке копирования: `.env` —
    в отдельное хранилище секретов).
 3. Место хранения копий — в РФ ([10](10-processors-and-localization.md)),

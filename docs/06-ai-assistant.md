@@ -16,7 +16,7 @@
 Сборка — [backend/pipeline.js](../backend/pipeline.js), точка входа —
 [backend/api/chat.js](../backend/api/chat.js). Перед ней —
 [chatAccess.js](../backend/api/chatAccess.js): ассистент доступен только после
-входа в личный кабинет ([accounts.md](accounts.md)); в конвейер из кабинета
+входа в личный кабинет (`internal-docs/accounts.md`); в конвейер из кабинета
 ничего не передаётся.
 
 ```mermaid
@@ -51,7 +51,7 @@ flowchart TD
 
 | Шаг | Модуль | Что делает | Что при отказе |
 |---|---|---|---|
-| 0. Вход | [api/chatAccess.js](../backend/api/chatAccess.js), [api/assistantPass.js](../backend/api/assistantPass.js) | ассистент включён в настройках админ-панели; при настройке «только после входа» (по умолчанию из `CHAT_REQUIRES_ACCOUNT`) — действующий **пропуск** `mk_ai` (cookie на час, `Path=/api/chat`, внутри только срок и случайное число под HMAC). Пропуск выдаёт `POST /api/account/assistant-pass` вошедшему пользователю с постоянным паролем; `/api/chat` сессию **не читает** — запрос не связан с аккаунтом ([privacy/04-health-data.md](privacy/04-health-data.md)) | 503 `assistant_disabled` / 401 `assistant_pass_required` (интерфейс берёт пропуск и повторяет; гостю — 401 при выдаче) / 503 `accounts_unavailable` |
+| 0. Вход | [api/chatAccess.js](../backend/api/chatAccess.js), [api/assistantPass.js](../backend/api/assistantPass.js) | ассистент включён в настройках админ-панели; при настройке «только после входа» (по умолчанию из `CHAT_REQUIRES_ACCOUNT`) — действующий **пропуск** `mk_ai` (cookie на час, `Path=/api/chat`, внутри только срок и случайное число под HMAC). Пропуск выдаёт `POST /api/account/assistant-pass` вошедшему пользователю с постоянным паролем; `/api/chat` сессию **не читает** — запрос не связан с аккаунтом (`internal-docs/privacy/04-health-data.md`) | 503 `assistant_disabled` / 401 `assistant_pass_required` (интерфейс берёт пропуск и повторяет; гостю — 401 при выдаче) / 503 `accounts_unavailable` |
 | 1. Приём | [api/chat.js](../backend/api/chat.js) | метод `POST`, `Origin`, лимит частоты, тело до 32 КБ, `validateChatMessages` | 405 / 403 / 429 / 413 / 400 |
 | 2. Разбор | [privacy/gateway.js](../backend/privacy/gateway.js) | детекторы, связывание со справочником, классификатор жалоб, условия, решение политики | сбой анализа → `local_only`, текст наружу не уходит |
 | 3. План | [planner/client.js](../backend/planner/client.js) или [localPlanner.js](../backend/planner/localPlanner.js) | JSON-план из перечислений | любой сбой внешнего пути → локальный план |
@@ -309,7 +309,7 @@ flowchart TD
 | Неуверенный классификатор жалоб | «слабость» | «что беспокоит или к какому специалисту?» | `symptom_classifier_uncertain` |
 
 Ответы и статусы подбора — [11-demo-booking.md](11-demo-booking.md); полный
-список понимаемых фраз — [demo.md](demo.md).
+список понимаемых фраз — `internal-docs/demo.md`.
 
 ## Безопасные ответы
 
@@ -357,5 +357,5 @@ flowchart TD
   всегда показываются над подбором, а непонятое не додумывается.
 - Качество плана внешней модели на описании вместо текста автоматическими
   тестами не измеряется: тесты и оценка обезличивания используют заглушку
-  модели ([privacy-evaluation.md](privacy-evaluation.md)).
+  модели (`internal-docs/privacy-evaluation.md`).
 - Все ограничения и риски — [18-known-limitations.md](18-known-limitations.md).

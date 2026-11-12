@@ -92,7 +92,7 @@ const friendlyError = (error) => {
 /**
  * Что происходит с запросом (152-ФЗ): не сохраняется и не связывается с
  * аккаунтом; жалоба уходит внешней модели без ФИО, телефонов и адресов —
- * только чтобы подобрать врача (docs/privacy/04-health-data.md).
+ * только чтобы подобрать врача (internal-docs/privacy/04-health-data.md).
  */
 function PrivacyNote({ className = '' }) {
   return (

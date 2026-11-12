@@ -57,7 +57,7 @@
 | «Три лучших варианта» под ответом | Implemented | [bestPicks.js](../frontend/src/bestPicks.js) | отбор в браузере |
 | Экстренные «красные флаги» → 103/112 | Implemented | [symptoms.js](../backend/privacy/symptoms.js) | список правил, не медицинская экспертиза |
 | Цепочка резервных провайдеров модели | Partially Implemented | [planner/client.js](../backend/planner/client.js) (`createFallbackPlanner`) | функция есть, в сборке конвейера не используется |
-| Локальная LLM вместо внешней | Planned | [privacy-architecture.md](privacy-architecture.md), раздел 11 | |
+| Локальная LLM вместо внешней | Planned | `internal-docs/privacy-architecture.md`, раздел 11 | |
 
 ### Демо-режим (`DEMO_DATA=on`)
 
@@ -76,15 +76,15 @@
 | Личный кабинет: вход, программа ДМС, избранное, удаление аккаунта | Implemented | [api/account.js](../backend/api/account.js) | SQLite через `node:sqlite` (Node 22.13+) |
 | Профиль `/profile`: фото, имя, смена пароля, свои сессии и история входов | Implemented | [api/me.js](../backend/api/me.js), [ProfilePage.jsx](../frontend/src/profile/ProfilePage.jsx) | |
 | Роли (пользователь, модератор, администратор, суперадминистратор) и разрешения | Implemented | [rbac.js](../backend/accounts/rbac.js) | проверяются на сервере |
-| Админ-панель `/admin`: дашборд, пользователи, блокировки, роли, сессии, журнал действий, мониторинг, настройки | Implemented | [api/admin.js](../backend/api/admin.js), [admin/](../frontend/src/admin/) | [accounts.md](accounts.md) |
-| Публичная регистрация | Not implemented (намеренно) | — | аккаунты создаёт администратор; до открытия регистрации нужна юридическая подготовка ([accounts.md](accounts.md#персональные-данные)) |
+| Админ-панель `/admin`: дашборд, пользователи, блокировки, роли, сессии, журнал действий, мониторинг, настройки | Implemented | [api/admin.js](../backend/api/admin.js), [admin/](../frontend/src/admin/) | `internal-docs/accounts.md` |
+| Публичная регистрация | Not implemented (намеренно) | — | аккаунты создаёт администратор; до открытия регистрации нужна юридическая подготовка (`internal-docs/accounts.md`) |
 | Продуктовая аналитика без ПДн и отчёт по поискам | Implemented | [api/events.js](../backend/api/events.js), [report.js](../backend/analytics/report.js) | |
 | Сборщик данных частных клиник с ручной проверкой | Partially Implemented | [tools/data/](../tools/data/collector.js) | конвейер работает, но в `data/sources.json` только два демо-источника, `data/private/catalog.json` пуст |
 | Проверка госврачей на сайтах учреждений | Partially Implemented | [data-verify.mjs](../scripts/data-verify.mjs) | скрипт есть; в коммите `data/verification.json` без результатов |
 | Метрики конвейера | Partially Implemented | [metrics.js](../backend/observability/metrics.js) | собираются в памяти процесса, наружу не отдаются |
 | Хранилище токенов в Upstash Redis | Implemented, не проверено в аудите | [tokenVault.js](../backend/storage/tokenVault.js) | по умолчанию — память процесса |
 | Провайдер маршрутизации OSRM | Implemented, выключен | [executor/routing.js](../backend/executor/routing.js) | передаёт координаты третьей стороне; только явным флагом |
-| PostgreSQL для аккаунтов | Planned | [accounts.md](accounts.md#переход-на-postgresql) | |
+| PostgreSQL для аккаунтов | Planned | `internal-docs/accounts.md` | |
 | Лимиты частоты во внешнем хранилище | Planned | [SECURITY.md](../SECURITY.md), раздел 7 | сейчас — память процесса |
 
 ## Технологический стек
@@ -102,7 +102,7 @@
 требуют `node:sqlite` без флага, то есть Node **22.13+**. На более старом Node
 они выключаются сами, а вместе с кабинетом недоступен и ассистент (он только
 для вошедших), поэтому такие версии в `engines` не заявлены
-([accounts.md](accounts.md), [demo.md](demo.md)).
+(`internal-docs/accounts.md`, `internal-docs/demo.md`).
 
 Значения по умолчанию для внешней модели заданы в коде
 ([pipeline.js](../backend/pipeline.js)): адрес
