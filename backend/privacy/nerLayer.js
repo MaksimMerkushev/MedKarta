@@ -17,6 +17,7 @@
 import { NerError } from './nerClient.js';
 import { isMedicalPhrase } from './medicalLexicon.js';
 import { applySpans, createLabelState, LABEL_PATTERN } from './spanMask.js';
+import { nearNameSpans } from './ruRecognizers.js';
 
 export const NER_LABEL = Object.freeze({ PERSON: '[имя]', ORG: '[организация]', LOC: '[место]' });
 const LEGACY = { PER: 'PERSON', MEDIA: 'ORG', GEOPOLIT: 'LOC' };
@@ -63,8 +64,10 @@ export const createNerLayer = ({ client = null, clients = null, logger = null, m
         throw new NerError('ner_uncertain');
       }
       const applied = applySpans(turn, confident, { state });
-      masked += applied.masked;
-      result.push(applied.text);
+      // Модель закрыла фамилию — неизвестное слово вплотную к ней («сайдат [имя_1]») тоже часть имени.
+      const near = applySpans(applied.text, nearNameSpans(applied.text), { state });
+      masked += applied.masked + near.masked;
+      result.push(near.text);
     }
     metrics?.increment('ner.masked', { status: masked > 0 ? 'found' : 'none' });
     logger?.event?.('ner.applied', { count: masked });

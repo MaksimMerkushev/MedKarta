@@ -178,3 +178,14 @@ describe('Исправления после замера на holdout', () => {
     assert.equal(deidentifyComplaint('у нас в доме был пожар, кашель').blocked, true);
   });
 });
+
+describe('ML-слой: второй проход после масок модели', () => {
+  it('неизвестное имя рядом с фамилией, которую закрыла модель, тоже закрывается', async () => {
+    const text = 'это опять сайдат фазлыева, ломит суставы';
+    const start = text.indexOf('фазлыева');
+    const layer = createNerLayer({ client: { entities: async () => [{ type: 'PERSON', start, end: start + 8, score: 0.95 }] } });
+    const [out] = await layer.maskTurns([text]);
+    assert.doesNotMatch(out, /сайдат|фазлыева/u);
+    assert.match(out, /ломит суставы/u);
+  });
+});
