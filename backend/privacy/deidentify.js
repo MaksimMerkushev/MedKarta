@@ -16,6 +16,9 @@
 
 import { KAZAN_PLACES } from '../../shared/kazanPlaces.js';
 import { classifySymptoms, SENSITIVE_RULE_IDS } from './symptoms.js';
+import { isMedicalWord, MEDICAL_ABBREVIATION } from './medicalLexicon.js';
+import { recognizePii } from './ruRecognizers.js';
+import { applySpans } from './spanMask.js';
 
 const prepare = (text) => String(text || '').toLowerCase().replace(/ё/gu, 'е');
 const B = '(?<![\\p{L}\\p{N}])';
@@ -31,7 +34,7 @@ export const hasSensitiveCondition = (text) => {
 };
 
 /* Редкое обстоятельство указывает на человека и без имени: при сомнении текст не передаётся. */
-const RARE_CIRCUMSTANCE = new RegExp(`${B}(?:единственн\\p{L}*|известн(?:ый|ая)|знаменит\\p{L}*|чемпион\\p{L}*|олимпийск\\p{L}*|народн(?:ый|ая)\\s+артист\\p{L}*)${E}`, 'u');
+const RARE_CIRCUMSTANCE = new RegExp(`${B}(?:единственн\\p{L}*|известн(?:ый|ая)|знаменит\\p{L}*|чемпион\\p{L}*|олимпийск\\p{L}*|народн(?:ый|ая)\\s+артист\\p{L}*|тройн(?:я|ю|ей|е)|аварийн\\p{L}*\\s+посадк\\p{L}*|член\\p{L}*\\s+сборн\\p{L}*|сборн\\p{L}*\\s+росси\\p{L}*|1[0-2]\\d\\s*(?:год|года|лет))${E}`, 'u');
 export const hasRareCircumstance = (text) => RARE_CIRCUMSTANCE.test(prepare(text));
 
 /*
@@ -43,7 +46,8 @@ export const hasRareCircumstance = (text) => RARE_CIRCUMSTANCE.test(prepare(text
  * Давление «160/100», температура «38.5», время, год, дозировка и цена остаются: они бывают
  * нужны для жалобы и на человека не указывают.
  */
-const DOCUMENT_WORD = new RegExp(`${B}(?:полис\\p{L}*|паспорт\\p{L}*|снилс\\p{L}*|инн|огрн\\p{L}*|свидетельств\\p{L}*|удостоверени\\p{L}*|договор\\p{L}*|медкарт\\p{L}*)${E}`, 'u');
+const DIGIT_WORDS = ['ноль', 'один', 'два', 'три', 'четыре', 'пять', 'шесть', 'семь', 'восемь', 'девять'];
+const DOCUMENT_WORD = new RegExp(`${B}(?:полис\\p{L}*|паспорт\\p{L}*|загран\\p{L}*|снилс\\p{L}*|инн|огрн\\p{L}*|свидетельств\\p{L}*|свид-во|удостоверени\\p{L}*|договор\\p{L}*|медкарт\\p{L}*|прав[аы]|омс|дмс)${E}`, 'u');
 const CODE_TOKEN = /[\p{L}\p{N}]+(?:[-/][\p{L}\p{N}]+)*/gu;
 const NOT_CODE = /^(?:\d{2,3}\/\d{2,3}|\d{4}(?:г|гг|год\p{L}*)?|\d+(?:мг|мкг|мл|г|кг|см|мм|ед))$/u;
 const SPACED_NUMBER = /(?<![\p{L}\p{N}])\d{2,}(?:[ -]\d{2,}){2,}(?![\p{L}\p{N}])/gu;
@@ -60,7 +64,13 @@ export const hasDocumentNumber = (text) => {
   const lower = prepare(text);
   if (!DOCUMENT_WORD.test(lower)) return false;
   // «1655 4400 1234 5678», «92 04 123456»: группы цифр через пробел или дефис — один номер.
-  const joined = lower.replace(/(\d)[ -]+(?=\d)/gu, '$1');
+  // Цифры словами и звёздочки вместо части цифр («92** ***456») — тоже номер.
+  // Суммы, время, расстояния и дозировки («по ДМС до 3000 рублей») — не номер документа.
+  const withoutUnits = lower.replace(/(?<![\d\s])\d[\d\s]{0,12}(?=\s*(?:руб|₽|р\.|тыс|мин|час|км|мг|мл|мкг|ед\b|лет|год))/gu, ' ');
+  const spelled = withoutUnits.replace(/(?<![\p{L}])(ноль|нуль|один|одна|два|две|три|четыре|пять|шесть|семь|восемь|девять)(?![\p{L}])/gu, (w) => String(DIGIT_WORDS.indexOf(w) >= 0 ? DIGIT_WORDS.indexOf(w) : 1));
+  const unmasked = spelled.replace(/[*#xх](?=[\d*#xх\s.-]{0,12}\d)|(?<=\d[\s.-]{0,3})[*#xх]/gu, '0');
+  if (/(?<![\p{L}])[ivxl]{1,4}-[а-я]{2}\s?\d/u.test(lower)) return true;
+  const joined = unmasked.replace(/(\d)[ .\-\n/]+(?=\d)/gu, '$1');
   return (joined.match(CODE_TOKEN) || []).some((token) => digitCount(token) >= 4 && !NOT_CODE.test(token));
 };
 
@@ -76,7 +86,7 @@ const TOKEN_LABEL = {
 const MEDICAL_ABBREVIATIONS = new Set(['МРТ', 'КТ', 'УЗИ', 'ЭКГ', 'ЭЭГ', 'ЛОР', 'ДМС', 'ОМС', 'ОРВИ', 'ОРЗ', 'АД', 'ЖКТ', 'ВСД', 'ЭКО', 'ДТП', 'СОЭ', 'ИМТ']);
 
 const INSURER = new RegExp(`${B}(?:сбер\\s*-?\\s*страхован\\p{L}*|согаз\\p{L}*|ресо(?:\\s*-?\\s*гаранти\\p{L}*)?|ингосстрах\\p{L}*|альфа\\s*-?\\s*страхован\\p{L}*|росгосстрах\\p{L}*|энергогарант\\p{L}*|втб\\s*-?\\s*страхован\\p{L}*|ренессанс\\s+страхован\\p{L}*|т\\s*-\\s*страхован\\p{L}*|тинькофф\\s*-?\\s*страхован\\p{L}*|совкомбанк\\s*-?\\s*страхован\\p{L}*)${E}`, 'gu');
-const TITLE = new RegExp(`${B}(?:завуч\\p{L}*|директор\\p{L}*|главврач\\p{L}*|главн\\p{L}*\\s+(?:врач|медсестр|инженер|бухгалтер|редактор|архитектор|энергетик|механик|технолог|тренер)\\p{L}*|заместител\\p{L}*|замглав\\p{L}*|руководител\\p{L}*|председател\\p{L}*|губернатор\\p{L}*|президент\\p{L}*|депутат\\p{L}*|мэр\\p{L}*|судь[яиеюй]|прокурор\\p{L}*|министр\\p{L}*|ректор\\p{L}*|декан\\p{L}*|заведующ\\p{L}*|начальник\\p{L}*|сенатор\\p{L}*|полковник\\p{L}*|генерал\\p{L}*|следовател\\p{L}*)${E}`, 'gu');
+const TITLE = new RegExp(`${B}(?:завуч\\p{L}*|директор\\p{L}*|главврач\\p{L}*|главн\\p{L}*\\s+(?:врач|медсестр|инженер|бухгалтер|редактор|архитектор|энергетик|механик|технолог|тренер)\\p{L}*|заместител\\p{L}*|замглав\\p{L}*|руководител\\p{L}*|председател\\p{L}*|губернатор\\p{L}*|президент\\p{L}*|депутат\\p{L}*|мэр\\p{L}*|судь\\p{L}*|глав[аеуы]\\s+(?:\\p{L}+\\s+)?(?:района|города|администрации|поселения|республики)|капитан\\p{L}*\\s+(?:\\p{L}+\\s+)?команды|прокурор\\p{L}*|министр\\p{L}*|ректор\\p{L}*|декан\\p{L}*|заведующ\\p{L}*|начальник\\p{L}*|сенатор\\p{L}*|полковник\\p{L}*|генерал\\p{L}*|следовател\\p{L}*)${E}`, 'gu');
 const INSTITUTION = new RegExp(`${B}(?:прокуратур\\p{L}*|госсовет\\p{L}*|министерств\\p{L}*|мэри\\p{L}*|администраци\\p{L}*|следственн\\p{L}*\\s+комитет\\p{L}*)${E}`, 'gu');
 const PLACE_PATTERNS = [
   ...Object.values(KAZAN_PLACES).map((place) => new RegExp(`${B}(?:${place.pattern})${E}`, 'gu')),
@@ -126,6 +136,9 @@ export const deidentifyComplaint = (text, state = { places: new Map() }) => {
   // «Нурисламова-Вандербильт»: Gateway заменил часть фамилии, вторая часть через дефис — тоже имя.
   // Слово перед меткой ищется только с начала слова: иначе на длинном слове перебор квадратичный.
   result = result.replace(/\[имя\]-\p{L}+/gu, '[имя]').replace(/(?<!\p{L})\p{L}+-\[имя\]/gu, '[имя]');
+  // Детерминированные распознаватели РФ: имена строчными, организации после «работаю в»,
+  // телефоны словами, почта с заменами, ники, закодированные строки, адреса (ruRecognizers.js).
+  result = applySpans(result, recognizePii(result)).text;
   result = replaceSpans(result, CAR_PLATE, '[номер]');
   result = result.replace(FULL_DATE, '[дата]');
   result = maskCodes(result);
@@ -136,7 +149,7 @@ export const deidentifyComplaint = (text, state = { places: new Map() }) => {
   result = result.replace(NAMED_ORG, (whole, prefix) => `${prefix}[организация]`);
   result = result.replace(OTHER_PERSON, '$1[о другом человеке], $2');
   result = result.replace(QUOTED, '[название]');
-  result = result.replace(ALL_CAPS, (word) => (MEDICAL_ABBREVIATIONS.has(word) ? word : '[организация]'));
+  result = result.replace(ALL_CAPS, (word) => (MEDICAL_ABBREVIATIONS.has(word) || MEDICAL_ABBREVIATION(word) ? word : '[организация]'));
   for (const pattern of PLACE_PATTERNS) {
     result = replaceSpans(result, pattern, (raw) => {
       const label = `[место_${state.places.size + 1}]`;
@@ -148,7 +161,7 @@ export const deidentifyComplaint = (text, state = { places: new Map() }) => {
   const capitalized = words.filter((word) => /^\p{Lu}/u.test(word)).length;
   // Каждое слово с заглавной — манера письма, а не название.
   if (capitalized <= Math.max(2, words.length / 2)) {
-    result = result.replace(MID_SENTENCE_NAME, (word) => (COMMON_NAMES.test(prepare(word)) ? word : '[название]'));
+    result = result.replace(MID_SENTENCE_NAME, (word) => (COMMON_NAMES.test(prepare(word)) || isMedicalWord(word) ? word : '[название]'));
   }
   return { text: result.replace(/\s+/gu, ' ').replace(/\s+([.,;!?])/gu, '$1').trim(), blocked: false, reason: null };
 };

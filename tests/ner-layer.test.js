@@ -30,7 +30,8 @@ describe('ML-слой: маскирование поверх правил', () =
     const text = 'я петрова лейсан, [телефон], болит горло';
     assert.equal(applyEntities(text, [span(text, 'петрова лейсан')]).text, 'я [имя], [телефон], болит горло');
     const inside = 'Меня зовут [имя], болит горло';
-    assert.deepEqual(applyEntities(inside, [span(inside, 'имя')]), { text: inside, masked: 0 });
+    assert.equal(applyEntities(inside, [span(inside, 'имя')]).masked, 0);
+    assert.equal(applyEntities(inside, [span(inside, 'имя')]).text, inside);
   });
 
   it('диапазон, задевший метку, поглощает её; соседние части имени — одна метка', () => {
@@ -66,7 +67,7 @@ describe('ML-слой: строгая проверка ответа сервис
   it('принимается только известный тип и диапазон внутри текста', () => {
     assert.deepEqual(validateEntities({ entities: [{ type: 'PER', start: 0, end: 8, score: 0.9 }] }, text), [{ type: 'PER', start: 0, end: 8, score: 0.9 }]);
     for (const bad of [
-      { entities: [{ type: 'PHONE', start: 0, end: 8 }] },
+      { entities: [{ type: 'CREDIT_CARD', start: 0, end: 8 }] },
       { entities: [{ type: 'PER', start: 0, end: 999 }] },
       { entities: [{ type: 'PER', start: 5, end: 5 }] },
       { entities: [{ type: 'PER', start: 0.5, end: 8 }] },
@@ -160,8 +161,9 @@ describe('ML-слой: отказы сервиса — fail closed', () => {
 
     it('модель закрывает то, что пропустили правила: имя строчными не уходит', async () => {
       mode = 'ok';
+      // Правила теперь сами ловят такие имена (ruRecognizers.js); модель — второй рубеж.
       const without = await run('я петрова лейсан, болит голова', null);
-      assert.match(without.sent.join('\n'), /петрова лейсан/u, 'контроль: правила это пропускают');
+      assert.doesNotMatch(without.sent.join('\n'), /петрова|лейсан/u);
       const withNer = await run('я петрова лейсан, болит голова', createNerLayer({ client: client() }));
       assert.equal(withNer.sent.length, 1);
       assert.doesNotMatch(withNer.sent[0], /петрова|лейсан/u);
