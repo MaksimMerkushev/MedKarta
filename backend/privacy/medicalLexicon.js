@@ -27,5 +27,11 @@ export const isMedicalPhrase = (text) => {
   return words.length > 0 && words.every((w) => isMedicalWord(w) || /^\d+(?:[.,]\d+)?$/u.test(w));
 };
 
+/** Во фрагменте есть название лекарства, анализа или эпоним — это медицинская фраза, а не имя. */
+export const mentionsMedicalName = (text) => (String(text || '').match(/[\p{L}\p{N}-]+/gu) || []).some((w) => {
+  const n = norm(w);
+  return DRUGS.includes(n) || DRUGS.includes(n.replace(/-/gu, '')) || LABS.includes(n) || EPONYM.test(n);
+});
+
 /** Аббревиатуры анализов и исследований (для правила «слово заглавными — организация»). */
 export const MEDICAL_ABBREVIATION = (word) => LABS.includes(norm(word));

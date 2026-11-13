@@ -189,3 +189,11 @@ describe('ML-слой: второй проход после масок моде�
     assert.match(out, /ломит суставы/u);
   });
 });
+
+describe('Фрагмент модели с названием лекарства не маскируется', () => {
+  it('«Цитрамон 2 таблетки в день» остаётся, имя — маскируется', () => {
+    const text = 'Цитрамон 2 таблетки в день, болит';
+    assert.equal(applySpans(text, [{ type: 'ORG', start: 0, end: 26 }]).text, text);
+    assert.equal(applySpans('Иван Петров, болит', [{ type: 'PERSON', start: 0, end: 11 }]).text, '[имя], болит');
+  });
+});

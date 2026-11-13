@@ -6,7 +6,7 @@
  * трогаются и не раскрываются, медицинские слова не маскируются. Повторяющаяся
  * сущность получает ту же метку во всём диалоге: «[имя_1]» в первой и третьей реплике.
  */
-import { isMedicalPhrase } from './medicalLexicon.js';
+import { isMedicalPhrase, mentionsMedicalName } from './medicalLexicon.js';
 
 export const SPAN_LABEL = Object.freeze({ PERSON: 'имя', ORG: 'организация', LOC: 'место', ADDRESS: 'адрес', PHONE: 'телефон', EMAIL: 'почта', DOC: 'номер', URL: 'аккаунт', DATE: 'дата', SECRET: 'код', PROFESSION: 'должность' });
 export const SPAN_TYPES = Object.freeze(Object.keys(SPAN_LABEL));
@@ -24,7 +24,8 @@ const keepUnmasked = (value, type) => {
   if (type === 'DATE') return !isRealDate(value);
   const words = value.toLowerCase().replace(/ё/gu, 'е').match(/[\p{L}\p{N}-]+/gu) || [];
   if (words.length > 0 && words.every((w) => NON_IDENTIFYING.has(w))) return true;
-  return isMedicalPhrase(value);
+  // «Цитрамон 2 таблетки в день»: модель отметила фразу целиком — в ней название лекарства, это не имя.
+  return isMedicalPhrase(value) || mentionsMedicalName(value);
 };
 
 /** Новое состояние нумерации меток на диалог. */
