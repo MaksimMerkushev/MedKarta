@@ -24,7 +24,8 @@ export class NerError extends Error {
   }
 }
 
-export const NER_TYPES = Object.freeze(['PER', 'ORG', 'LOC', 'GEOPOLIT', 'MEDIA']);
+// Метки rubert-tiny (PER, GEOPOLIT, MEDIA) и общий набор типов для других моделей (spanMask.js).
+export const NER_TYPES = Object.freeze(['PER', 'ORG', 'LOC', 'GEOPOLIT', 'MEDIA', 'PERSON', 'ADDRESS', 'PHONE', 'EMAIL', 'DOC', 'URL', 'DATE', 'SECRET', 'PROFESSION']);
 export const NER_LIMITS = Object.freeze({ MAX_TEXT_CHARS: 4000, MAX_RESPONSE_BYTES: 64 * 1024, MAX_ENTITIES: 200 });
 
 /** PII_NER=on — слой включён; адрес — PII_NER_SOCKET или PII_NER_PORT (только 127.0.0.1). */
