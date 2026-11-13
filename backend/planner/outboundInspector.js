@@ -15,6 +15,9 @@
  */
 import { detectEntities } from '../privacy/detectors.js';
 import { isKnownPlace, isStreetMention } from '../privacy/vocabulary.js';
+import { normalizeUserText } from '../privacy/inputNormalize.js';
+import { recognizePii } from '../privacy/ruRecognizers.js';
+import { hasDocumentNumber } from '../privacy/deidentify.js';
 
 export const ALLOWED_TOP_FIELDS = Object.freeze(['model', 'messages', 'response_format', 'temperature', 'max_tokens', 'reasoning', 'usage']);
 export const OUTBOUND_LIMITS = Object.freeze({ MAX_MESSAGES: 10, MAX_CONTENT_CHARS: 20_000, MAX_BODY_BYTES: 96 * 1024 });
@@ -23,8 +26,20 @@ export const OUTBOUND_LIMITS = Object.freeze({ MAX_MESSAGES: 10, MAX_CONTENT_CHA
 const LONG_NUMBER = /\d(?:[ -]?\d){5,}/u;
 const EMAIL = /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.[\p{L}]{2,}/u;
 
-const contentProblems = (content) => {
+const contentProblems = (raw, freeText = false) => {
   const problems = [];
+  // Та же нормализация, что на входе: невидимые символы и двойники букв не прячут данные от проверки.
+  const content = normalizeUserText(raw, { layout: false });
+  if (content !== raw.trim() && /[\u200b-\u200f\u2060\ufeff\u00ad]/u.test(raw)) problems.push('invisible');
+  // Распознаватели свободного текста — для жалоб (триаж). Описание для планировщика собирает сам
+  // шлюз из словаря улиц и мест: «Места: улица Ямашева» — ориентир маршрута, его проверяют детекторы.
+  if (freeText) {
+    for (const span of recognizePii(content)) {
+      if (span.type === 'ADDRESS' && !/\d/u.test(content.slice(span.start, span.end))) continue;
+      problems.push(`pii:${span.type}`);
+    }
+  }
+  if (hasDocumentNumber(content)) problems.push('document');
   const { spans } = detectEntities(content);
   for (const span of spans) {
     if (isStreetMention(content, span) || isKnownPlace(content.slice(span.start, span.end))) continue;
@@ -77,7 +92,7 @@ export const inspectOutbound = async (wire, { schemas = [], staticSystem = new S
       continue;
     }
     if (message.role === 'system' && staticSystem.has(message.content)) continue;
-    problems.push(...contentProblems(message.content));
+    problems.push(...contentProblems(message.content, freeText && message.role === 'user'));
     if (message.role === 'user') userTexts.push(message.content);
   }
   if (freeText && ner) {
