@@ -49,6 +49,9 @@ HF_HUB_OFFLINE=1 python3 -I services/pii-ner/export-onnx.py services/pii-ner/mod
 [Service]
 User=medkarta
 Environment=PII_NER_SOCKET=/run/medkarta/pii-ner.sock
+Environment=PII_NER_MODELS=rubert-tiny,redmadrobot
+Environment=PII_NER_THREADS=1
+Environment=PII_NER_LOW_MEMORY=on
 ExecStart=/usr/bin/node /home/medkarta/medkarta/services/pii-ner/server.mjs
 RuntimeDirectory=medkarta
 MemoryMax=900M
@@ -59,6 +62,13 @@ PrivateNetwork=true
 ```
 
 `PrivateNetwork=true` отрезает у процесса сеть целиком. Unix-сокет при этом работает.
+
+`PII_NER_LOW_MEMORY=on` выключает арену и шаблоны памяти ONNX: буферы длинного текста
+возвращаются системе. Замер на машине разработчика (Apple M1 Pro, не VPS, обе модели):
+RSS после текста 4000 символов — 306 МБ против 421 МБ, в конце нагрузки — 249 против 424 МБ;
+задержка почти та же (p50 на 500 / 2000 / 4000 символов — 91 / 459 / 907 мс).
+Сервис обслуживает один запрос и держит в очереди восемь: остальные получают 503, и жалоба
+не уходит наружу (локальный ответ). На 2 vCPU пропускная способность ниже — замерьте на сервере.
 
 Проверка (только для отладки):
 
@@ -73,8 +83,12 @@ curl --unix-socket /run/medkarta/pii-ner.sock http://x/healthz
 ```
 PII_NER=on
 PII_NER_SOCKET=/run/medkarta/pii-ner.sock
-PII_NER_TIMEOUT_MS=400
+PII_NER_TIMEOUT_MS=3000
 ```
+
+С двумя моделями 400 мс мало: на машине разработчика при 10 одновременных запросах по 500
+символов в 400 мс укладываются 4 из 10, в 3000 мс — 9 (десятый — очередь заполнена). Длинная
+история проверяется окнами по 3500 символов (privacy/nerLayer.js) — это несколько запросов.
 
 Сервис недоступен, перегружен или ответил не по формату — жалоба во внешнюю модель не
 уходит, пользователь получает ответ локального классификатора.
