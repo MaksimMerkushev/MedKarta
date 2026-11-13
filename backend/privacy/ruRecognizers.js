@@ -87,7 +87,13 @@ const PHONE_WORDS = new RegExp(`(?<![\\p{L}])${NUMBER_WORD}(?:[\\s,.-]+${NUMBER_
 // Начало — только с границы слова: иначе на длинной строке перебор квадратичный.
 const EMAIL_OBF = /(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]{2,}\s*(?:@|\(\s*at\s*\)|\[\s*at\s*\]|\s(?:at|собака)\s)\s*[A-Za-z0-9-]+(?:\s*(?:\.|\(\s*dot\s*\)|\[\s*dot\s*\]|\s(?:dot|точка)\s)\s*[A-Za-z]{2,})+/giu;
 const HANDLE = /(?:(?<![\p{L}\p{N}])@|t\.me\/|vk\.com\/|instagram\.com\/|ok\.ru\/|tiktok\.com\/@?|wa\.me\/)[A-Za-z0-9_.]{3,}/giu;
-const HANDLE_CUE = /(?<![\p{L}])(?:телеграм\p{L}*|телега|тг|tg|инст\p{L}*|insta\p{L}*|вк|vk|ник|whatsapp|вотсап|viber|вайбер|страница)\s*:?\s+([A-Za-z0-9_.]{3,})/giu;
+const CUE = '(?<![\\p{L}])(?:телеграм\\p{L}*|телега|тг|tg|инст\\p{L}*|insta\\p{L}*|вк|vk|ник|whatsapp|вотсап|viber|вайбер|страница)\\s*:?\\s+';
+const HANDLE_CUE = new RegExp(`${CUE}([A-Za-z0-9_.]{3,})`, 'giu');
+// Ник, набранный или переведённый в русской раскладке («штыефпкфьюсщь/удьшкютпж»): точка, косая черта
+// или подчёркивание внутри слова после подсказки.
+const HANDLE_CUE_ANY = new RegExp(`${CUE}([\\p{L}\\p{N}_]+(?:[./][\\p{L}\\p{N}_]+)+)`, 'giu');
+// В нике есть буква: «ТГ 2.15» — триглицериды, а не телеграм.
+const hasLetter = (value) => (sp) => /\p{L}/u.test(value.slice(sp.start, sp.end));
 // Кандидаты — линейным поиском; смешанный регистр и цифры проверяются отдельно (без lookahead по всей длине).
 const BASE64_CANDIDATE = /(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{16,}={0,2}(?![A-Za-z0-9+/])/gu;
 const looksBase64 = (token) => /[A-Z]/u.test(token) && /[a-z]/u.test(token) && /[0-9+/]/u.test(token);
@@ -140,7 +146,8 @@ export const recognizePii = (text) => {
     ...regexSpans(value, EMAIL_OBF, 'EMAIL'),
     // Метки шлюза (@CURRENT_LOCATION, @DOCTOR_C) — не ники; точка на конце — пунктуация.
     ...regexSpans(value, HANDLE, 'URL').map((sp) => ({ ...sp, end: sp.end - (value.slice(sp.start, sp.end).match(/\.+$/u)?.[0].length || 0) })).filter((sp) => !/^@[A-Z]+(?:_[A-Z0-9]+)*$/u.test(value.slice(sp.start, sp.end))),
-    ...regexSpans(value, HANDLE_CUE, 'URL', 1),
+    ...regexSpans(value, HANDLE_CUE, 'URL', 1).filter(hasLetter(value)),
+    ...regexSpans(value, HANDLE_CUE_ANY, 'URL', 1).filter(hasLetter(value)),
     ...regexSpans(value, BASE64_CANDIDATE, 'SECRET').filter((sp) => looksBase64(value.slice(sp.start, sp.end))),
     ...regexSpans(value, URL_ENCODED, 'SECRET'),
     ...regexSpans(value, HEX, 'SECRET'),

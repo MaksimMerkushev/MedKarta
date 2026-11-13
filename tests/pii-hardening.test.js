@@ -36,6 +36,13 @@ describe('Нормализация входа', () => {
     assert.equal(normalizeUserText('Упомянуты: @WORK. availableAfter=18:00.'), 'Упомянуты: @WORK. availableAfter=18:00.');
   });
 
+  it('почта, ссылки и ники в раскладку не переводятся', () => {
+    for (const text of ['вайбер instagram.com/elmir.ng; давление 150/95', 'почта ivanov.s@gmail.com', 'ivanov.s [at] yandex.ru кашель', 'chulpan.z(at)list(dot)ru, aigul.sh(at)yandex(dot)ru', 'телега t.me/timur.safin болит']) {
+      assert.equal(normalizeUserText(text), text);
+    }
+    assert.equal(normalizeUserText('Vtyz pjden Rc.if, ,jkbn ujkjdf'), 'Меня зовут Ксюша, болит голова');
+  });
+
   it('медицинский текст не меняется', () => {
     const text = 'давление 160/100, Метформин 1000 мг, температура 38.5, ТТГ 6.2';
     assert.equal(normalizeUserText(text), text);

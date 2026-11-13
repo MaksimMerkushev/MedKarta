@@ -32,25 +32,35 @@ const toRu = (word) => [...word].map((ch) => {
   return ch === lower ? mapped : mapped.toUpperCase();
 }).join('');
 
+// Почта, ссылка, ник: в другой раскладке они стали бы набором кириллических букв, который детекторы
+// почты и ссылок не узнают, а получатель обратит одной заменой. Такие фрагменты не переводятся.
+const LINK_LIKE = /[@/:_\d]|^www\.|\.(?:com|ru|net|org|io|me|info|su|biz|pro|ua|kz|by|uz|tj|am|ge|az|de|uk|us|eu|tv|cc|co|xyz|dev|app|online|site|tech|club|shop|store)(?![A-Za-z])/iu;
+const OBFUSCATED_EMAIL = /[([]\s*(?:at|dot)\s*[)\]]|\s(?:at|dot)\s/iu;
+// Признак раскладки: «[», «;», «'», запятая или точка внутри слова, знак в начале («F[vtnjd», «'nj»,
+// «K.lf»). Домены, почта и ники в подсчёт не попадают — они отсеяны раньше (LINK_LIKE).
+const LAYOUT_MARK = /[A-Za-z][[\];',.][A-Za-z]|^[,.'[;][A-Za-z]/u;
+
 /** «Vtyz pjden Uekmyfhf» → «Меня зовут Гульнара», если хотя бы два слова стали обычными русскими. */
 const fixLayout = (text) => {
   // Слова-кандидаты: от двух латинских букв (знаки «;'[],.» внутри допускаются); метки шлюза
-  // (@WORK), «ключ=значение» и одиночные буквы — не текст в раскладке.
+  // (@WORK), «ключ=значение», почта, ссылки и одиночные буквы — не текст в раскладке.
   if (/@[A-Z]|[A-Za-z]=|=[A-Za-z]/u.test(text)) return text;
-  const latinWords = (text.match(/[A-Za-z;'[\],.]+/gu) || []).filter((w) => (w.match(/[A-Za-z]/gu) || []).length >= 2);
+  const obfuscated = OBFUSCATED_EMAIL.test(text);
+  const isLink = (chunk) => LINK_LIKE.test(chunk) || (obfuscated && /[A-Za-z]\.[A-Za-z]/u.test(chunk));
+  const chunks = text.split(/\s+/u).filter((chunk) => chunk && !isLink(chunk));
+  const latinWords = chunks.flatMap((chunk) => chunk.match(/[A-Za-z;'[\],.]+/gu) || []).filter((w) => (w.match(/[A-Za-z]/gu) || []).length >= 2);
   if (latinWords.length < 2) return text;
   // Запятая и точка в конце слова — пунктуация, а не буквы «б»/«ю».
   const hits = latinWords.filter((w) => COMMON_RU.has(toRu(w.replace(/[,.]+$/u, '')).toLowerCase().replace(/[^а-яё]/gu, ''))).length;
-  // Признак раскладки: «[», «;», «'» внутри или в начале латинского слова («F[vtnjd», «'nj»).
-  const layoutMarks = latinWords.some((w) => /[A-Za-z][[\];'][A-Za-z]|^[,.'[;][A-Za-z]|[A-Za-z][,.][A-Za-z]/u.test(w));
-  // Два и больше латинских слова со знаками раскладки внутри — набор в латинской раскладке и без
-  // знакомых слов (английские слова такие знаки внутри почти не содержат).
-  const marked = latinWords.filter((w) => /[A-Za-z][[\];'][A-Za-z]|^[,.'[;][A-Za-z]|[A-Za-z][,.][A-Za-z]/u.test(w)).length;
+  const marked = latinWords.filter((w) => LAYOUT_MARK.test(w)).length;
   // Однобуквенные «z», «c», «d», «b» в раскладке — «я», «с», «в», «и»: подсказка, если есть знак раскладки.
   const singles = (text.match(/(?<![A-Za-z])[ZzCcDdBbRrJjFfEe](?![A-Za-z;'[\],.])/gu) || []).length;
-  if (!(hits >= 2 || ((hits + singles) >= 1 && layoutMarks) || marked >= 2)) return text;
+  // Имя в раскладке сразу после русской подсказки («меня зовут K.lf Bdfyjdf»).
+  const nameCue = /(?<![\p{L}])(?:зовут|имя|фамилия)\s*:?\s+[,.;'[]?[A-Za-z]/iu.test(text);
+  if (!(hits >= 2 || ((hits + singles + (nameCue ? 1 : 0)) >= 1 && marked >= 1) || marked >= 2)) return text;
   // Слово в раскладке может начинаться с «.» или «,» («.cegjdf» — «Юсупова»).
-  return text.replace(/(?:(?<![\p{L}\p{N}])[,.](?=[A-Za-z]))?[A-Za-z;'[\]]+(?:[,.](?=[A-Za-z])[A-Za-z;'[\]]*)*/gu, (w) => toRu(w));
+  const word = /(?:(?<![\p{L}\p{N}])[,.](?=[A-Za-z]))?[A-Za-z;'[\]]+(?:[,.](?=[A-Za-z])[A-Za-z;'[\]]*)*/gu;
+  return text.replace(/\S+/gu, (chunk) => (isLink(chunk) ? chunk : chunk.replace(word, (w) => toRu(w))));
 };
 
 export const normalizeUserText = (value, { layout = true } = {}) => {

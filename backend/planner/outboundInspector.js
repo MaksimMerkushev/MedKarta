@@ -25,6 +25,8 @@ export const OUTBOUND_LIMITS = Object.freeze({ MAX_MESSAGES: 10, MAX_CONTENT_CHA
 // 6+ цифр подряд или через пробел/дефис (телефоны, полисы). «160/100», «38.5», время — не номер.
 const LONG_NUMBER = /\d(?:[ -]?\d){5,}/u;
 const EMAIL = /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.[\p{L}]{2,}/u;
+// «@» между буквами в любом алфавите: почта, переведённая в другую раскладку, теряет точку («пьфшдюсщь»).
+const AT_BETWEEN_LETTERS = /[\p{L}\p{N}._%+-]{2}@[\p{L}\p{N}]{2}/u;
 
 const contentProblems = (raw, freeText = false) => {
   const problems = [];
@@ -48,7 +50,7 @@ const contentProblems = (raw, freeText = false) => {
   // Метки Gateway (@PERSON_A) — не данные; убираем их перед поиском чисел и адресов.
   const plain = content.replace(/@[A-Z]+(?:_[A-Z0-9]+)?/gu, ' ');
   if (LONG_NUMBER.test(plain)) problems.push('number');
-  if (EMAIL.test(plain)) problems.push('email');
+  if (EMAIL.test(plain) || AT_BETWEEN_LETTERS.test(plain)) problems.push('email');
   return problems;
 };
 
