@@ -18,6 +18,9 @@ import { detectEntities } from '../privacy/detectors.js';
 import { checkClosedVocabulary, isKnownPlace, isStreetMention } from '../privacy/vocabulary.js';
 import { PLAN_JSON_SCHEMA } from './schema.js';
 import { buildHintBlock, PLANNER_SYSTEM_PROMPT } from './prompts.js';
+import { inspectOutbound } from './outboundInspector.js';
+
+const PLANNER_INSPECT = Object.freeze({ schemas: [PLAN_JSON_SCHEMA], staticSystem: new Set([PLANNER_SYSTEM_PROMPT]) });
 
 export class PlannerError extends Error {
   constructor(message, code) {
@@ -150,9 +153,9 @@ export const requestCompletion = async ({
   timeoutMs = 20_000,
   logger = null,
   provider = 'external',
+  // Параметры финальной проверки тела (planner/outboundInspector.js): схемы, статичные промпты, ML-слой.
+  inspect = {},
 }) => {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
   // Исход вызова для раздела «Система» и проверки готовности: код и время, без текста.
   const started = Date.now();
   let recorded = false;
@@ -164,7 +167,15 @@ export const requestCompletion = async ({
   // Локальная диагностика: тот же запрос и настоящий ответ, без ключа и заголовков авторизации.
   const sink = aiTraceSink();
   const wire = sink && /openrouter\.ai/u.test(String(url)) ? { ...body, usage: { include: true } } : body;
-  const exchange = sink ? { provider, startedAt: new Date().toISOString(), request: { url: String(url), method: 'POST', headerNames: ['Content-Type', 'Authorization (скрыт)'], bytes: Buffer.byteLength(JSON.stringify(wire)), body: wire } } : null;
+  // Независимо от проверок вызывающего: что именно уйдёт в сеть. Любая находка или сбой — отказ.
+  const problems = await inspectOutbound(wire, inspect);
+  if (problems.length > 0) {
+    logger?.event('outbound.blocked', { kinds: problems, provider });
+    throw new PlannerError('Исходящий запрос не прошёл финальную проверку — отправка отменена', PLANNER_ERROR.OUTBOUND_ASSERTION);
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const exchange = sink ?{ provider, startedAt: new Date().toISOString(), request: { url: String(url), method: 'POST', headerNames: ['Content-Type', 'Authorization (скрыт)'], bytes: Buffer.byteLength(JSON.stringify(wire)), body: wire } } : null;
 
   try {
     const response = await fetchImpl(url, {
@@ -314,7 +325,7 @@ export const createExternalPlanner = ({
       );
     }
 
-    return requestCompletion({ url, apiKey, body, fetchImpl, timeoutMs, logger, provider: name });
+    return requestCompletion({ url, apiKey, body, fetchImpl, timeoutMs, logger, provider: name, inspect: PLANNER_INSPECT });
   };
 
   return Object.freeze({ name, generate });

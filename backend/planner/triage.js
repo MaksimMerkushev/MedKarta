@@ -230,6 +230,11 @@ export const validateTriage = (raw) => {
   return { status, specialties, question, options, frame: parseFrame(parsed.frame) };
 };
 
+const CHILD_HINT = 'Приём детский.';
+const RETRY_HINT = 'Прошлый ответ не прошёл проверку. Верни только объект ответа, без описания схемы, например: {"status":"specialist","specialties":["therapist"],"question":null,"options":null}';
+/** Системные тексты триажа известны заранее: финальная проверка пропускает только их без детекторов. */
+const TRIAGE_STATIC_SYSTEM = new Set([TRIAGE_SYSTEM_PROMPT, CHILD_HINT, RETRY_HINT]);
+
 /**
  * @param {object} config как у createExternalPlanner: ключ, адрес, модель, транспорт
  */
@@ -241,8 +246,11 @@ export const createExternalTriage = ({
   fetchImpl = fetch,
   logger = null,
   reasoningEffort = null,
+  // Локальный ML-слой (privacy/nerLayer.js): ещё раз смотрит итоговый текст перед отправкой.
+  ner = null,
 } = {}) => {
   const name = 'external';
+  const inspect = Object.freeze({ schemas: [TRIAGE_JSON_SCHEMA], staticSystem: TRIAGE_STATIC_SYSTEM, freeText: true, ner });
 
   /**
    * @param {object} params
@@ -278,11 +286,9 @@ export const createExternalTriage = ({
       { role: 'system', content: TRIAGE_SYSTEM_PROMPT },
       { role: 'user', content: `Реплики пользователя:\n${text}` },
     ];
-    if (isChild) messages.push({ role: 'system', content: 'Приём детский.' });
-    if (retry) {
-      // Модель иногда возвращает саму схему вместо ответа: второй раз — с напоминанием формата.
-      messages.push({ role: 'system', content: 'Прошлый ответ не прошёл проверку. Верни только объект ответа, без описания схемы, например: {"status":"specialist","specialties":["therapist"],"question":null,"options":null}' });
-    }
+    if (isChild) messages.push({ role: 'system', content: CHILD_HINT });
+    // Модель иногда возвращает саму схему вместо ответа: второй раз — с напоминанием формата.
+    if (retry) messages.push({ role: 'system', content: RETRY_HINT });
     const body = {
       model,
       messages,
@@ -291,7 +297,7 @@ export const createExternalTriage = ({
       max_tokens: 600,
     };
     if (REASONING_EFFORTS.includes(reasoningEffort)) body.reasoning = { effort: reasoningEffort };
-    return requestCompletion({ url, apiKey, body, fetchImpl, timeoutMs, logger, provider: name });
+    return requestCompletion({ url, apiKey, body, fetchImpl, timeoutMs, logger, provider: name, inspect });
   };
 
   return Object.freeze({ name, classify });
