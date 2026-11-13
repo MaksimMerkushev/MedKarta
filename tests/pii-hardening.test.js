@@ -33,13 +33,17 @@ describe('Нормализация входа', () => {
     assert.equal(normalizeUserText('Vtyz pjden Uekmyfhf'), 'Меня зовут Гульнара');
     assert.equal(normalizeUserText("'nj F[vtnjd Fhcty"), 'это Ахметов Арсен');
     assert.equal(normalizeUserText('Hello, I am fine. Thanks, doc'), 'Hello, I am fine. Thanks, doc');
-    assert.equal(normalizeUserText('Упомянуты: @WORK. availableAfter=18:00.'), 'Упомянуты: @WORK. availableAfter=18:00.');
+    assert.equal(normalizeUserText('Упомянуты: @WORK. availableAfter=18:00.', { brackets: false }), 'Упомянуты: @WORK. availableAfter=18:00.');
+    // В реплике пользователя «@ЗАГЛАВНЫЕ» — не метка шлюза: становится обычным ником.
+    assert.equal(normalizeUserText('Упомянуты: @WORK.'), 'Упомянуты: @work.');
   });
 
   it('почта, ссылки и ники в раскладку не переводятся', () => {
     for (const text of ['вайбер instagram.com/elmir.ng; давление 150/95', 'почта ivanov.s@gmail.com', 'ivanov.s [at] yandex.ru кашель', 'chulpan.z(at)list(dot)ru, aigul.sh(at)yandex(dot)ru', 'телега t.me/timur.safin болит']) {
-      assert.equal(normalizeUserText(text), text);
+      assert.equal(normalizeUserText(text, { brackets: false }), text);
     }
+    // Пользовательские квадратные скобки — не метки: «[at]» становится «(at)», почта так же узнаётся.
+    assert.equal(normalizeUserText('ivanov.s [at] yandex.ru'), 'ivanov.s (at) yandex.ru');
     assert.equal(normalizeUserText('Vtyz pjden Rc.if, ,jkbn ujkjdf'), 'Меня зовут Ксюша, болит голова');
   });
 
@@ -150,7 +154,7 @@ describe('Метки и неуверенность ML-слоя', () => {
 
 describe('Финальная проверка свободного текста', () => {
   const body = (user) => ({ model: 'm', messages: [{ role: 'system', content: TRIAGE_SYSTEM_PROMPT }, { role: 'user', content: `Реплики пользователя:\n1. ${user}` }], response_format: { type: 'json_schema', json_schema: TRIAGE_JSON_SCHEMA }, temperature: 0, max_tokens: 600 });
-  const inspect = { schemas: [TRIAGE_JSON_SCHEMA], staticSystem: new Set([TRIAGE_SYSTEM_PROMPT]), freeText: true };
+  const inspect = { channel: 'triage' };
   it('имя строчными, ник, закодированная строка, невидимые символы — отказ', async () => {
     for (const user of ['меня зовут ильнур петров, болит горло', 'мой ник телеграм elvira_kzn', 'данные 0JPRg9C70YzQvdCw0YDQsCA4OTE3', 'Гуль​нара, болит']) assert.notDeepEqual(await inspectOutbound(body(user), inspect), [], user);
   });

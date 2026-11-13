@@ -19,6 +19,7 @@ import { classifySymptoms, SENSITIVE_RULE_IDS } from './symptoms.js';
 import { isMedicalWord, MEDICAL_ABBREVIATION } from './medicalLexicon.js';
 import { nearNameSpans, recognizePii } from './ruRecognizers.js';
 import { applySpans } from './spanMask.js';
+import { labelFor } from './labels.js';
 
 const prepare = (text) => String(text || '').toLowerCase().replace(/ё/gu, 'е');
 const B = '(?<![\\p{L}\\p{N}])';
@@ -134,14 +135,20 @@ export const deidentifyComplaint = (text, state = { places: new Map() }) => {
   const source = String(text || '');
   if (hasRareCircumstance(source)) return { text: '', blocked: true, reason: 'rare_circumstance' };
   if (hasDocumentNumber(source)) return { text: '', blocked: true, reason: 'document_number' };
-  let result = source.replace(/@([A-Z]+)(?:_[A-Z0-9]+)?/gu, (whole, kind) => TOKEN_LABEL[kind] || '[место]');
+  // Нумерация меток на весь диалог (state.labels): @PERSON_A и @PERSON_B — разные люди,
+  // [имя_1] и [имя_2]; без общего состояния (один фрагмент) — просто [имя].
+  const labels = state.labels || null;
+  let result = source.replace(/@([A-Z]+)(?:_[A-Z0-9]+)?/gu, (whole, kind) => {
+    const label = TOKEN_LABEL[kind] || '[место]';
+    return labels ? labelFor(labels, label.slice(1, -1), `token:${whole}`) : label;
+  });
   // «Нурисламова-Вандербильт»: Gateway заменил часть фамилии, вторая часть через дефис — тоже имя.
   // Слово перед меткой ищется только с начала слова: иначе на длинном слове перебор квадратичный.
-  result = result.replace(/\[имя\]-\p{L}+/gu, '[имя]').replace(/(?<!\p{L})\p{L}+-\[имя\]/gu, '[имя]');
+  result = result.replace(/(\[имя(?:_\d+)?\])-\p{L}+/gu, '$1').replace(/(?<!\p{L})\p{L}+-(\[имя(?:_\d+)?\])/gu, '$1');
   // Детерминированные распознаватели РФ: имена строчными, организации после «работаю в»,
   // телефоны словами, почта с заменами, ники, закодированные строки, адреса (ruRecognizers.js).
-  result = applySpans(result, recognizePii(result)).text;
-  result = applySpans(result, nearNameSpans(result)).text;
+  result = applySpans(result, recognizePii(result), { state: labels }).text;
+  result = applySpans(result, nearNameSpans(result), { state: labels }).text;
   result = replaceSpans(result, CAR_PLATE, '[номер]');
   result = result.replace(FULL_DATE, '[дата]');
   result = maskCodes(result);
@@ -155,7 +162,7 @@ export const deidentifyComplaint = (text, state = { places: new Map() }) => {
   result = result.replace(ALL_CAPS, (word) => (MEDICAL_ABBREVIATIONS.has(word) || MEDICAL_ABBREVIATION(word) ? word : '[организация]'));
   for (const pattern of PLACE_PATTERNS) {
     result = replaceSpans(result, pattern, (raw) => {
-      const label = `[место_${state.places.size + 1}]`;
+      const label = labels ? labelFor(labels, 'место', `place:${raw.toLowerCase()}`) : `[место_${state.places.size + 1}]`;
       state.places.set(label, raw);
       return label;
     });

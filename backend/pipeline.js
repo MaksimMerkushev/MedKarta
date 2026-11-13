@@ -822,7 +822,8 @@ const buildDefaultPipeline = async () => {
   // Лаборатории: каталог и подбор — на сервере; модель — только для неизвестных названий анализов.
   const labs = createLabAssistant({
     getService: getDefaultLabService,
-    parser: createExternalLabParser({ ...upstream, model: process.env.AI_LAB_MODEL || process.env.AI_TRIAGE_MODEL || upstream.model }),
+    // Фрагменты названий — свободный текст: та же финальная проверка и тот же ML-слой, что у жалоб.
+    parser: createExternalLabParser({ ...upstream, model: process.env.AI_LAB_MODEL || process.env.AI_TRIAGE_MODEL || upstream.model, ner }),
     logger: defaultLogger,
     metrics: defaultMetrics,
   });

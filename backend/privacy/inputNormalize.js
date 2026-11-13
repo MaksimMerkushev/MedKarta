@@ -11,6 +11,7 @@
  * Медицинский смысл не меняется: это не обезличивание, а нормализация входа.
  */
 import { stripInvisible } from './normalize.js';
+import { neutralizeUserMarkup } from './labels.js';
 
 const LAT_TO_CYR = { a: 'а', c: 'с', e: 'е', o: 'о', p: 'р', x: 'х', y: 'у', k: 'к', m: 'м', h: 'н', t: 'т', b: 'в', A: 'А', B: 'В', C: 'С', E: 'Е', H: 'Н', K: 'К', M: 'М', O: 'О', P: 'Р', T: 'Т', X: 'Х', Y: 'У' };
 const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
@@ -63,16 +64,62 @@ const fixLayout = (text) => {
   return text.replace(/\S+/gu, (chunk) => (isLink(chunk) ? chunk : chunk.replace(word, (w) => toRu(w))));
 };
 
-export const normalizeUserText = (value, { layout = true } = {}) => {
+// HTML-сущности (десятичные и шестнадцатеричные), URL-кодирование и \uXXXX — обратимые записи
+// текста. Раскрываются в ограниченное число проходов (двойное кодирование тоже); что осталось
+// закодированным после них, финальная проверка не пропустит (outboundInspector, «encoded»).
+export const DECODE_ROUNDS = 3;
+const TAGS = /<\/?[a-z][^>]{0,200}>/giu;
+const decodeEntities = (text) => text.replace(/&(#x[0-9a-f]{1,6}|#\d{1,7}|[a-z]{2,6});/giu, (m, code) => {
+  if (code.startsWith('#')) {
+    const n = code[1] === 'x' || code[1] === 'X' ? Number.parseInt(code.slice(2), 16) : Number(code.slice(1));
+    return n > 0 && n < 0x110000 ? String.fromCodePoint(n) : ' ';
+  }
+  return ENTITIES[code.toLowerCase()] ?? m;
+});
+// Одиночное «%» («50%», «%20» в ссылке) не трогается: раскрываются только цепочки байтов UTF-8.
+// Двойное кодирование («%25D0%25AF»): два и больше «%25XX» — это закодированные байты, а не проценты.
+const undouble = (text) => ((text.match(/%25[0-9A-Fa-f]{2}/gu) || []).length >= 2 ? text.replace(/%25([0-9A-Fa-f]{2})/gu, '%$1') : text);
+const decodePercent = (text) => undouble(text).replace(/(?:%[0-9A-Fa-f]{2}){2,}/gu, (m) => {
+  try {
+    const decoded = decodeURIComponent(m);
+    return decoded.includes('\uFFFD') ? m : decoded;
+  } catch {
+    return m;
+  }
+});
+const decodeEscapes = (text) => text.replace(/(?:\\u[0-9A-Fa-f]{4}){2,}/gu, (m) => {
+  try {
+    return JSON.parse(`"${m}"`);
+  } catch {
+    return m;
+  }
+});
+const decodeBounded = (input) => {
+  let text = input;
+  for (let round = 0; round < DECODE_ROUNDS; round += 1) {
+    const next = decodeEscapes(decodePercent(decodeEntities(text))).replace(TAGS, ' ');
+    if (next === text) break;
+    text = next;
+  }
+  return text;
+};
+
+/**
+ * @param {string} value
+ * @param {{layout?: boolean, brackets?: boolean}} [options] layout — исправлять раскладку;
+ *   brackets — обезвредить пользовательские «[…]» и «@ЗАГЛАВНЫЕ» (вход; финальная проверка — false,
+ *   там метки уже серверные)
+ */
+export const normalizeUserText = (value, { layout = true, brackets = true } = {}) => {
   // «№» NFKC превращает в «No» — правила номеров школ и больниц его бы не узнали.
-  let text = String(value ?? '').replace(/№/gu, '\uE000').normalize('NFKC').replace(/\uE000/gu, '№');
-  text = stripInvisible(text);
-  text = text.replace(/<\/?[a-z][^>]{0,200}>/giu, ' ').replace(/&(#\d{1,6}|[a-z]{2,6});/giu, (m, code) => {
-    if (code.startsWith('#')) { const n = Number(code.slice(1)); return n > 0 && n < 0x10ffff ? String.fromCodePoint(n) : ' '; }
-    return ENTITIES[code.toLowerCase()] ?? m;
-  });
+  const nfkc = (v) => v.replace(/№/gu, '\uE000').normalize('NFKC').replace(/\uE000/gu, '№');
+  let text = stripInvisible(nfkc(String(value ?? '')));
+  text = decodeBounded(text.replace(TAGS, ' '));
+  // Раскодированный текст может нести те же невидимые символы и широкие буквы.
+  text = stripInvisible(nfkc(text));
   text = text.replace(/```[a-z]*\n?/giu, ' ').replace(/\*\*|__|~~|`/gu, '');
   if (layout) text = fixLayout(text);
+  if (brackets) text = neutralizeUserMarkup(text);
   text = foldMixed(text);
   return text.replace(/[ \t]{2,}/gu, ' ').trim();
 };

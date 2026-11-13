@@ -51,7 +51,7 @@ describe('Мониторинг: исходы вызовов модели', () =>
 
   describe('requestCompletion записывает исход', () => {
     beforeEach(() => aiHealth.reset());
-    const call = (fetchImpl, timeoutMs = 2000) => requestCompletion({ url: 'https://openrouter.ai/api/v1/chat/completions', apiKey: 'k', body: buildPlannerBody({ model: 'test-model', messages: [{ role: 'user', content: 'Запрос: подобрать врача.' }] }), fetchImpl, timeoutMs, inspect: { schemas: [buildPlannerBody({ model: 'x', messages: [] }).response_format.json_schema] } });
+    const call = (fetchImpl, timeoutMs = 2000) => requestCompletion({ url: 'https://openrouter.ai/api/v1/chat/completions', apiKey: 'k', body: buildPlannerBody({ model: 'test-model', messages: [{ role: 'user', content: 'Запрос: подобрать врача.' }] }), fetchImpl, timeoutMs, channel: 'planner' });
 
     it('успех — с задержкой и токенами', async () => {
       await call(async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }], usage: { prompt_tokens: 10, completion_tokens: 2 } }), { status: 200 }));

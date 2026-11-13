@@ -167,7 +167,7 @@ describe('ML-слой: отказы сервиса — fail closed', () => {
       const withNer = await run('я петрова лейсан, болит голова', createNerLayer({ client: client() }));
       assert.equal(withNer.sent.length, 1);
       assert.doesNotMatch(withNer.sent[0], /петрова|лейсан/u);
-      assert.match(withNer.sent[0], /\[имя\]/u);
+      assert.match(withNer.sent[0], /\[имя(?:_\d+)?\]/u);
     });
 
     for (const name of ['overloaded', 'slow', 'garbage', 'error']) {

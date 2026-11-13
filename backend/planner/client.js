@@ -18,9 +18,16 @@ import { detectEntities } from '../privacy/detectors.js';
 import { checkClosedVocabulary, isKnownPlace, isStreetMention } from '../privacy/vocabulary.js';
 import { PLAN_JSON_SCHEMA } from './schema.js';
 import { buildHintBlock, PLANNER_SYSTEM_PROMPT } from './prompts.js';
-import { inspectOutbound } from './outboundInspector.js';
+import { defineChannel, REASONING_EFFORTS, sameJson } from './outboundChannels.js';
+import { inspectOutboundBytes } from './outboundInspector.js';
 
-const PLANNER_INSPECT = Object.freeze({ schemas: [PLAN_JSON_SCHEMA], staticSystem: new Set([PLANNER_SYSTEM_PROMPT]) });
+// Канал планировщика: доверенный системный текст — только его промпт; подсказки шлюза проверяются.
+export const PLANNER_CHANNEL = defineChannel('planner', {
+  isTrustedSystem: (content) => content === PLANNER_SYSTEM_PROMPT,
+  isKnownSchema: (schema) => sameJson(schema, PLAN_JSON_SCHEMA),
+  freeText: false,
+  maxTokens: 700,
+});
 
 export class PlannerError extends Error {
   constructor(message, code) {
@@ -119,7 +126,7 @@ export const isAllowedUpstreamUrl = (value) => {
  * OpenRouter: reasoning.effort. Не задано — параметр не отправляется:
  * другие OpenAI-совместимые API могут его не знать.
  */
-export const REASONING_EFFORTS = Object.freeze(['none', 'minimal', 'low', 'medium', 'high']);
+export { REASONING_EFFORTS };
 
 /**
  * Тело запроса к модели. Одно на ассистента и на проверки (npm run ai:check),
@@ -153,8 +160,10 @@ export const requestCompletion = async ({
   timeoutMs = 20_000,
   logger = null,
   provider = 'external',
-  // Параметры финальной проверки тела (planner/outboundInspector.js): схемы, статичные промпты, ML-слой.
-  inspect = {},
+  // Канал (planner/outboundChannels.js): что в запросе доверенное, объявлено им, а не вызовом.
+  channel,
+  // Локальный ML-слой для финальной проверки свободного текста: только добавляет проверки.
+  ner = null,
 }) => {
   // Исход вызова для раздела «Система» и проверки готовности: код и время, без текста.
   const started = Date.now();
@@ -167,15 +176,23 @@ export const requestCompletion = async ({
   // Локальная диагностика: тот же запрос и настоящий ответ, без ключа и заголовков авторизации.
   const sink = aiTraceSink();
   const wire = sink && /openrouter\.ai/u.test(String(url)) ? { ...body, usage: { include: true } } : body;
+  // Тело сериализуется один раз: проверяются и отправляются одни и те же байты (toJSON, геттеры
+  // и изменения объекта после проверки на отправку не влияют).
+  let bytes;
+  try {
+    bytes = JSON.stringify(wire);
+  } catch {
+    throw new PlannerError('Тело запроса не сериализуется — отправка отменена', PLANNER_ERROR.OUTBOUND_ASSERTION);
+  }
   // Независимо от проверок вызывающего: что именно уйдёт в сеть. Любая находка или сбой — отказ.
-  const problems = await inspectOutbound(wire, inspect);
+  const problems = await inspectOutboundBytes(bytes, { channel, ner });
   if (problems.length > 0) {
     logger?.event('outbound.blocked', { kinds: problems, provider });
     throw new PlannerError('Исходящий запрос не прошёл финальную проверку — отправка отменена', PLANNER_ERROR.OUTBOUND_ASSERTION);
   }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const exchange = sink ?{ provider, startedAt: new Date().toISOString(), request: { url: String(url), method: 'POST', headerNames: ['Content-Type', 'Authorization (скрыт)'], bytes: Buffer.byteLength(JSON.stringify(wire)), body: wire } } : null;
+  const exchange = sink ? { provider, startedAt: new Date().toISOString(), request: { url: String(url), method: 'POST', headerNames: ['Content-Type', 'Authorization (скрыт)'], bytes: Buffer.byteLength(bytes), body: JSON.parse(bytes) } } : null;
 
   try {
     const response = await fetchImpl(url, {
@@ -187,7 +204,7 @@ export const requestCompletion = async ({
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify(wire),
+      body: bytes,
     });
     if (exchange) {
       const text = await response.clone().text();
@@ -325,7 +342,7 @@ export const createExternalPlanner = ({
       );
     }
 
-    return requestCompletion({ url, apiKey, body, fetchImpl, timeoutMs, logger, provider: name, inspect: PLANNER_INSPECT });
+    return requestCompletion({ url, apiKey, body, fetchImpl, timeoutMs, logger, provider: name, channel: PLANNER_CHANNEL });
   };
 
   return Object.freeze({ name, generate });

@@ -27,6 +27,29 @@ export const DEFAULT_UNCERTAIN = Object.freeze({ min: 0.4, max: 0.6 });
 const unify = (entity) => ({ ...entity, type: LEGACY[entity.type] || entity.type });
 const insideLabel = (text, e) => [...text.matchAll(LABEL_PATTERN)].some((m) => m.index <= e.start && e.end <= m.index + m[0].length);
 
+/*
+ * Длинный текст (история диалога с нумерацией реплик) — окнами с перекрытием: сервис
+ * принимает до 4000 символов, а обрезать проверяемый текст нельзя. Имя на границе окна
+ * целиком попадает в одно из окон (перекрытие 200 символов).
+ */
+export const NER_WINDOW = Object.freeze({ CHARS: 3500, OVERLAP: 200 });
+export const windowsOf = (text) => {
+  if (text.length <= NER_WINDOW.CHARS) return [[0, text]];
+  const out = [];
+  let start = 0;
+  while (start < text.length) {
+    let end = Math.min(text.length, start + NER_WINDOW.CHARS);
+    if (end < text.length) {
+      const cut = text.lastIndexOf(' ', end);
+      if (cut > start + NER_WINDOW.CHARS / 2) end = cut;
+    }
+    out.push([start, text.slice(start, end)]);
+    if (end >= text.length) break;
+    start = Math.max(end - NER_WINDOW.OVERLAP, start + 1);
+  }
+  return out;
+};
+
 /** Разделить находки на уверенные (маскировать) и сомнительные (не отправлять). */
 export const splitByConfidence = (text, entities, uncertain = DEFAULT_UNCERTAIN) => {
   const confident = [];
@@ -49,12 +72,17 @@ export const createNerLayer = ({ client = null, clients = null, logger = null, m
   const sources = clients || (client ? [client] : []);
   const entitiesOf = async (text) => {
     const all = [];
-    for (const source of sources) all.push(...await source.entities(text));
+    for (const source of sources) {
+      for (const [offset, part] of windowsOf(text)) {
+        for (const e of await source.entities(part)) all.push({ ...e, start: e.start + offset, end: e.end + offset });
+      }
+    }
     return all;
   };
 
   const maskTurns = async (turns) => {
-    const state = createLabelState();
+    // Номера продолжают выданные правилами: другой человек не получит уже занятый «[имя_1]».
+    const state = createLabelState(turns);
     const result = [];
     let masked = 0;
     for (const turn of turns) {

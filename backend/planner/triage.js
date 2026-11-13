@@ -23,6 +23,7 @@
 import { detectEntities, ENTITY_KIND } from '../privacy/detectors.js';
 import { assertOutboundSafe, isAllowedUpstreamUrl, PLANNER_ERROR, PlannerError, REASONING_EFFORTS, requestCompletion } from './client.js';
 import { SPECIALTY_KEYS } from './schema.js';
+import { defineChannel, sameJson } from './outboundChannels.js';
 
 export const TRIAGE_STATUSES = Object.freeze(['specialist', 'clarify', 'emergency', 'not_medical']);
 
@@ -234,6 +235,13 @@ const CHILD_HINT = 'Приём детский.';
 const RETRY_HINT = 'Прошлый ответ не прошёл проверку. Верни только объект ответа, без описания схемы, например: {"status":"specialist","specialties":["therapist"],"question":null,"options":null}';
 /** Системные тексты триажа известны заранее: финальная проверка пропускает только их без детекторов. */
 const TRIAGE_STATIC_SYSTEM = new Set([TRIAGE_SYSTEM_PROMPT, CHILD_HINT, RETRY_HINT]);
+// Канал триажа: свободный текст реплик — распознаватели ПДн и ML-слой в финальной проверке.
+export const TRIAGE_CHANNEL = defineChannel('triage', {
+  isTrustedSystem: (content) => TRIAGE_STATIC_SYSTEM.has(content),
+  isKnownSchema: (schema) => sameJson(schema, TRIAGE_JSON_SCHEMA),
+  freeText: true,
+  maxTokens: 600,
+});
 
 /**
  * @param {object} config как у createExternalPlanner: ключ, адрес, модель, транспорт
@@ -250,7 +258,6 @@ export const createExternalTriage = ({
   ner = null,
 } = {}) => {
   const name = 'external';
-  const inspect = Object.freeze({ schemas: [TRIAGE_JSON_SCHEMA], staticSystem: TRIAGE_STATIC_SYSTEM, freeText: true, ner });
 
   /**
    * @param {object} params
@@ -297,7 +304,7 @@ export const createExternalTriage = ({
       max_tokens: 600,
     };
     if (REASONING_EFFORTS.includes(reasoningEffort)) body.reasoning = { effort: reasoningEffort };
-    return requestCompletion({ url, apiKey, body, fetchImpl, timeoutMs, logger, provider: name, inspect });
+    return requestCompletion({ url, apiKey, body, fetchImpl, timeoutMs, logger, provider: name, channel: TRIAGE_CHANNEL, ner });
   };
 
   return Object.freeze({ name, classify });

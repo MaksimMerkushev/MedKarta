@@ -12,7 +12,8 @@ import { PLANNER_ERROR, requestCompletion } from '../backend/planner/client.js';
 import { PLAN_JSON_SCHEMA } from '../backend/planner/schema.js';
 import { TRIAGE_JSON_SCHEMA, TRIAGE_SYSTEM_PROMPT } from '../backend/planner/triage.js';
 
-const triageInspect = (ner = null) => ({ schemas: [TRIAGE_JSON_SCHEMA], staticSystem: new Set([TRIAGE_SYSTEM_PROMPT]), freeText: true, ner });
+// Доверенное объявляет канал триажа (planner/triage.js), а не вызов.
+const triageInspect = (ner = null) => ({ channel: 'triage', ner });
 const triageBody = (user, extra = {}) => ({
   model: 'openai/gpt-5.4-mini',
   messages: [{ role: 'system', content: TRIAGE_SYSTEM_PROMPT }, { role: 'user', content: `Реплики пользователя:\n1. ${user}` }],
@@ -61,7 +62,7 @@ describe('Финальная проверка тела запроса', () => {
     let called = 0;
     const fetchImpl = async () => { called += 1; return { ok: true }; };
     await assert.rejects(
-      requestCompletion({ url: 'https://llm.example.test/v1/chat/completions', apiKey: 'k', body: triageBody('болит горло', { user: 'account-42' }), fetchImpl, inspect: triageInspect() }),
+      requestCompletion({ url: 'https://llm.example.test/v1/chat/completions', apiKey: 'k', body: triageBody('болит горло', { user: 'account-42' }), fetchImpl, channel: 'triage' }),
       { code: PLANNER_ERROR.OUTBOUND_ASSERTION },
     );
     assert.equal(called, 0);

@@ -11,6 +11,7 @@
 import { isFirstName } from './firstNames.js';
 import { looksLikePatronymic, looksLikeSurname } from './morphology.js';
 import { isMedicalPhrase, isMedicalWord } from './medicalLexicon.js';
+import { trustedLabelPattern } from './labels.js';
 
 const norm = (v) => v.toLowerCase().replace(/ё/gu, 'е');
 // Имена, которых не было в firstNames.js и которые пропускались на dev-наборе.
@@ -49,11 +50,34 @@ const names = (text) => {
       i += 1;
       continue;
     }
-    // «Петровна сказала», «Ивановна посоветовала»: отчество-обращение.
-    if (looksLikePatronymic(t.value) && /^\p{Lu}/u.test(t.value)) spans.push({ type: 'PERSON', start: t.start, end: t.end });
+    // Отчество — часть имени: «Петровна сказала»; «ну я зарвелинариз сөмбелә нурланович» — с одним-двумя
+    // словами перед ним (редкие имя и фамилия, которых нет в словарях), если это не служебные слова.
+    if (looksLikePatronymic(t.value)) {
+      let start = t.start;
+      for (let j = i - 1; j >= Math.max(0, i - 2); j -= 1) {
+        const prev = tokens[j];
+        const word = norm(prev.value);
+        if (!gapOk(prev, tokens[j + 1]) || STOP.has(word) || NAME_CUE.test(word) || isMedicalWord(prev.value) || word.length < 3) break;
+        start = prev.start;
+      }
+      spans.push({ type: 'PERSON', start, end: t.end });
+    }
   }
   return spans;
 };
+
+/*
+ * Имя или фамилия по частям: «Начало фамилии Нурвел.» … «Продолжение иеворел, имя Аксинья».
+ * Без уточнения («продолжение лечения») — только отдельное слово перед знаком препинания и не из
+ * обычных продолжений.
+ */
+const SPLIT_QUALIFIED = /(?<![\p{L}])(?:начало|продолжение|окончание|конец|перв\p{L}*\s+част\p{L}*|втор\p{L}*\s+част\p{L}*)\s+(?:фамилии|имени|отчества|ника|почты)\s*:?\s*([\p{L}-]{2,})/giu;
+const SPLIT_BARE = /(?<![\p{L}])(?:продолжение|окончание)\s*:?\s+([\p{L}-]{2,})(?=\s*[,.;!?]|\s*$)/giu;
+const ORDINARY_CONTINUATION = /^(?:лечени|терапи|курс|при[её]м|болезн|истори|разговор|тем|жалоб|симптом|сказанн|следует|выше|ниже)/u;
+const splitNames = (text) => [
+  ...[...text.matchAll(SPLIT_QUALIFIED)].map((m) => ({ type: 'PERSON', start: m.index + m[0].length - m[1].length, end: m.index + m[0].length })),
+  ...[...text.matchAll(SPLIT_BARE)].filter((m) => !ORDINARY_CONTINUATION.test(norm(m[1])) && !isMedicalWord(m[1])).map((m) => ({ type: 'PERSON', start: m.index + m[0].length - m[1].length, end: m.index + m[0].length })),
+];
 
 // Место работы и учёбы строчными: следующие 1–3 слова, если это не общее «завод», «офис»…
 const WORK_CUE = /(?<![\p{L}])(?:работа(?:ю|ет|ем)|тружусь|устроил(?:ся|ась)|сотрудни(?:к|ца)|учусь|учится|студент\p{L}*|наблюда(?:юсь|ется)|лечусь|лечил(?:ся|ась)|я\s+из)\s+(?:в|во|на|из)?\s*/giu;
@@ -140,6 +164,7 @@ export const recognizePii = (text) => {
   const spans = [
     ...names(value),
     ...orgsAfterCue(value),
+    ...splitNames(value),
     // Аббревиатура с падежным окончанием («КАМАЗе», «РКБшке») — название организации.
     ...regexSpans(value, /(?<![\p{L}])\p{Lu}{2,}\p{Ll}{1,3}(?![\p{L}])/gu, 'ORG'),
     ...regexSpans(value, PHONE_WORDS, 'PHONE'),
@@ -157,7 +182,8 @@ export const recognizePii = (text) => {
     ...regexSpans(value, FLAT, 'ADDRESS'),
   ];
   // Внутри меток Gateway ничего не ищем; медицинские фразы не трогаем.
-  const labels = [...value.matchAll(/\[[^[\]\n]{1,40}\]|@[A-Z]+(?:_[A-Z0-9]+)?/gu)].map((m) => ({ start: m.index, end: m.index + m[0].length }));
+  // Только серверные метки (точная грамматика) и метки шлюза: пользовательские скобки на входе обезврежены.
+  const labels = [...value.matchAll(new RegExp(`${trustedLabelPattern().source}|@[A-Z]+(?:_[A-Z0-9]+)?`, 'gu'))].map((m) => ({ start: m.index, end: m.index + m[0].length }));
   const seen = new Set();
   return spans.filter((s) => s.end > s.start
     && !seen.has(`${s.type}:${s.start}:${s.end}`) && seen.add(`${s.type}:${s.start}:${s.end}`)
