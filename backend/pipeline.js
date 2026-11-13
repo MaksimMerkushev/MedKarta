@@ -17,6 +17,8 @@ import { createPrivacyGateway } from './privacy/gateway.js';
 import { createStoreFromEnv, createTokenVault } from './storage/tokenVault.js';
 import { createExternalPlanner, PLANNER_ERROR } from './planner/client.js';
 import { createExternalTriage, MAX_CLARIFY_ROUNDS, validateTriage } from './planner/triage.js';
+import { createNerClient, nerConfigFromEnv } from './privacy/nerClient.js';
+import { createNerLayer } from './privacy/nerLayer.js';
 import { createProxyFetch, parseProxyUrl } from './planner/proxyFetch.js';
 import { validatePlan } from './planner/validator.js';
 import { planLocally } from './planner/localPlanner.js';
@@ -67,6 +69,11 @@ export const createPipeline = ({
    * классификатора (как при недоступной модели).
    */
   triage = null,
+  /*
+   * Локальный ML-слой распознавания ПДн (privacy/nerLayer.js, флаг PII_NER).
+   * null — только правила, как раньше.
+   */
+  ner = null,
   /*
    * Демо-запись: ответ на «нужен ЛОР завтра после 18:00» несёт запрос
    * строгого подбора (action.booking), который интерфейс исполняет через
@@ -135,8 +142,23 @@ export const createPipeline = ({
   const runTriage = async (gate, takeBudget = () => true) => {
     const started = Date.now();
     try {
+      let turns = gate.context.triageTurns;
+      if (ner) {
+        /*
+         * Локальная модель — после правил, на уже очищенных репликах. Недоступна,
+         * перегружена, ответила не по формату — жалоба наружу не уходит: ответит
+         * локальный классификатор. Обходного пути без модели нет.
+         */
+        try {
+          turns = await ner.maskTurns(turns);
+        } catch (error) {
+          metrics.increment('ner.error', { code: error?.code || 'unknown' });
+          logger.warn('ner.unavailable', { request_id: gate.requestId, code: error?.code || 'unknown' });
+          return null;
+        }
+      }
       const params = {
-        turns: gate.context.triageTurns,
+        turns,
         tokens: gate.context.triageTokens,
         isChild: Boolean(gate.context.booking?.child),
       };
@@ -718,14 +740,21 @@ const buildDefaultPipeline = async () => {
     logger: defaultLogger,
   };
   const planner = createExternalPlanner(upstream);
+  // Локальная модель ПДн: включается флагом PII_NER=on; без адреса сервиса жалобы наружу не уходят.
+  const nerConfig = nerConfigFromEnv();
+  const ner = nerConfig.enabled ? createNerLayer({ client: createNerClient(nerConfig), logger: defaultLogger, metrics: defaultMetrics }) : null;
+  if (nerConfig.enabled && !nerConfig.socketPath && !nerConfig.port) {
+    defaultLogger.warn('ner.misconfigured', { status: 'PII_NER=on без PII_NER_SOCKET/PII_NER_PORT: внешний триаж отключён' });
+  }
   // Тот же провайдер и ключ; модель для жалоб можно задать отдельно (AI_TRIAGE_MODEL).
-  const triage = createExternalTriage({ ...upstream, model: process.env.AI_TRIAGE_MODEL || upstream.model });
+  const triage = createExternalTriage({ ...upstream, model: process.env.AI_TRIAGE_MODEL || upstream.model, ner });
 
   return createPipeline({
     catalog,
     vault,
     planner,
     triage,
+    ner,
     routing: await createRoutingProviderFromEnv(),
     booking: { enabled: bookingModeFromEnv(), publicHidden: publicClinicsHidden(), now: () => demoNow() },
   });
