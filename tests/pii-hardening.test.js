@@ -152,3 +152,29 @@ describe('Финальная проверка свободного текста'
     assert.deepEqual(await inspectOutbound(body('Меня зовут [имя], давление 160/100, Метформин 1000 мг, ТТГ 6.2'), inspect), []);
   });
 });
+
+describe('Исправления после замера на holdout', () => {
+  it('неизвестное слово вплотную к метке имени — часть имени; роли, глаголы и симптомы остаются', () => {
+    assert.equal(deidentifyComplaint('беспокоит ахат @PERSON_A, температура').text, 'беспокоит [имя] [имя], температура');
+    assert.equal(deidentifyComplaint('пишу я @PERSON_A хадижат понимаете').text, 'пишу я [имя] [имя] понимаете');
+    assert.equal(deidentifyComplaint('доктор @PERSON_A сказала, болит').text, 'доктор [имя] сказала, болит');
+    assert.equal(deidentifyComplaint('@PERSON_A болит горло').text, '[имя] болит горло');
+  });
+
+  it('номер со звёздочками — документ и без слова-признака', () => {
+    assert.equal(hasDocumentNumber('ВУ 66 КМ 2*9709'), true);
+    assert.equal(hasDocumentNumber('код 12**4567'), true);
+    assert.equal(hasDocumentNumber('давление 160/100, температура 38.5'), false);
+  });
+
+  it('раскладка: однобуквенные предлоги и знаки внутри слов', () => {
+    assert.equal(normalizeUserText('Z F[vtnjdf Trfnthbyf, болит'), 'Я Ахметова Екатерина, болит');
+    assert.equal(normalizeUserText('I am Bob, it is a test'), 'I am Bob, it is a test');
+  });
+
+  it('организация из нескольких слов после «сотрудник»; публичная роль и крупное происшествие — блок', () => {
+    assert.equal(deidentifyComplaint('Сотрудник Поволжской академии спорта и изжога').text, 'Сотрудник [организация] и изжога');
+    assert.equal(deidentifyComplaint('я ведущая эфира на радио, кашель').blocked, true);
+    assert.equal(deidentifyComplaint('у нас в доме был пожар, кашель').blocked, true);
+  });
+});

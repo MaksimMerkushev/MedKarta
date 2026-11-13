@@ -43,7 +43,12 @@ const fixLayout = (text) => {
   const hits = latinWords.filter((w) => COMMON_RU.has(toRu(w.replace(/[,.]+$/u, '')).toLowerCase().replace(/[^а-яё]/gu, ''))).length;
   // Признак раскладки: «[», «;», «'» внутри или в начале латинского слова («F[vtnjd», «'nj»).
   const layoutMarks = latinWords.some((w) => /[A-Za-z][[\];'][A-Za-z]|^[,.'[;][A-Za-z]|[A-Za-z][,.][A-Za-z]/u.test(w));
-  if (!(hits >= 2 || (hits >= 1 && layoutMarks))) return text;
+  // Два и больше латинских слова со знаками раскладки внутри — набор в латинской раскладке и без
+  // знакомых слов (английские слова такие знаки внутри почти не содержат).
+  const marked = latinWords.filter((w) => /[A-Za-z][[\];'][A-Za-z]|^[,.'[;][A-Za-z]|[A-Za-z][,.][A-Za-z]/u.test(w)).length;
+  // Однобуквенные «z», «c», «d», «b» в раскладке — «я», «с», «в», «и»: подсказка, если есть знак раскладки.
+  const singles = (text.match(/(?<![A-Za-z])[ZzCcDdBbRrJjFfEe](?![A-Za-z;'[\],.])/gu) || []).length;
+  if (!(hits >= 2 || ((hits + singles) >= 1 && layoutMarks) || marked >= 2)) return text;
   // Слово в раскладке может начинаться с «.» или «,» («.cegjdf» — «Юсупова»).
   return text.replace(/(?:(?<![\p{L}\p{N}])[,.](?=[A-Za-z]))?[A-Za-z;'[\]]+(?:[,.](?=[A-Za-z])[A-Za-z;'[\]]*)*/gu, (w) => toRu(w));
 };

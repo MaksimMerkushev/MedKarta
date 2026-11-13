@@ -17,7 +17,7 @@
 import { KAZAN_PLACES } from '../../shared/kazanPlaces.js';
 import { classifySymptoms, SENSITIVE_RULE_IDS } from './symptoms.js';
 import { isMedicalWord, MEDICAL_ABBREVIATION } from './medicalLexicon.js';
-import { recognizePii } from './ruRecognizers.js';
+import { nearNameSpans, recognizePii } from './ruRecognizers.js';
 import { applySpans } from './spanMask.js';
 
 const prepare = (text) => String(text || '').toLowerCase().replace(/ё/gu, 'е');
@@ -34,7 +34,7 @@ export const hasSensitiveCondition = (text) => {
 };
 
 /* Редкое обстоятельство указывает на человека и без имени: при сомнении текст не передаётся. */
-const RARE_CIRCUMSTANCE = new RegExp(`${B}(?:единственн\\p{L}*|известн(?:ый|ая)|знаменит\\p{L}*|чемпион\\p{L}*|олимпийск\\p{L}*|народн(?:ый|ая)\\s+артист\\p{L}*|тройн(?:я|ю|ей|е)|аварийн\\p{L}*\\s+посадк\\p{L}*|член\\p{L}*\\s+сборн\\p{L}*|сборн\\p{L}*\\s+росси\\p{L}*|1[0-2]\\d\\s*(?:год|года|лет))${E}`, 'u');
+const RARE_CIRCUMSTANCE = new RegExp(`${B}(?:единственн\\p{L}*|известн(?:ый|ая)|знаменит\\p{L}*|чемпион\\p{L}*|олимпийск\\p{L}*|народн(?:ый|ая)\\s+артист\\p{L}*|тройн(?:я|ю|ей|е)|аварийн\\p{L}*\\s+посадк\\p{L}*|член\\p{L}*\\s+сборн\\p{L}*|сборн\\p{L}*\\s+росси\\p{L}*|1[0-2]\\d\\s*(?:год|года|лет)|ведущ(?:ая|ий|ей|его)\\s+(?:новостей|эфира|программы|передачи)|диктор\\p{L}*|пожар\\p{L}*|взрыв\\p{L}*|теракт\\p{L}*|обрушени\\p{L}*)${E}`, 'u');
 export const hasRareCircumstance = (text) => RARE_CIRCUMSTANCE.test(prepare(text));
 
 /*
@@ -47,7 +47,7 @@ export const hasRareCircumstance = (text) => RARE_CIRCUMSTANCE.test(prepare(text
  * нужны для жалобы и на человека не указывают.
  */
 const DIGIT_WORDS = ['ноль', 'один', 'два', 'три', 'четыре', 'пять', 'шесть', 'семь', 'восемь', 'девять'];
-const DOCUMENT_WORD = new RegExp(`${B}(?:полис\\p{L}*|паспорт\\p{L}*|загран\\p{L}*|снилс\\p{L}*|инн|огрн\\p{L}*|свидетельств\\p{L}*|свид-во|удостоверени\\p{L}*|договор\\p{L}*|медкарт\\p{L}*|прав[аы]|омс|дмс)${E}`, 'u');
+const DOCUMENT_WORD = new RegExp(`${B}(?:полис\\p{L}*|паспорт\\p{L}*|загран\\p{L}*|снилс\\p{L}*|инн|огрн\\p{L}*|свидетельств\\p{L}*|свид-во|удостоверени\\p{L}*|договор\\p{L}*|медкарт\\p{L}*|прав[аы]|омс|дмс|ву)${E}`, 'u');
 const CODE_TOKEN = /[\p{L}\p{N}]+(?:[-/][\p{L}\p{N}]+)*/gu;
 const NOT_CODE = /^(?:\d{2,3}\/\d{2,3}|\d{4}(?:г|гг|год\p{L}*)?|\d+(?:мг|мкг|мл|г|кг|см|мм|ед))$/u;
 const SPACED_NUMBER = /(?<![\p{L}\p{N}])\d{2,}(?:[ -]\d{2,}){2,}(?![\p{L}\p{N}])/gu;
@@ -62,6 +62,8 @@ const isCode = (token) => {
 /** Номер документа, полиса или договора в любом написании: такую реплику разбирает только сервер. */
 export const hasDocumentNumber = (text) => {
   const lower = prepare(text);
+  // Номер, где часть цифр заменена звёздочками («2*9709», «34 *3**900»), — почти всегда документ.
+  if (/\d[\d\s-]{0,3}\*|\*[\d\s-]{0,3}\d/u.test(lower) && (lower.match(/\d/gu) || []).length >= 4) return true;
   if (!DOCUMENT_WORD.test(lower)) return false;
   // «1655 4400 1234 5678», «92 04 123456»: группы цифр через пробел или дефис — один номер.
   // Цифры словами и звёздочки вместо части цифр («92** ***456») — тоже номер.
@@ -139,6 +141,7 @@ export const deidentifyComplaint = (text, state = { places: new Map() }) => {
   // Детерминированные распознаватели РФ: имена строчными, организации после «работаю в»,
   // телефоны словами, почта с заменами, ники, закодированные строки, адреса (ruRecognizers.js).
   result = applySpans(result, recognizePii(result)).text;
+  result = applySpans(result, nearNameSpans(result)).text;
   result = replaceSpans(result, CAR_PLATE, '[номер]');
   result = result.replace(FULL_DATE, '[дата]');
   result = maskCodes(result);

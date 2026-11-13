@@ -63,14 +63,21 @@ const orgsAfterCue = (text) => {
   const spans = [];
   for (const m of text.matchAll(WORK_CUE)) {
     const from = m.index + m[0].length;
-    const rest = text.slice(from).match(/^([\p{L}][\p{L}\p{N}-]*)(?:\s+([\p{L}][\p{L}\p{N}-]*))?/u);
+    const rest = text.slice(from).match(/^([\p{L}][\p{L}\p{N}-]*)((?:\s+[\p{L}][\p{L}\p{N}-]*){0,3})/u);
     if (!rest || text[from] === '[') continue;
     const first = rest[1];
     // Должность («главврачом», «судьёй») — забота правила должностей в deidentify.js.
     if (GENERIC_WORK.has(norm(first)) || isMedicalWord(first) || STOP.has(norm(first)) || TITLE_WORD.test(norm(first))) continue;
-    // Второе слово берём, только если оно не начинает новую часть фразы.
-    const second = rest[2] && !STOP.has(norm(rest[2])) && !isMedicalWord(rest[2]) && !/^(?:болит|болят|тошнит|давит|колет|уже|давно|сильно)$/u.test(norm(rest[2])) ? rest[2] : null;
-    spans.push({ type: 'ORG', start: from, end: from + first.length + (second ? rest[0].length - first.length : 0) });
+    // Следующие слова — пока они не начинают новую часть фразы (союз, симптом, «уже»…).
+    let end = from + first.length;
+    let cursor = end;
+    for (const m2 of (rest[2] || '').matchAll(/\s+([\p{L}][\p{L}\p{N}-]*)/gu)) {
+      const word = m2[1];
+      if (STOP.has(norm(word)) || isMedicalWord(word) || /^(?:болит|болят|тошнит|давит|колет|уже|давно|сильно|ещё|еще|а|и|но)$/u.test(norm(word))) break;
+      cursor += m2[0].length;
+      end = cursor;
+    }
+    spans.push({ type: 'ORG', start: from, end });
   }
   return spans;
 };
@@ -99,6 +106,24 @@ const regexSpans = (text, pattern, type, group = 0) => [...text.matchAll(pattern
   const start = group ? m.index + m[0].indexOf(m[group]) : m.index;
   return { type, start, end: start + (group ? m[group].length : m[0].length) };
 });
+
+// Слова, которые стоят рядом с именем, но сами именем не являются: роли, родство, служебные.
+const NEAR_NAME_KEEP = new Set(['доктор', 'доктора', 'доктору', 'врач', 'врача', 'врачу', 'терапевт', 'медсестра', 'мама', 'маме', 'мамы', 'папа', 'папе', 'муж', 'мужа', 'жена', 'жены', 'сын', 'сына', 'сыну', 'дочь', 'дочери', 'дочке', 'бабушка', 'дедушка', 'брат', 'сестра', 'соседка', 'сосед', 'коллега', 'тоже', 'вот', 'так', 'типа', 'короче', 'ну', 'да', 'нет', 'ещё', 'еще', 'уже', 'очень', 'понимаете', 'пожалуйста', 'спасибо', 'здравствуйте']);
+// Глагольные окончания; «-ат/-ят» сюда не входят: так кончаются имена (Ахат, Хадижат, Аминат).
+const VERB_LIKE = /(?:ает|яет|ует|ешь|ете|ите|ают|яют|уют|ут|ют|ит|ет|ать|ять|еть|ить|оть|уть|ться|тся|лся|лась|лись|ла|ло|ли|шу|жу|чу|ю)$/u;
+/** «ахат [имя]», «[имя] хадижат»: неизвестное слово вплотную к метке имени — часть того же имени. */
+export const nearNameSpans = (text) => {
+  const spans = [];
+  for (const m of text.matchAll(/(?<![\p{L}])([\p{L}]{3,})\s+(?=\[имя(?:_\d+)?\])|(?<=\[имя(?:_\d+)?\])\s+([\p{L}]{3,})(?![\p{L}])/gu)) {
+    const word = m[1] || m[2];
+    const w = norm(word);
+    // Слово с заглавной рядом с именем — часть имени; строчное — если не похоже на глагол.
+    if (STOP.has(w) || NEAR_NAME_KEEP.has(w) || isMedicalWord(word) || NAME_CUE.test(w) || (!/^\p{Lu}/u.test(word) && VERB_LIKE.test(w))) continue;
+    const start = m.index + m[0].indexOf(word);
+    spans.push({ type: 'PERSON', start, end: start + word.length });
+  }
+  return spans;
+};
 
 /**
  * @param {string} text
