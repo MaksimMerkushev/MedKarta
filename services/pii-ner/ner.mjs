@@ -51,7 +51,7 @@ export const verifyModelFiles = (dir, spec) => {
  * @param {object} params
  * @param {object} params.spec запись модели из model.json: files (SHA-256), modelFile, labels (метка модели → общий тип)
  */
-export const loadNer = async ({ ort, dir, spec, threads = 1, maxPieces = 512 }) => {
+export const loadNer = async ({ ort, dir, spec, threads = 1, maxPieces = 512, lowMemory = false }) => {
   verifyModelFiles(dir, spec);
   const typeOf = (label) => (spec.labels && spec.labels[label]) || label;
   const vocab = new Map(fs.readFileSync(path.join(dir, 'vocab.txt'), 'utf8').split('\n').map((token, id) => [token, id]));
@@ -62,6 +62,9 @@ export const loadNer = async ({ ort, dir, spec, threads = 1, maxPieces = 512 }) 
     interOpNumThreads: 1,
     executionMode: 'sequential',
     graphOptimizationLevel: 'all',
+    // Малая память (VPS 4 ГБ): без арены и шаблонов памяти буферы длинного текста возвращаются
+    // системе, а не остаются в процессе. Цена — немного медленнее; включается PII_NER_LOW_MEMORY=on.
+    ...(lowMemory ? { enableCpuMemArena: false, enableMemPattern: false } : {}),
   });
   const UNK = vocab.get('[UNK]');
   const CLS = vocab.get('[CLS]');

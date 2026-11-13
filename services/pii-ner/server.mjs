@@ -30,23 +30,23 @@ export const LIMITS = Object.freeze({
 const log = (event, fields = {}) => process.stdout.write(`${JSON.stringify({ ts: new Date().toISOString(), event, ...fields })}\n`);
 
 /** Модели из model.json; PII_NER_MODELS — какие загрузить (по умолчанию все, чьи файлы на месте). */
-const loadModels = async ({ modelDir, manifest, threads, only }) => {
+const loadModels = async ({ modelDir, manifest, threads, only, lowMemory = false }) => {
   const ort = require('onnxruntime-node');
   const loaded = [];
   for (const spec of manifest.models) {
     if (only && !only.includes(spec.name)) continue;
     const dir = path.join(modelDir, spec.name);
     if (!only && !fs.existsSync(dir)) continue;
-    loaded.push({ spec, ner: await loadNer({ ort, dir, spec, threads }) });
+    loaded.push({ spec, ner: await loadNer({ ort, dir, spec, threads, lowMemory }) });
   }
   if (loaded.length === 0) throw new Error('нет ни одной модели: см. README.md');
   // Объединение находок всех моделей: правила слияния — на стороне шлюза (spanMask.js).
   return { entities: async (text) => (await Promise.all(loaded.map((m) => m.ner.entities(text)))).flat(), names: loaded.map((m) => m.spec.name) };
 };
 
-export const createNerServer = async ({ modelDir = path.join(here, 'model'), threads = 1, limits = LIMITS, ner: injected = null, only = null } = {}) => {
+export const createNerServer = async ({ modelDir = path.join(here, 'model'), threads = 1, limits = LIMITS, ner: injected = null, only = null, lowMemory = false } = {}) => {
   const manifest = JSON.parse(fs.readFileSync(path.join(here, 'model.json'), 'utf8'));
-  const ner = injected || await loadModels({ modelDir, manifest, threads, only });
+  const ner = injected || await loadModels({ modelDir, manifest, threads, only, lowMemory });
   manifest.id = (ner.names || manifest.models.map((m) => m.name)).join('+');
   manifest.revision = manifest.models.filter((m) => !ner.names || ner.names.includes(m.name)).map((m) => `${m.name}@${m.revision.slice(0, 12)}`).join(',');
   let tail = Promise.resolve();
@@ -128,7 +128,7 @@ if (isMain) {
     process.exit(1);
   }
   const only = process.env.PII_NER_MODELS ? process.env.PII_NER_MODELS.split(',').map((x) => x.trim()).filter(Boolean) : null;
-  const { server, manifest } = await createNerServer({ modelDir: process.env.PII_NER_MODEL_DIR || undefined, threads: Number(process.env.PII_NER_THREADS || 1), only });
+  const { server, manifest } = await createNerServer({ modelDir: process.env.PII_NER_MODEL_DIR || undefined, threads: Number(process.env.PII_NER_THREADS || 1), only, lowMemory: process.env.PII_NER_LOW_MEMORY === 'on' });
   if (socket) {
     if (fs.existsSync(socket)) fs.unlinkSync(socket);
     server.listen({ path: socket }, () => {

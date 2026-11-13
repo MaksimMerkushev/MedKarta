@@ -15,7 +15,7 @@
  * Это снижение риска, а не юридическое обезличивание.
  */
 import { NerError } from './nerClient.js';
-import { isMedicalPhrase } from './medicalLexicon.js';
+import { isDosageWord, isMedicalPhrase, isMedicalWord, protectedMedicalRanges } from './medicalLexicon.js';
 import { applySpans, createLabelState, LABEL_PATTERN } from './spanMask.js';
 import { nearNameSpans } from './ruRecognizers.js';
 
@@ -50,16 +50,30 @@ export const windowsOf = (text) => {
   return out;
 };
 
+/*
+ * Находка целиком из медицинского смысла: «D 1000 МЕ» внутри «витамин D 1000 МЕ» — каждое слово
+ * либо в защищённом участке (витамин с буквой, доза с единицей), либо медицинское.
+ */
+const onlyMedicine = (text, e, protectedRanges) => {
+  const words = [...text.slice(e.start, e.end).matchAll(/[\p{L}\p{N}-]+/gu)];
+  return words.length > 0 && words.every((m) => {
+    const s = e.start + m.index;
+    const end = s + m[0].length;
+    return protectedRanges.some((p) => p.start <= s && end <= p.end) || isMedicalWord(m[0]) || isDosageWord(m[0]);
+  });
+};
+
 /** Разделить находки на уверенные (маскировать) и сомнительные (не отправлять). */
 export const splitByConfidence = (text, entities, uncertain = DEFAULT_UNCERTAIN) => {
   const confident = [];
   const doubtful = [];
+  const protectedRanges = protectedMedicalRanges(text);
   for (const raw of entities) {
     const e = unify(raw);
     if (e.score == null || e.score >= uncertain.max || !CONTEXTUAL.has(e.type)) { confident.push(e); continue; }
     if (e.score < uncertain.min) continue;
     const value = text.slice(e.start, e.end);
-    if (insideLabel(text, e) || isMedicalPhrase(value) || !/[\p{L}]{2,}/u.test(value)) continue;
+    if (insideLabel(text, e) || isMedicalPhrase(value) || !/[\p{L}]{2,}/u.test(value) || onlyMedicine(text, e, protectedRanges)) continue;
     doubtful.push(e);
   }
   return { confident, doubtful };

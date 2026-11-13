@@ -18,6 +18,7 @@ import { buildPlannerBody, requestCompletion } from '../backend/planner/client.j
 import { createExternalTriage, TRIAGE_SYSTEM_PROMPT } from '../backend/planner/triage.js';
 import { loadCatalog, __resetCatalogCache } from '../backend/privacy/catalog.js';
 import { applyEntities, createNerLayer } from '../backend/privacy/nerLayer.js';
+import { deidentifyComplaint } from '../backend/privacy/deidentify.js';
 import { NerError } from '../backend/privacy/nerClient.js';
 import { makeTestPipeline, TEST_SESSION } from './helpers.js';
 
@@ -234,5 +235,35 @@ describe('Единая точка отправки во внешнюю моде�
     assert.deepEqual(networkCalls, ['accounts/breachedPasswords.js', 'booking/mis/httpClient.js', 'executor/routing.js', 'planner/client.js', 'storage/tokenVault.js']);
     const completionCallers = files.filter((file) => /requestCompletion\(/u.test(read(file))).map((file) => path.relative('backend', file)).sort();
     assert.deepEqual(completionCallers, ['planner/client.js', 'planner/labParser.js', 'planner/triage.js']);
+  });
+});
+
+describe('Повторный замер на наборах Codex и holdout-3: исправленные пропуски', () => {
+  it('почта с [at] и [dot] не переводится в раскладку, «;» в медицинском тексте остаётся', async () => {
+    const wire = await sendTriage('Почта для ответа: xqubvelnor [at] example [dot] test. мушки перед глазами; длится 3 недели; ТТГ 4,8 мМЕ/л');
+    assertNoneOf(wire, ['xqubvelnor', 'чйгимудтщк', 'хфеъ']);
+    assert.ok(!wire.includes('глазамиж'), wire);
+  });
+
+  it('ФИО в латинской раскладке с подсказкой «клавиатура» или «раскладка»', async () => {
+    assertNoneOf(await sendTriage("Напечатал с чужой клавиатуры: cfqvehlbyevfy 'kmpbhf yehkfyjdbx. трудно читать мелкий текст"), ['cfqvehlbyevfy', 'kmpbhf', 'yehkfyjdbx', 'саймурдин', 'нурланович']);
+    assertNoneOf(await sendTriage('Застряла английская раскладка — zhvbcjdbpjh hepfkbz zhlfyjdyf; не исправляй подпись. мушки перед глазами'), ['zhvbcjdbpjh', 'hepfkbz', 'ярмисов', 'рузали']);
+  });
+
+  it('описание при названии скрывается, специальность врача остаётся', async () => {
+    const wire = await sendTriage('мой муж — вратарь хоккейного «Ак Барса», кашель с мокротой десять дней');
+    assertNoneOf(wire, ['вратарь', 'хоккейн', 'ак барс']);
+    // Запрос с названной специальностью идёт мимо триажа (подбор врача) — проверка на самом правиле.
+    assert.match(deidentifyComplaint('наблюдаюсь у эндокринолога «Авиценна», ТТГ 6.2, мерзну').text, /наблюдаюсь у эндокринолога \[название\]/u);
+  });
+
+  it('публичное достижение — запрос не отправляется', async () => {
+    assert.equal(await sendTriage('на прошлой неделе я выиграла областной конкурс по вышивке, болит спина'), '');
+  });
+
+  it('сомнительная находка модели внутри «витамин D 1000 МЕ» не блокирует запрос', async () => {
+    const model = createNerLayer({ client: { entities: async (text) => { const i = text.indexOf('D 1000'); return i < 0 ? [] : [{ type: 'ORG', start: i, end: i + 9, score: 0.452 }]; } } });
+    const wire = await sendTriage('МНО 2,1; витамин D 1000 МЕ; гемоглобин 118 г/л; сухость и резь в глазах', { ner: model });
+    assert.match(wire, /витамин d 1000 ме/u);
   });
 });
