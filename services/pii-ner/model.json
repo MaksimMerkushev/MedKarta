@@ -1,0 +1,11 @@
+{
+  "id": "onnx-community/ner-rubert-tiny-news-ONNX",
+  "base": "r1char9/ner-rubert-tiny-news",
+  "license": "MIT",
+  "revision": "930eccc0b433dae84126a5837e9a169f0a4639e3",
+  "files": {
+    "config.json": "a7e67406eca35258f8f566663c38ec5a543d4a467b57af28b83a6ab9c01c46ce",
+    "vocab.txt": "f056a69b097422652053bf87565c35543e5d81540ca4b7dddd28de4157a969e0",
+    "onnx/model_int8.onnx": "94cebd8ab912cf48c391530131b31445fdbad9bf85d6549e9573f831acc3e8cf"
+  }
+}
