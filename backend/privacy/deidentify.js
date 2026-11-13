@@ -34,6 +34,40 @@ export const hasSensitiveCondition = (text) => {
 const RARE_CIRCUMSTANCE = new RegExp(`${B}(?:единственн\\p{L}*|известн(?:ый|ая)|знаменит\\p{L}*|чемпион\\p{L}*|олимпийск\\p{L}*|народн(?:ый|ая)\\s+артист\\p{L}*)${E}`, 'u');
 export const hasRareCircumstance = (text) => RARE_CIRCUMSTANCE.test(prepare(text));
 
+/*
+ * Номера. Детекторы Gateway узнают СНИЛС, ОМС и паспорт в привычном виде, но номер полиса ДМС
+ * пишут как угодно («001-ДМС-778899»). Поэтому здесь два правила поверх детекторов:
+ * - рядом слово «полис», «паспорт», «договор»… и номер из 4+ цифр — реплика наружу не уходит,
+ *   как и с распознанным номером документа;
+ * - любой другой номер из 6+ цифр или буквы вместе с 4+ цифрами заменяется меткой.
+ * Давление «160/100», температура «38.5», время, год, дозировка и цена остаются: они бывают
+ * нужны для жалобы и на человека не указывают.
+ */
+const DOCUMENT_WORD = new RegExp(`${B}(?:полис\\p{L}*|паспорт\\p{L}*|снилс\\p{L}*|инн|огрн\\p{L}*|свидетельств\\p{L}*|удостоверени\\p{L}*|договор\\p{L}*|медкарт\\p{L}*)${E}`, 'u');
+const CODE_TOKEN = /[\p{L}\p{N}]+(?:[-/][\p{L}\p{N}]+)*/gu;
+const NOT_CODE = /^(?:\d{2,3}\/\d{2,3}|\d{4}(?:г|гг|год\p{L}*)?|\d+(?:мг|мкг|мл|г|кг|см|мм|ед))$/u;
+const SPACED_NUMBER = /(?<![\p{L}\p{N}])\d{2,}(?:[ -]\d{2,}){2,}(?![\p{L}\p{N}])/gu;
+const digitCount = (value) => (value.match(/\d/gu) || []).length;
+const isCode = (token) => {
+  const lower = prepare(token);
+  if (NOT_CODE.test(lower)) return false;
+  const digits = digitCount(lower);
+  return digits >= 6 || (digits >= 4 && /\p{L}/u.test(lower));
+};
+
+/** Номер документа, полиса или договора в любом написании: такую реплику разбирает только сервер. */
+export const hasDocumentNumber = (text) => {
+  const lower = prepare(text);
+  if (!DOCUMENT_WORD.test(lower)) return false;
+  // «1655 4400 1234 5678», «92 04 123456»: группы цифр через пробел или дефис — один номер.
+  const joined = lower.replace(/(\d)[ -]+(?=\d)/gu, '$1');
+  return (joined.match(CODE_TOKEN) || []).some((token) => digitCount(token) >= 4 && !NOT_CODE.test(token));
+};
+
+const maskCodes = (text) => text
+  .replace(SPACED_NUMBER, (match) => (digitCount(match) >= 8 ? '[номер]' : match))
+  .replace(CODE_TOKEN, (token) => (isCode(token) ? '[номер]' : token));
+
 const TOKEN_LABEL = {
   PERSON: '[имя]', DOCTOR: '[врач]', CLINIC: '[клиника]', PHONE: '[телефон]', EMAIL: '[почта]',
   URL: '[ссылка]', HANDLE: '[аккаунт]', ADDRESS: '[адрес]', CARD: '[номер]', DOCUMENT: '[номер]',
@@ -42,7 +76,7 @@ const TOKEN_LABEL = {
 const MEDICAL_ABBREVIATIONS = new Set(['МРТ', 'КТ', 'УЗИ', 'ЭКГ', 'ЭЭГ', 'ЛОР', 'ДМС', 'ОМС', 'ОРВИ', 'ОРЗ', 'АД', 'ЖКТ', 'ВСД', 'ЭКО', 'ДТП', 'СОЭ', 'ИМТ']);
 
 const INSURER = new RegExp(`${B}(?:сбер\\s*-?\\s*страхован\\p{L}*|согаз\\p{L}*|ресо(?:\\s*-?\\s*гаранти\\p{L}*)?|ингосстрах\\p{L}*|альфа\\s*-?\\s*страхован\\p{L}*|росгосстрах\\p{L}*|энергогарант\\p{L}*|втб\\s*-?\\s*страхован\\p{L}*|ренессанс\\s+страхован\\p{L}*|т\\s*-\\s*страхован\\p{L}*|тинькофф\\s*-?\\s*страхован\\p{L}*|совкомбанк\\s*-?\\s*страхован\\p{L}*)${E}`, 'gu');
-const TITLE = new RegExp(`${B}(?:завуч\\p{L}*|директор\\p{L}*|главврач\\p{L}*|депутат\\p{L}*|мэр\\p{L}*|судь[яиеюй]|прокурор\\p{L}*|министр\\p{L}*|ректор\\p{L}*|декан\\p{L}*|заведующ\\p{L}*|начальник\\p{L}*|сенатор\\p{L}*|полковник\\p{L}*|генерал\\p{L}*|следовател\\p{L}*)${E}`, 'gu');
+const TITLE = new RegExp(`${B}(?:завуч\\p{L}*|директор\\p{L}*|главврач\\p{L}*|главн\\p{L}*\\s+(?:врач|медсестр|инженер|бухгалтер|редактор|архитектор|энергетик|механик|технолог|тренер)\\p{L}*|заместител\\p{L}*|замглав\\p{L}*|руководител\\p{L}*|председател\\p{L}*|губернатор\\p{L}*|президент\\p{L}*|депутат\\p{L}*|мэр\\p{L}*|судь[яиеюй]|прокурор\\p{L}*|министр\\p{L}*|ректор\\p{L}*|декан\\p{L}*|заведующ\\p{L}*|начальник\\p{L}*|сенатор\\p{L}*|полковник\\p{L}*|генерал\\p{L}*|следовател\\p{L}*)${E}`, 'gu');
 const INSTITUTION = new RegExp(`${B}(?:прокуратур\\p{L}*|госсовет\\p{L}*|министерств\\p{L}*|мэри\\p{L}*|администраци\\p{L}*|следственн\\p{L}*\\s+комитет\\p{L}*)${E}`, 'gu');
 const PLACE_PATTERNS = [
   ...Object.values(KAZAN_PLACES).map((place) => new RegExp(`${B}(?:${place.pattern})${E}`, 'gu')),
@@ -87,9 +121,14 @@ const replaceSpans = (text, pattern, label) => {
 export const deidentifyComplaint = (text, state = { places: new Map() }) => {
   const source = String(text || '');
   if (hasRareCircumstance(source)) return { text: '', blocked: true, reason: 'rare_circumstance' };
+  if (hasDocumentNumber(source)) return { text: '', blocked: true, reason: 'document_number' };
   let result = source.replace(/@([A-Z]+)(?:_[A-Z0-9]+)?/gu, (whole, kind) => TOKEN_LABEL[kind] || '[место]');
+  // «Нурисламова-Вандербильт»: Gateway заменил часть фамилии, вторая часть через дефис — тоже имя.
+  // Слово перед меткой ищется только с начала слова: иначе на длинном слове перебор квадратичный.
+  result = result.replace(/\[имя\]-\p{L}+/gu, '[имя]').replace(/(?<!\p{L})\p{L}+-\[имя\]/gu, '[имя]');
   result = replaceSpans(result, CAR_PLATE, '[номер]');
   result = result.replace(FULL_DATE, '[дата]');
+  result = maskCodes(result);
   result = replaceSpans(result, INSURER, '[страховая]');
   result = replaceSpans(result, TITLE, '[должность]');
   result = replaceSpans(result, INSTITUTION, '[организация]');
