@@ -1,13 +1,14 @@
 # Локальный сервис распознавания ПДн (pii-ner)
 
-Дополнительный слой Privacy Gateway МедКарты перед внешним триажем жалоб. Модель
-`onnx-community/ner-rubert-tiny-news-ONNX` (MIT, база — `r1char9/ner-rubert-tiny-news`, MIT),
-int8, 29 МБ. Находит имена, организации и места. Телефоны, документы, должности и
-адреса остаются за правилами шлюза.
+Дополнительный слой Privacy Gateway МедКарты перед внешним триажем жалоб. Две модели в одном процессе Node:
 
-**По умолчанию выключен.** Без отдельного решения в production не включать: по замерам
-13.11.2026 слой поверх текущих правил почти ничего не добавляет. Подробности — в отчёте
-`LOCAL_PII_NER_EVALUATION.md`.
+| Модель | Лицензия | Что находит | Файл |
+|---|---|---|---|
+| `onnx-community/ner-rubert-tiny-news-ONNX` (база — `r1char9/ner-rubert-tiny-news`) | MIT; обучающий корпус Collection3 — `license:other`, вопрос юристу | имена, организации, места | ONNX int8, 29 МБ, скачивается готовым |
+| `redmadrobot-rnd/rubert-base-pii-ner` | Apache-2.0; данные `redmadrobot-rnd/pii_train` — MIT | имена, адреса, документы РФ, телефоны, e-mail, ссылки | ONNX int8, 178 МБ, собирается `export-onnx.py` |
+
+Находки обеих моделей объединяются, правила слияния — на стороне шлюза (`backend/privacy/spanMask.js`).
+**По умолчанию выключен** (`PII_NER`). Решение о включении — в отчёте `PII_PROTECTION_REDTEAM_REPORT.md`.
 
 ## Что делает и чего не делает
 
@@ -28,7 +29,17 @@ cd services/pii-ner && npm ci --omit=dev && node fetch-model.mjs
 ```
 
 `npm ci` ставит `onnxruntime-node` 1.31.1: около 300 МБ на диске, бинарники всех платформ.
-`fetch-model.mjs` скачивает три файла с зафиксированной ревизии Hugging Face и проверяет SHA-256.
+`fetch-model.mjs` скачивает файлы с зафиксированных ревизий Hugging Face. rubert-tiny проверяется по SHA-256
+сразу; для redmadrobot скачиваются исходные веса, и нужен однократный экспорт (Python с torch, transformers,
+onnx, onnxruntime — только на время установки):
+
+```bash
+HF_HUB_OFFLINE=1 python3 -I services/pii-ner/export-onnx.py services/pii-ner/model/redmadrobot
+```
+
+Скрипт сверяет итоговые файлы с `model.json`. При другой версии библиотек квантование может дать другой файл:
+тогда скрипт печатает новые SHA-256 и останавливается, пока их не проверят и не внесут вручную.
+Загрузить одну модель: `PII_NER_MODELS=rubert-tiny`.
 
 ## Запуск
 
@@ -40,7 +51,7 @@ User=medkarta
 Environment=PII_NER_SOCKET=/run/medkarta/pii-ner.sock
 ExecStart=/usr/bin/node /home/medkarta/medkarta/services/pii-ner/server.mjs
 RuntimeDirectory=medkarta
-MemoryMax=350M
+MemoryMax=900M
 CPUQuota=50%
 Restart=on-failure
 NoNewPrivileges=true

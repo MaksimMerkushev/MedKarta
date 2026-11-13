@@ -39,20 +39,25 @@ export const basicTokenize = (text) => {
 const sha256File = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 
 /** Файлы модели должны совпасть с model.json: подменённая или повреждённая модель не загружается. */
-export const verifyModelFiles = (dir, manifest) => {
-  for (const [file, expected] of Object.entries(manifest.files)) {
+export const verifyModelFiles = (dir, spec) => {
+  for (const [file, expected] of Object.entries(spec.files)) {
     const full = path.join(dir, file);
     if (!fs.existsSync(full)) throw new Error(`нет файла модели: ${file}`);
     if (sha256File(full) !== expected) throw new Error(`файл модели изменён: ${file}`);
   }
 };
 
-export const loadNer = async ({ ort, dir, manifest, threads = 1, maxPieces = 512 }) => {
-  verifyModelFiles(dir, manifest);
+/**
+ * @param {object} params
+ * @param {object} params.spec запись модели из model.json: files (SHA-256), modelFile, labels (метка модели → общий тип)
+ */
+export const loadNer = async ({ ort, dir, spec, threads = 1, maxPieces = 512 }) => {
+  verifyModelFiles(dir, spec);
+  const typeOf = (label) => (spec.labels && spec.labels[label]) || label;
   const vocab = new Map(fs.readFileSync(path.join(dir, 'vocab.txt'), 'utf8').split('\n').map((token, id) => [token, id]));
   const config = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
   const labels = Object.entries(config.id2label).sort((a, b) => Number(a[0]) - Number(b[0])).map(([, label]) => label);
-  const session = await ort.InferenceSession.create(path.join(dir, 'onnx/model_int8.onnx'), {
+  const session = await ort.InferenceSession.create(path.join(dir, spec.modelFile || 'onnx/model_int8.onnx'), {
     intraOpNumThreads: threads,
     interOpNumThreads: 1,
     executionMode: 'sequential',
@@ -133,7 +138,7 @@ export const loadNer = async ({ ort, dir, manifest, threads = 1, maxPieces = 512
       }
       previous = w;
     });
-    return found.map((item) => ({ ...item, score: Math.round(item.score * 1000) / 1000 }));
+    return found.map((item) => ({ ...item, type: typeOf(item.type), score: Math.round(item.score * 1000) / 1000 }));
   };
 
   return { entities, labels };

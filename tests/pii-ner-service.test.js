@@ -99,16 +99,16 @@ try {
 } catch {
   ortAvailable = false;
 }
-describe('Сервис NER с настоящей моделью', { skip: !(fs.existsSync(modelDir) && ortAvailable) && 'модель не загружена' }, () => {
+describe('Сервис NER с настоящей моделью', { skip: !(fs.existsSync(path.join(modelDir, 'rubert-tiny')) && ortAvailable) && 'модель не загружена' }, () => {
   it('находит имя в склонении и двойную фамилию; файлы модели сверены по SHA-256', async () => {
-    const { server } = await createNerServer({ modelDir });
+    const { server } = await createNerServer({ modelDir, only: ['rubert-tiny'] });
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mk-ner-real-'));
     const socketPath = path.join(dir, 's.sock');
     await new Promise((resolve) => server.listen({ path: socketPath }, resolve));
     try {
       const text = 'Звонила доктору Эльвире Нурисламовой-Вандербильт, болит колено';
       const { body } = await call(socketPath, { body: JSON.stringify({ text }) });
-      const names = body.entities.filter((e) => e.type === 'PER').map((e) => text.slice(e.start, e.end)).join(' ');
+      const names = body.entities.filter((e) => e.type === 'PERSON').map((e) => text.slice(e.start, e.end)).join(' ');
       assert.match(names, /Эльвире/u);
       assert.match(names, /Вандербильт/u);
       assert.doesNotMatch(names, /колено/u);

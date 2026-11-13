@@ -1,11 +1,37 @@
 {
-  "id": "onnx-community/ner-rubert-tiny-news-ONNX",
-  "base": "r1char9/ner-rubert-tiny-news",
-  "license": "MIT",
-  "revision": "930eccc0b433dae84126a5837e9a169f0a4639e3",
-  "files": {
-    "config.json": "a7e67406eca35258f8f566663c38ec5a543d4a467b57af28b83a6ab9c01c46ce",
-    "vocab.txt": "f056a69b097422652053bf87565c35543e5d81540ca4b7dddd28de4157a969e0",
-    "onnx/model_int8.onnx": "94cebd8ab912cf48c391530131b31445fdbad9bf85d6549e9573f831acc3e8cf"
-  }
+  "models": [
+    {
+      "name": "rubert-tiny",
+      "id": "onnx-community/ner-rubert-tiny-news-ONNX",
+      "base": "r1char9/ner-rubert-tiny-news",
+      "license": "MIT",
+      "revision": "930eccc0b433dae84126a5837e9a169f0a4639e3",
+      "modelFile": "onnx/model_int8.onnx",
+      "labels": { "PER": "PERSON", "ORG": "ORG", "MEDIA": "ORG", "LOC": "LOC", "GEOPOLIT": "LOC" },
+      "files": {
+        "config.json": "a7e67406eca35258f8f566663c38ec5a543d4a467b57af28b83a6ab9c01c46ce",
+        "vocab.txt": "f056a69b097422652053bf87565c35543e5d81540ca4b7dddd28de4157a969e0",
+        "onnx/model_int8.onnx": "94cebd8ab912cf48c391530131b31445fdbad9bf85d6549e9573f831acc3e8cf"
+      }
+    },
+    {
+      "name": "redmadrobot",
+      "id": "redmadrobot-rnd/rubert-base-pii-ner",
+      "license": "Apache-2.0 (модель), MIT (обучающие данные redmadrobot-rnd/pii_train)",
+      "revision": "c802e8cd26f85d1cf920973ea6f83965a0618d63",
+      "modelFile": "model_int8.onnx",
+      "export": "export-onnx.py: torch.onnx (opset 17) + onnxruntime.quantization.quantize_dynamic (QInt8)",
+      "labels": {
+        "FIRST_NAME": "PERSON", "LAST_NAME": "PERSON", "MIDDLE_NAME": "PERSON",
+        "STREET": "ADDRESS", "HOUSE": "ADDRESS", "CITY": "LOC", "COUNTRY": "LOC", "DISTRICT": "LOC", "REGION": "LOC",
+        "PASSPORT": "DOC", "CREDIT_CARD": "DOC", "DRIVER_LICENSE": "DOC", "INN": "DOC", "SNILS": "DOC", "MILITARY_ID": "DOC", "BIRTH_CERTIFICATE": "DOC", "OMS": "DOC",
+        "PHONE": "PHONE", "EMAIL": "EMAIL", "URL": "URL", "IP_ADDRESS": "SECRET"
+      },
+      "files": {
+        "config.json": "f4eeba88d1503a56d629195c9307d42c1acf4ce53ab88fdaecfc754fd0745cf9",
+        "vocab.txt": "e30a21c171f447d6312ada6d33ae669ba254ec51335c52325e2c479de3a92088",
+        "model_int8.onnx": "23ae57228b13ddcae20605e73dd0c488fb247186424da65edefc91ce1fd07be7"
+      }
+    }
+  ]
 }
