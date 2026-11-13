@@ -40,7 +40,8 @@ export const neutralizeUserMarkup = (text) => String(text)
  * Ключ сущности для устойчивой метки в диалоге: «Ринат», «Рината», «Ринату» — один человек.
  * Отбрасывается падежное окончание, если остаётся основа от трёх букв.
  */
-const ENDING = /(?:ами|ями|ого|его|ому|ему|ыми|ими|ой|ей|ою|ею|ом|ем|ам|ям|ах|ях|ую|юю|ая|яя|ое|ее|ые|ие|ов|ев|а|я|у|ю|е|ы|и|о)$/u;
+// «-ов», «-ев», «-ин» — часть фамилии, а не окончание: «Петров», «Петрову», «Петровой» → «петров».
+const ENDING = /(?:ами|ями|ого|его|ому|ему|ыми|ими|ой|ей|ою|ею|ом|ем|ым|им|ам|ям|ах|ях|ую|юю|ая|яя|а|я|у|ю|е|ы|и)$/u;
 export const entityKey = (type, value) => {
   const words = String(value).toLowerCase().replace(/ё/gu, 'е').match(/[\p{L}\p{N}]+/gu) || [];
   const stems = words.map((word) => {
@@ -69,14 +70,31 @@ export const createLabelState = (seedTexts = []) => {
   return { byKey: new Map(), counters };
 };
 
-/** Метка для сущности: та же сущность — тот же номер, новая — следующий. */
+const stemsOf = (key) => new Set(String(key).replace(/^[A-Z]+:/u, '').split(' ').filter(Boolean));
+const subsetOf = (a, b) => a.size > 0 && [...a].every((x) => b.has(x));
+
+/**
+ * Метка для сущности: та же сущность — тот же номер, новая — следующий. Имена связываются по
+ * основам: «Рината» и «Ринат Сафин» — один человек (основы одного входят в основы другого);
+ * «Ринат Сафин» и «Ринат Ахметов» — разные.
+ */
 export const labelFor = (state, labelName, key) => {
   if (!state) return `[${labelName}]`;
   const full = `${labelName}|${key}`;
+  if (!state.byKey.has(full) && labelName === 'имя') {
+    if (!state.people) state.people = [];
+    const stems = stemsOf(key);
+    const same = state.people.find((person) => subsetOf(stems, person.stems) || subsetOf(person.stems, stems));
+    if (same) {
+      for (const stem of stems) same.stems.add(stem);
+      state.byKey.set(full, same.index);
+    }
+  }
   if (!state.byKey.has(full)) {
     const next = (state.counters.get(labelName) || 0) + 1;
     state.counters.set(labelName, next);
     state.byKey.set(full, next);
+    if (labelName === 'имя') state.people.push({ stems: stemsOf(key), index: next });
   }
   return `[${labelName}_${state.byKey.get(full)}]`;
 };

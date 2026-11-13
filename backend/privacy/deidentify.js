@@ -19,7 +19,7 @@ import { classifySymptoms, SENSITIVE_RULE_IDS } from './symptoms.js';
 import { isMedicalWord, MEDICAL_ABBREVIATION } from './medicalLexicon.js';
 import { nearNameSpans, recognizePii } from './ruRecognizers.js';
 import { applySpans } from './spanMask.js';
-import { labelFor } from './labels.js';
+import { entityKey, labelFor } from './labels.js';
 
 const prepare = (text) => String(text || '').toLowerCase().replace(/ё/gu, 'е');
 const B = '(?<![\\p{L}\\p{N}])';
@@ -140,7 +140,11 @@ export const deidentifyComplaint = (text, state = { places: new Map() }) => {
   const labels = state.labels || null;
   let result = source.replace(/@([A-Z]+)(?:_[A-Z0-9]+)?/gu, (whole, kind) => {
     const label = TOKEN_LABEL[kind] || '[место]';
-    return labels ? labelFor(labels, label.slice(1, -1), `token:${whole}`) : label;
+    if (!labels) return label;
+    // Значение токена (нормализованное, «PERSON:тимуру») связывает одного человека в разных репликах.
+    const identity = state.tokenIdentity?.get(whole);
+    const key = identity && /^[A-Z]+:[^,]+$/u.test(identity) ? entityKey(kind, identity.replace(/^[A-Z]+:/u, '')) : `token:${whole}`;
+    return labelFor(labels, label.slice(1, -1), key);
   });
   // «Нурисламова-Вандербильт»: Gateway заменил часть фамилии, вторая часть через дефис — тоже имя.
   // Слово перед меткой ищется только с начала слова: иначе на длинном слове перебор квадратичный.

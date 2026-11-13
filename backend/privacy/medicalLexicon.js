@@ -20,10 +20,18 @@ const WORDS = new Set([...DRUGS, ...LABS, ...SYMPTOMS, ...UNITS]);
 const EPONYM = new RegExp(`^(?:${EPONYM_STEMS.join('|')})(?:а|у|ом|е|ым|ой|ого|ому|ским|ская|ский|ского)?$`, 'u');
 const norm = (word) => String(word || '').toLowerCase().replace(/ё/gu, 'е').replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
 
+// Падежные формы: «амоксициллином», «метформина», «ангиной» — сравнение по основе от четырёх букв.
+const CASE_ENDING = /(?:ами|ями|ом|ем|ой|ей|ым|им|ах|ях|ам|ям|а|я|у|ю|е|ы|и)$/u;
+const stemOf = (w) => {
+  const stem = w.replace(CASE_ENDING, '');
+  return stem.length >= 4 ? stem : w;
+};
+const STEMS = new Set([...DRUGS, ...LABS, ...SYMPTOMS].map(stemOf));
+
 /** Медицинское слово (лекарство, анализ, симптом, эпоним) — маскировать нельзя. */
 export const isMedicalWord = (word) => {
   const w = norm(word);
-  return WORDS.has(w) || EPONYM.test(w) || WORDS.has(w.replace(/-/gu, ''));
+  return WORDS.has(w) || EPONYM.test(w) || WORDS.has(w.replace(/-/gu, '')) || (w.length >= 5 && STEMS.has(stemOf(w)));
 };
 
 /** Все слова фрагмента медицинские (и есть хотя бы одно слово). */
@@ -33,9 +41,10 @@ export const isMedicalPhrase = (text) => {
 };
 
 /** Во фрагменте есть название лекарства, анализа или эпоним — это медицинская фраза, а не имя. */
+const DRUG_STEMS = new Set([...DRUGS, ...LABS].map(stemOf));
 export const mentionsMedicalName = (text) => (String(text || '').match(/[\p{L}\p{N}-]+/gu) || []).some((w) => {
   const n = norm(w);
-  return DRUGS.includes(n) || DRUGS.includes(n.replace(/-/gu, '')) || LABS.includes(n) || EPONYM.test(n);
+  return DRUGS.includes(n) || DRUGS.includes(n.replace(/-/gu, '')) || LABS.includes(n) || EPONYM.test(n) || (n.length >= 5 && DRUG_STEMS.has(stemOf(n)));
 });
 
 /** Аббревиатуры анализов, исследований и единиц (для правила «слово заглавными — организация»). */
