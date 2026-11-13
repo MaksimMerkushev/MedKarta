@@ -19,6 +19,7 @@ import { createExternalPlanner, PLANNER_ERROR } from './planner/client.js';
 import { createExternalTriage, MAX_CLARIFY_ROUNDS, validateTriage } from './planner/triage.js';
 import { createNerClient, nerConfigFromEnv } from './privacy/nerClient.js';
 import { createNerLayer } from './privacy/nerLayer.js';
+import { normalizeUserText } from './privacy/inputNormalize.js';
 import { createProxyFetch, parseProxyUrl } from './planner/proxyFetch.js';
 import { validatePlan } from './planner/validator.js';
 import { planLocally } from './planner/localPlanner.js';
@@ -202,6 +203,9 @@ export const createPipeline = ({
       probe = null,
     }) {
       const started = Date.now();
+      // Вход — к виду, в котором правила видят то же, что человек (privacy/inputNormalize.js):
+      // невидимые символы, двойники букв, разметка и латинская раскладка не обходят шлюз.
+      messages = (Array.isArray(messages) ? messages : []).map((message) => (message && typeof message.content === 'string' ? { ...message, content: normalizeUserText(message.content) } : message));
       /*
        * Оценка процессорного времени: только тяжёлые участки (разбор реплик,
        * исполнение плана), без ожидания модели и очереди. По ней chat.js
