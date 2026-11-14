@@ -10,6 +10,7 @@
  * бессмыслен. Между запросами и сессиями токены различаются (tokenVault.js).
  */
 
+import { isMedicalWord } from './medicalLexicon.js';
 import { normalizeRu, ruPattern } from './normalize.js';
 import { ENTITY_KIND, isCommonAdjective } from './detectors.js';
 import { looksLikePatronymic, looksLikeSurname } from './morphology.js';
@@ -94,7 +95,8 @@ export const reconcileEntities = (detectorSpans, catalogLinks) => {
 export const countResidualNameLike = (redactedText, ignore = new Set()) => {
   const words = redactedText.match(/\p{Lu}\p{L}{2,}/gu) || [];
   return words.filter(
-    (word) => !ignore.has(word)
+    // «Метформин», «Нечипоренко» по окончанию похожи на фамилию, но это лекарство и анализ.
+    (word) => !ignore.has(word) && !isMedicalWord(word)
       && ((looksLikeSurname(word) && !isCommonAdjective(word)) || looksLikePatronymic(word)),
   ).length;
 };

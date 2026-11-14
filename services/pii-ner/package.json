@@ -1,0 +1,19 @@
+{
+  "name": "medkarta-pii-ner",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Локальный сервис распознавания персональных данных для Privacy Gateway МедКарты",
+  "type": "module",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "fetch-model": "node fetch-model.mjs",
+    "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "onnxruntime-node": "1.31.1"
+  }
+}

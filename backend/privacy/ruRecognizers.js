@@ -1,0 +1,194 @@
+/*
+ * © 2026 МедКарта Казань. Все права защищены.
+ *
+ * Детерминированные распознаватели персональных данных РФ поверх детекторов Gateway —
+ * то, что red-team набор пропускал: имена строчными и без «меня зовут», организации
+ * строчными после «работаю в», телефоны словами, почта с заменами, ники и ссылки,
+ * закодированные строки, координаты, адреса с сокращениями.
+ * Возвращают диапазоны с типом; медицинские слова не трогают. Используются и при
+ * обезличивании жалобы, и финальной проверкой тела запроса.
+ */
+import { isFirstName } from './firstNames.js';
+import { looksLikePatronymic, looksLikeSurname } from './morphology.js';
+import { isMedicalPhrase, isMedicalWord } from './medicalLexicon.js';
+import { trustedLabelPattern } from './labels.js';
+
+const norm = (v) => v.toLowerCase().replace(/ё/gu, 'е');
+// Имена, которых не было в firstNames.js и которые пропускались на dev-наборе.
+const EXTRA_FIRST_NAMES = new Set(['ильнур', 'ильнура', 'ильнуру', 'ильнуром', 'зарема', 'заремы', 'зареме', 'заремой', 'патимат', 'магомед', 'магомеда', 'магомеду', 'магомедом', 'мадина', 'мадины', 'мадине', 'мадиной', 'арсен', 'арсена', 'арсену', 'арсеном', 'шамиль', 'шамиля', 'шамилю', 'шамилем', 'марсель', 'марселя', 'марселю', 'марселем', 'земфира', 'земфиры', 'земфире', 'земфирой', 'гузель', 'динара', 'динары', 'динаре', 'динарой']);
+const firstName = (w) => isFirstName(w) || EXTRA_FIRST_NAMES.has(norm(w));
+const NAME_CUE = /^(?:зовут|я|это|пишет|звать|меня|мое|моё|имя|от|у|к|с|доктор\p{L}*|врач\p{L}*)$/u;
+// Служебные слова: не имя, даже рядом с меткой имени («У [имя_1] такие же симптомы»).
+const FUNCTION_WORDS = ['такой', 'такая', 'такое', 'такие', 'таких', 'такими', 'тот', 'та', 'то', 'те', 'этот', 'эта', 'эти', 'весь', 'вся', 'все', 'всё', 'сам', 'сама', 'сами', 'свой', 'своя', 'свои', 'его', 'её', 'ее', 'их', 'ему', 'ей', 'им', 'него', 'неё', 'нее', 'них', 'нему', 'ней', 'кто', 'что', 'как', 'где', 'когда', 'же', 'бы', 'ли', 'тоже', 'также', 'только', 'даже', 'или', 'либо', 'если', 'чтобы', 'потому', 'поэтому', 'который', 'которая', 'которые', 'после', 'перед', 'через', 'при', 'про', 'для', 'без', 'над', 'под', 'между', 'около', 'от', 'до', 'из', 'за', 'во', 'со', 'ко', 'об', 'обо', 'был', 'была', 'было', 'были', 'есть', 'нет', 'сейчас', 'вчера', 'сегодня', 'завтра', 'опять', 'снова', 'тогда', 'теперь', 'там', 'тут', 'здесь'];
+const STOP = new Set(['я', 'и', 'в', 'на', 'с', 'у', 'к', 'по', 'не', 'но', 'а', 'это', 'мне', 'меня', 'уже', 'еще', 'ещё', 'очень', 'день', 'дня', 'дней', 'неделю', 'недели', ...FUNCTION_WORDS]);
+
+const tokensOf = (text) => [...text.matchAll(/[\p{L}][\p{L}-]*/gu)].map((m) => ({ value: m[0], start: m.index, end: m.index + m[0].length }));
+
+const names = (text) => {
+  const spans = [];
+  const tokens = tokensOf(text);
+  for (let i = 0; i < tokens.length; i += 1) {
+    const t = tokens[i];
+    if (isMedicalWord(t.value) || STOP.has(norm(t.value))) continue;
+    const next = tokens[i + 1];
+    const gapOk = (a, b) => b && /^[\s,]*$/u.test(text.slice(a.end, b.start)) && !/,/u.test(text.slice(a.end, b.start));
+    const surnameLike = (w) => looksLikeSurname(w) && !isMedicalWord(w);
+    if (firstName(t.value)) {
+      let end = t.end;
+      let j = i + 1;
+      while (j < tokens.length && j <= i + 2 && gapOk(tokens[j - 1], tokens[j]) && (surnameLike(tokens[j].value) || looksLikePatronymic(tokens[j].value) || firstName(tokens[j].value))) { end = tokens[j].end; j += 1; }
+      const before = tokens.slice(Math.max(0, i - 2), i).map((x) => norm(x.value));
+      const capital = /^\p{Lu}/u.test(t.value);
+      // Одно имя: с заглавной (детекторы его обычно видят) или после «зовут/я/это/у/к/доктор».
+      if (end > t.end || capital || before.some((b) => NAME_CUE.test(b)) || i === 0) spans.push({ type: 'PERSON', start: t.start, end });
+      i = j - 1;
+      continue;
+    }
+    if (surnameLike(t.value) && next && gapOk(t, next) && (firstName(next.value) || looksLikePatronymic(next.value))) {
+      let end = next.end;
+      const third = tokens[i + 2];
+      if (third && gapOk(next, third) && (looksLikePatronymic(third.value) || firstName(third.value))) end = third.end;
+      spans.push({ type: 'PERSON', start: t.start, end });
+      i += 1;
+      continue;
+    }
+    // Отчество — часть имени: «Петровна сказала»; «ну я зарвелинариз сөмбелә нурланович» — с одним-двумя
+    // словами перед ним (редкие имя и фамилия, которых нет в словарях), если это не служебные слова.
+    if (looksLikePatronymic(t.value)) {
+      let start = t.start;
+      for (let j = i - 1; j >= Math.max(0, i - 2); j -= 1) {
+        const prev = tokens[j];
+        const word = norm(prev.value);
+        if (!gapOk(prev, tokens[j + 1]) || STOP.has(word) || NAME_CUE.test(word) || isMedicalWord(prev.value) || word.length < 3) break;
+        start = prev.start;
+      }
+      spans.push({ type: 'PERSON', start, end: t.end });
+    }
+  }
+  return spans;
+};
+
+/*
+ * Имя или фамилия по частям: «Начало фамилии Нурвел.» … «Продолжение иеворел, имя Аксинья».
+ * Без уточнения («продолжение лечения») — только отдельное слово перед знаком препинания и не из
+ * обычных продолжений.
+ */
+const SPLIT_QUALIFIED = /(?<![\p{L}])(?:начало|продолжение|окончание|конец|перв\p{L}*\s+част\p{L}*|втор\p{L}*\s+част\p{L}*)\s+(?:фамилии|имени|отчества|ника|почты)\s*:?\s*([\p{L}-]{2,})/giu;
+const SPLIT_BARE = /(?<![\p{L}])(?:продолжение|окончание)\s*:?\s+([\p{L}-]{2,})(?=\s*[,.;!?]|\s*$)/giu;
+const ORDINARY_CONTINUATION = /^(?:лечени|терапи|курс|при[её]м|болезн|истори|разговор|тем|жалоб|симптом|сказанн|следует|выше|ниже)/u;
+const splitNames = (text) => [
+  ...[...text.matchAll(SPLIT_QUALIFIED)].map((m) => ({ type: 'PERSON', start: m.index + m[0].length - m[1].length, end: m.index + m[0].length })),
+  ...[...text.matchAll(SPLIT_BARE)].filter((m) => !ORDINARY_CONTINUATION.test(norm(m[1])) && !isMedicalWord(m[1])).map((m) => ({ type: 'PERSON', start: m.index + m[0].length - m[1].length, end: m.index + m[0].length })),
+];
+
+// Место работы и учёбы строчными: следующие 1–3 слова, если это не общее «завод», «офис»…
+const WORK_CUE = /(?<![\p{L}])(?:работа(?:ю|ет|ем)|тружусь|служу|служит|устроил(?:ся|ась)|сотрудни(?:к|ца)|учусь|учится|студент\p{L}*|наблюда(?:юсь|ется)|лечусь|лечил(?:ся|ась)|я\s+из)\s+(?:в|во|на|из)?\s*/giu;
+const GENERIC_WORK = new Set(['заводе', 'завод', 'фабрике', 'офисе', 'школе', 'больнице', 'поликлинике', 'магазине', 'складе', 'стройке', 'шахте', 'такси', 'банке', 'саду', 'детском', 'торговле', 'продажах', 'айти', 'кафе', 'ресторане', 'гараже', 'автосервисе', 'супермаркете', 'вузе', 'университете', 'колледже', 'техникуме', 'институте', 'армии', 'полиции', 'охране', 'бухгалтерии', 'больнице', 'ночную', 'ночные', 'смену', 'смены', 'две', 'удаленке', 'удалёнке', 'декрете', 'пенсии', 'казани', 'казань', 'городе', 'деревне', 'селе', 'компании', 'фирме', 'конторе', 'химией', 'химии', 'холоде', 'жаре', 'улице', 'ногах', 'компьютером', 'компьютере', 'медсестрой', 'водителем', 'учителем', 'продавцом', 'бухгалтером', 'курьером', 'врачом']);
+const TITLE_WORD = /^(?:главврач|главн|директор|заведующ|начальник|руководител|заместител|председател|судь|прокурор|ректор|декан|следовател|депутат|министр)/u;
+const orgsAfterCue = (text) => {
+  const spans = [];
+  for (const m of text.matchAll(WORK_CUE)) {
+    const from = m.index + m[0].length;
+    const rest = text.slice(from).match(/^([\p{L}][\p{L}\p{N}-]*)((?:\s+[\p{L}][\p{L}\p{N}-]*){0,3})/u);
+    if (!rest || text[from] === '[') continue;
+    const first = rest[1];
+    // Должность («главврачом», «судьёй») — забота правила должностей в deidentify.js.
+    if (GENERIC_WORK.has(norm(first)) || isMedicalWord(first) || STOP.has(norm(first)) || TITLE_WORD.test(norm(first))) continue;
+    // Следующие слова — пока они не начинают новую часть фразы (союз, симптом, «уже»…).
+    let end = from + first.length;
+    let cursor = end;
+    for (const m2 of (rest[2] || '').matchAll(/\s+([\p{L}][\p{L}\p{N}-]*)/gu)) {
+      const word = m2[1];
+      if (STOP.has(norm(word)) || isMedicalWord(word) || /^(?:болит|болят|тошнит|давит|колет|уже|давно|сильно|ещё|еще|а|и|но)$/u.test(norm(word))) break;
+      cursor += m2[0].length;
+      end = cursor;
+    }
+    spans.push({ type: 'ORG', start: from, end });
+  }
+  return spans;
+};
+
+const NUMBER_WORD = '(?:ноль|нуль|один|одна|два|две|три|четыре|пять|шесть|семь|восемь|девять)';
+const PHONE_WORDS = new RegExp(`(?<![\\p{L}])${NUMBER_WORD}(?:[\\s,.-]+${NUMBER_WORD}){6,}(?![\\p{L}])`, 'giu');
+// Начало — только с границы слова: иначе на длинной строке перебор квадратичный.
+const EMAIL_OBF = /(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]{2,}\s*(?:@|\(\s*at\s*\)|\[\s*at\s*\]|\s(?:at|собака)\s)\s*[A-Za-z0-9-]+(?:\s*(?:\.|\(\s*dot\s*\)|\[\s*dot\s*\]|\s(?:dot|точка)\s)\s*[A-Za-z]{2,})+/giu;
+const HANDLE = /(?:(?<![\p{L}\p{N}])@|t\.me\/|vk\.com\/|instagram\.com\/|ok\.ru\/|tiktok\.com\/@?|wa\.me\/)[A-Za-z0-9_.]{3,}/giu;
+const CUE = '(?<![\\p{L}])(?:телеграм\\p{L}*|телега|тг|tg|инст\\p{L}*|insta\\p{L}*|вк|vk|ник|whatsapp|вотсап|viber|вайбер|страница)\\s*:?\\s+';
+const HANDLE_CUE = new RegExp(`${CUE}([A-Za-z0-9_.]{3,})`, 'giu');
+// Ник, набранный или переведённый в русской раскладке («штыефпкфьюсщь/удьшкютпж»): точка, косая черта
+// или подчёркивание внутри слова после подсказки.
+const HANDLE_CUE_ANY = new RegExp(`${CUE}([\\p{L}\\p{N}_]+(?:[./][\\p{L}\\p{N}_]+)+)`, 'giu');
+// В нике есть буква: «ТГ 2.15» — триглицериды, а не телеграм.
+const hasLetter = (value) => (sp) => /\p{L}/u.test(value.slice(sp.start, sp.end));
+// Кандидаты — линейным поиском; смешанный регистр и цифры проверяются отдельно (без lookahead по всей длине).
+const BASE64_CANDIDATE = /(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{16,}={0,2}(?![A-Za-z0-9+/])/gu;
+const looksBase64 = (token) => /[A-Z]/u.test(token) && /[a-z]/u.test(token) && /[0-9+/]/u.test(token);
+const URL_ENCODED = /(?:%[0-9A-Fa-f]{2}){3,}[^\s]*/gu;
+const HEX = /(?<![\p{L}\p{N}])[0-9a-f]{16,}(?![\p{L}\p{N}])/giu;
+const COORD = /-?\d{1,3}\.\d{3,}\s*[,;]\s*-?\d{1,3}\.\d{3,}/gu;
+// Сокращение — только с точкой, полное слово — только целиком: «пос» внутри «постоянно» — не адрес.
+const STREET = '(?:ул\\.|пр-т|пр\\.|пер\\.|б-р|наб\\.|мкр\\.|г\\.|пос\\.|п\\.|с\\.|д\\.|(?:улиц\\p{L}*|проспект\\p{L}*|переул\\p{L}*|бульвар\\p{L}*|шоссе|набережн\\p{L}*|микрорайон\\p{L}*|город|поселок|посёлок|село|деревн\\p{L}*)(?=\\s))';
+const ADDRESS = new RegExp(`(?<![\\p{L}])${STREET}\\s*(\\p{L}[\\p{L}-]*)(?:\\s+\\p{Lu}[\\p{L}-]*)?((?:[\\s,]+(?:д\\.|дом)?\\s*\\d+\\p{L}?(?:\\s*[-/]\\s*\\d+)?)?(?:[\\s,]+(?:кв\\.?|квартира|под\\.?|подъезд|эт\\.?|этаж|корп\\.?|корпус)\\s*\\d+)*)`, 'gu');
+// Адрес — если название с заглавной или за ним номер дома.
+const addressSpans = (text) => [...text.matchAll(ADDRESS)].filter((m) => /^\p{Lu}/u.test(m[1]) || /\d/u.test(m[2] || '')).map((m) => ({ type: 'ADDRESS', start: m.index, end: m.index + m[0].length }));
+const HOUSE_DASH = /(?<![\p{L}])\p{Lu}\p{Ll}{3,}\s+\d{1,3}\p{L}?\s*[-/]\s*\d{1,4}(?![\p{N}])/gu;
+const FLAT = /(?<![\p{L}])(?:д\.|дом)\s*\d+\p{L}?(?:[\s,]+(?:кв\.?|квартира|под\.?|подъезд|эт\.?|этаж)\s*\d+)+/giu;
+
+const regexSpans = (text, pattern, type, group = 0) => [...text.matchAll(pattern)].map((m) => {
+  const start = group ? m.index + m[0].indexOf(m[group]) : m.index;
+  return { type, start, end: start + (group ? m[group].length : m[0].length) };
+});
+
+// Слова, которые стоят рядом с именем, но сами именем не являются: роли, родство, служебные.
+const NEAR_NAME_KEEP = new Set(['доктор', 'доктора', 'доктору', 'врач', 'врача', 'врачу', 'терапевт', 'медсестра', 'мама', 'маме', 'мамы', 'папа', 'папе', 'муж', 'мужа', 'жена', 'жены', 'сын', 'сына', 'сыну', 'дочь', 'дочери', 'дочке', 'бабушка', 'дедушка', 'брат', 'сестра', 'соседка', 'сосед', 'коллега', 'тоже', 'вот', 'так', 'типа', 'короче', 'ну', 'да', 'нет', 'ещё', 'еще', 'уже', 'очень', 'понимаете', 'пожалуйста', 'спасибо', 'здравствуйте']);
+// Глагольные окончания; «-ат/-ят» сюда не входят: так кончаются имена (Ахат, Хадижат, Аминат).
+const VERB_LIKE = /(?:ает|яет|ует|ешь|ете|ите|ают|яют|уют|ут|ют|ит|ет|ать|ять|еть|ить|оть|уть|ться|тся|лся|лась|лись|ла|ло|ли|шу|жу|чу|ю)$/u;
+/** «ахат [имя]», «[имя] хадижат»: неизвестное слово вплотную к метке имени — часть того же имени. */
+export const nearNameSpans = (text) => {
+  const spans = [];
+  for (const m of text.matchAll(/(?<![\p{L}])([\p{L}]{3,})\s+(?=\[имя(?:_\d+)?\])|(?<=\[имя(?:_\d+)?\])\s+([\p{L}]{3,})(?![\p{L}])/gu)) {
+    const word = m[1] || m[2];
+    const w = norm(word);
+    // Слово с заглавной рядом с именем — часть имени; строчное — если не похоже на глагол.
+    if (STOP.has(w) || NEAR_NAME_KEEP.has(w) || isMedicalWord(word) || NAME_CUE.test(w) || (!/^\p{Lu}/u.test(word) && VERB_LIKE.test(w))) continue;
+    const start = m.index + m[0].indexOf(word);
+    spans.push({ type: 'PERSON', start, end: start + word.length });
+  }
+  return spans;
+};
+
+/**
+ * @param {string} text
+ * @returns {Array<{type: string, start: number, end: number}>}
+ */
+export const recognizePii = (text) => {
+  const value = String(text || '');
+  const spans = [
+    ...names(value),
+    ...orgsAfterCue(value),
+    ...splitNames(value),
+    // Аббревиатура с падежным окончанием («КАМАЗе», «РКБшке») — название организации.
+    ...regexSpans(value, /(?<![\p{L}])\p{Lu}{2,}\p{Ll}{1,3}(?![\p{L}])/gu, 'ORG'),
+    ...regexSpans(value, PHONE_WORDS, 'PHONE'),
+    ...regexSpans(value, EMAIL_OBF, 'EMAIL'),
+    // Метки шлюза (@CURRENT_LOCATION, @DOCTOR_C) — не ники; точка на конце — пунктуация.
+    ...regexSpans(value, HANDLE, 'URL').map((sp) => ({ ...sp, end: sp.end - (value.slice(sp.start, sp.end).match(/\.+$/u)?.[0].length || 0) })).filter((sp) => !/^@[A-Z]+(?:_[A-Z0-9]+)*$/u.test(value.slice(sp.start, sp.end))),
+    ...regexSpans(value, HANDLE_CUE, 'URL', 1).filter(hasLetter(value)),
+    ...regexSpans(value, HANDLE_CUE_ANY, 'URL', 1).filter(hasLetter(value)),
+    ...regexSpans(value, BASE64_CANDIDATE, 'SECRET').filter((sp) => looksBase64(value.slice(sp.start, sp.end))),
+    ...regexSpans(value, URL_ENCODED, 'SECRET'),
+    ...regexSpans(value, HEX, 'SECRET'),
+    ...regexSpans(value, COORD, 'LOC'),
+    ...addressSpans(value),
+    ...regexSpans(value, HOUSE_DASH, 'ADDRESS'),
+    ...regexSpans(value, FLAT, 'ADDRESS'),
+  ];
+  // Внутри меток Gateway ничего не ищем; медицинские фразы не трогаем.
+  // Только серверные метки (точная грамматика) и метки шлюза: пользовательские скобки на входе обезврежены.
+  const labels = [...value.matchAll(new RegExp(`${trustedLabelPattern().source}|@[A-Z]+(?:_[A-Z0-9]+)?`, 'gu'))].map((m) => ({ start: m.index, end: m.index + m[0].length }));
+  const seen = new Set();
+  return spans.filter((s) => s.end > s.start
+    && !seen.has(`${s.type}:${s.start}:${s.end}`) && seen.add(`${s.type}:${s.start}:${s.end}`)
+    && !labels.some((l) => l.start <= s.start && s.end <= l.end)
+    && !(s.type === 'PERSON' || s.type === 'ORG' ? isMedicalPhrase(value.slice(s.start, s.end)) : false));
+};

@@ -40,6 +40,7 @@ import { SPECIALTY_CANON } from './catalog.js';
 import { combineTimeReadings, extractBookingConstraints, extractReplySignals, mergeBookingTurns } from './bookingConstraints.js';
 import { branchesOnStreet, demoRefsOf, doctorsByFirstName } from './demoRefs.js';
 import { findUnknownSpecialties } from './unknownSpecialties.js';
+import { createLabelState } from './labels.js';
 import {
   checkClosedVocabulary,
   findKnownPlaces,
@@ -524,7 +525,9 @@ export const createPrivacyGateway = ({
         : { opaque: true };
 
       const token = await vault.mint({ sessionId: session, requestId, kind, index, value });
-      placeholders.push({ token, kind });
+      // identity — нормализованное значение (без исходного текста наружу): по нему метки триажа
+      // связывают «Тимур» и «Тимуру» в разных репликах (privacy/labels.js).
+      placeholders.push({ token, kind, identity });
       trusted.set(token, { kind, identity, ...value });
       return token;
     };
@@ -1052,7 +1055,10 @@ export const createPrivacyGateway = ({
      * (журнал, ответ) его не вытащит. Нужен ли триаж, решает pipeline.
      */
     const triagePlaces = new Map();
-    const deidentifiedTurns = redactedTurns.slice(triageStart).map((turn) => deidentifyComplaint(turn.text, { places: triagePlaces }));
+    // Одна нумерация меток на диалог: тот же человек — та же метка во всех репликах, разные — разные.
+    const triageLabels = createLabelState();
+    const tokenIdentity = new Map(placeholders.map((item) => [item.token, item.identity]));
+    const deidentifiedTurns = redactedTurns.slice(triageStart).map((turn) => deidentifyComplaint(turn.text, { places: triagePlaces, labels: triageLabels, tokenIdentity }));
     const triage = Boolean(decision.triage)
       && redactedTurns.every((turn) => countResidualNameLike(turn.text, streetWords) <= POLICY.maxResidualNameLike)
       // По исходному тексту: «ВИЧ» заглавными редактура может принять за имя и вырезать.

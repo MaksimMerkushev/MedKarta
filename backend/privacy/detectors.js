@@ -16,6 +16,7 @@
 import { INVISIBLE_CHARS } from './normalize.js';
 import { looksLikePatronymic, looksLikeSurname } from './morphology.js';
 import { isFirstName } from './firstNames.js';
+import { isMedicalPhrase } from './medicalLexicon.js';
 
 /** Виды чувствительных сущностей. Значение — префикс session-токена. */
 export const ENTITY_KIND = Object.freeze({
@@ -553,7 +554,8 @@ const runPatternDetectors = (scan) => {
  * с заглавной и фамильной морфологией уже кандидат — ложная редактура
  * безопаснее пропуска.
  */
-const SELF_INTRO = /(?:зовут|(?<!\p{L})(?:фамилия|имя|отчество|фио)(?:\s+(?:пациент|мам|пап|сын|доч|реб[её]нк|жен|муж)\p{L}*)?\s*[:\-—]?|я\s*[—-]\s*|это\s+я,?)\s*/giu;
+// «я — …» и «это я» — отдельными словами: окончание «-я» («Зиля — кашель», «волнуется — тянет») не самопредставление.
+const SELF_INTRO = /(?:зовут|(?<!\p{L})(?:фамилия|имя|отчество|фио)(?:\s+(?:пациент|мам|пап|сын|доч|реб[её]нк|жен|муж)\p{L}*)?\s*[:\-—]?|(?<!\p{L})я\s*[—-]\s*|(?<!\p{L})это\s+я,?)\s*/giu;
 
 /** Родственники: после них в запросе обычно стоит имя или фамилия. */
 const KINSHIP = /^(?:мам|пап|мат|отц|отец|сын|доч|жен|муж|бабушк|бабул|дедушк|дед|брат|сестр|реб[её]нк|ребенок|внук|внучк|тёщ|тещ|свекров|племянн|пациент)\p{L}*$/iu;
@@ -779,8 +781,10 @@ const KIN_WORD = /^(?:сын\p{L}{0,3}|доч\p{L}{0,4}|внук\p{L}{0,3}|вн�
 export const detectEntities = (original) => {
   const scan = buildScanView(original);
   // «Сыну 3 года»: родство — не имя, иначе теряется и приём для ребёнка.
+  // Лекарство, анализ или эпоним с заглавной («Метформин», «болезнь Бехтерева») — не имя: это смысл жалобы.
   const spans = mergeSpans([...runPatternDetectors(scan), ...detectPersons(scan)])
-    .filter((span) => span.kind !== ENTITY_KIND.PERSON || !KIN_WORD.test(scan.text.slice(span.start, span.end).trim()));
+    .filter((span) => span.kind !== ENTITY_KIND.PERSON || !KIN_WORD.test(scan.text.slice(span.start, span.end).trim()))
+    .filter((span) => span.kind !== ENTITY_KIND.PERSON || !isMedicalPhrase(scan.text.slice(span.start, span.end)));
   return { scan, spans };
 };
 

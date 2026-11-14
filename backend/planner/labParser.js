@@ -12,7 +12,9 @@
  * назначает врач. Цены, филиалы и время модель не видит и не возвращает.
  */
 
+import { TESTS } from '../labs/catalog.js';
 import { assertOutboundSafe, isAllowedUpstreamUrl, PLANNER_ERROR, PlannerError, requestCompletion } from './client.js';
+import { defineChannel, sameJson } from './outboundChannels.js';
 
 export const LAB_PARSER_LIMITS = Object.freeze({ MAX_FRAGMENTS: 5, MAX_FRAGMENT_CHARS: 60, MAX_RAW_BYTES: 4 * 1024 });
 
@@ -48,6 +50,35 @@ const schemaFor = (codes) => ({
   },
 });
 
+/*
+ * Канал лабораторного парсера. Системный текст доверенный, только если это наш промпт, а
+ * каждая строка каталога — точная пара «код — название» из каталога в коде (labs/catalog.js);
+ * схема — ровно та, что строится по этим кодам. Фрагменты пользователя — свободный текст:
+ * финальная проверка смотрит их распознавателями ПДн и ML-слоем, как жалобы.
+ */
+const CATALOG_LINES = new Map(TESTS.map((test) => [`${test.code} — ${test.name}`, test.code]));
+const [PROMPT_HEAD, PROMPT_TAIL] = systemPrompt([{ code: '\u0000', name: '\u0000' }]).split('\u0000 — \u0000');
+const trustedCatalogCodes = (content) => {
+  if (typeof content !== 'string' || !content.startsWith(PROMPT_HEAD) || !content.endsWith(PROMPT_TAIL)) return null;
+  const lines = content.slice(PROMPT_HEAD.length, content.length - PROMPT_TAIL.length).split('\n');
+  const codes = [];
+  for (const line of lines) {
+    const code = CATALOG_LINES.get(line);
+    if (!code) return null;
+    codes.push(code);
+  }
+  return codes.length > 0 ? codes : null;
+};
+export const LAB_CHANNEL = defineChannel('labs', {
+  isTrustedSystem: (content) => trustedCatalogCodes(content) !== null,
+  isKnownSchema: (schema, systemTexts) => {
+    const trusted = systemTexts.map(trustedCatalogCodes).filter(Boolean);
+    return trusted.length === 1 && sameJson(schema, schemaFor(trusted[0]));
+  },
+  freeText: true,
+  maxTokens: 300,
+});
+
 /** Ответ модели → пары «фрагмент — код»: только переданные фрагменты и коды каталога. */
 export const validateLabParse = (raw, { fragments, codes }) => {
   if (typeof raw !== 'string' || Buffer.byteLength(raw, 'utf8') > LAB_PARSER_LIMITS.MAX_RAW_BYTES) return null;
@@ -68,7 +99,7 @@ export const validateLabParse = (raw, { fragments, codes }) => {
   return result;
 };
 
-export const createExternalLabParser = ({ apiKey, url, model, fetchImpl = globalThis.fetch, timeoutMs = 12_000, logger = null } = {}) => {
+export const createExternalLabParser = ({ apiKey, url, model, fetchImpl = globalThis.fetch, timeoutMs = 12_000, logger = null, ner = null } = {}) => {
   const name = 'external';
   /**
    * @param {object} params
@@ -91,7 +122,7 @@ export const createExternalLabParser = ({ apiKey, url, model, fetchImpl = global
       temperature: 0,
       max_tokens: 300,
     };
-    const completion = await requestCompletion({ url, apiKey, body, fetchImpl, timeoutMs, logger, provider: name });
+    const completion = await requestCompletion({ url, apiKey, body, fetchImpl, timeoutMs, logger, provider: name, channel: LAB_CHANNEL, ner });
     return { ...completion, fragments: list };
   };
   return Object.freeze({ name, parse });
