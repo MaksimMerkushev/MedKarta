@@ -21,6 +21,13 @@ const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 export const createLabService = ({ store, getEngine = async () => null, now = () => Date.now() }) => {
   const quote = createLabQuote({ store, getEngine, now });
 
+  // Как ещё называют исследование («ОАК», «сахар в крови»): по ним ищет витрина.
+  const synonymsByCode = () => {
+    const map = new Map();
+    for (const { code, synonym } of store.synonymIndex()) map.set(code, [...(map.get(code) || []), synonym]);
+    return map;
+  };
+
   /** Каталог для витрины: исследования с минимальной ценой и числом лабораторий. */
   const catalog = () => {
     const snapshot = store.snapshot();
@@ -36,10 +43,12 @@ export const createLabService = ({ store, getEngine = async () => null, now = ()
         stats.set(code, entry);
       }
     }
+    const synonyms = synonymsByCode();
     const tests = [...snapshot.tests.values()].map((test) => {
       const entry = stats.get(test.code);
       return {
-        code: test.code, name: test.name, category: test.category, biomaterial: test.biomaterial, biomaterialName: test.biomaterialName,
+        code: test.code, name: test.name, synonyms: (synonyms.get(test.code) || []).filter((item) => item !== test.name),
+        category: test.category, biomaterial: test.biomaterial, biomaterialName: test.biomaterialName,
         fasting: test.fasting, requiresBooking: test.requiresBooking, unit: test.unit,
         minPrice: entry ? entry.minPrice : null, fastestHours: entry ? entry.minHours : null, fastestText: entry ? describeTurnaround(entry.minHours) : null,
         labsCount: entry ? entry.labs.size : 0, branchesCount: entry ? entry.branches : 0,
@@ -107,6 +116,7 @@ export const createLabService = ({ store, getEngine = async () => null, now = ()
     const item = store.getLab(id);
     if (!item || !item.active) throw new LabError('lab_not_found', 'Лаборатория не найдена.', 404);
     const branches = store.listBranches({ labId: id });
+    const synonyms = synonymsByCode();
     const prices = new Map();
     for (const branch of branches) {
       for (const offering of store.branchOfferings(branch.id)) {
@@ -123,7 +133,9 @@ export const createLabService = ({ store, getEngine = async () => null, now = ()
       demo: true,
       lab: item,
       branches: branches.map((branch) => ({ ...branch, fees: store.branchFees(branch.id) })),
-      tests: [...prices.values()].map((entry) => ({ ...entry, turnaroundText: describeTurnaround(entry.minHours) })).sort((a, b) => a.name.localeCompare(b.name, 'ru')),
+      tests: [...prices.values()].map((entry) => ({
+        ...entry, synonyms: (synonyms.get(entry.code) || []).filter((item) => item !== entry.name), turnaroundText: describeTurnaround(entry.minHours),
+      })).sort((a, b) => a.name.localeCompare(b.name, 'ru')),
       disclaimer: LAB_DISCLAIMER,
     };
   };

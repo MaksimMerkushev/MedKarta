@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 
 import { KAZAN_PLACES } from '@shared/kazanPlaces.js';
+import { searchLabTests } from '@shared/labSearch.js';
 import {
   cancelLabBooking, fetchAccountLabBookings, fetchLab, fetchLabCatalog, fetchLabTest, forgetLabBooking, formatLabDay, formatRub,
   lookupLabBookings, quoteLabs, readLabBookings, readLabCart, writeLabCart,
@@ -219,11 +220,7 @@ function CatalogView({ catalog, cart, setCart, initialRequest, onMyBookings }) {
   const tests = catalog.tests;
   const byCode = useMemo(() => new Map(tests.map((test) => [test.code, test])), [tests]);
 
-  const visible = useMemo(() => {
-    const needle = query.trim().toLowerCase().replace(/ё/g, 'е');
-    return tests.filter((test) => (!category || test.category === category)
-      && (!needle || `${test.name} ${test.code}`.toLowerCase().replace(/ё/g, 'е').includes(needle)));
-  }, [tests, query, category]);
+  const visible = useMemo(() => searchLabTests(category ? tests.filter((test) => test.category === category) : tests, query), [tests, query, category]);
 
   const request = useMemo(() => ({
     tests: cart,
@@ -464,7 +461,7 @@ function LabView({ id, cart, onMyBookings }) {
     return () => controller.abort();
   }, [id]);
   const data = state.data;
-  const needle = query.trim().toLowerCase();
+  const labTests = useMemo(() => searchLabTests(data?.tests, query), [data, query]);
   return (
     <Shell title={data?.lab?.name || 'Лаборатория'} back="/labs" onMyBookings={onMyBookings}>
       <div className="mx-auto grid max-w-7xl grid-cols-1 gap-4 p-4 lg:grid-cols-2" data-testid="labs-lab-page">
@@ -498,14 +495,15 @@ function LabView({ id, cart, onMyBookings }) {
               </section>
               <section className="rounded-3xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
                 <h2 className="text-[15px] font-bold">Исследования и цены (демо)</h2>
-                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск по названию" className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[13.5px] dark:border-slate-700 dark:bg-slate-800" />
+                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Например: ОАК, ферритин, сахар" aria-label="Поиск исследования" className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[13.5px] dark:border-slate-700 dark:bg-slate-800" />
                 <ul className="mt-2 max-h-[360px] divide-y divide-slate-100 overflow-y-auto text-[13px] dark:divide-slate-800">
-                  {data.tests.filter((test) => !needle || test.name.toLowerCase().includes(needle)).map((test) => (
+                  {labTests.map((test) => (
                     <li key={test.code} className="flex justify-between gap-3 py-1.5">
                       <Link to={`/labs/test/${test.code}`} className="hover:text-violet-700">{test.name}</Link>
                       <span className="shrink-0 text-slate-600 dark:text-slate-300">{test.minPrice === test.maxPrice ? formatRub(test.minPrice) : `${formatRub(test.minPrice)}–${formatRub(test.maxPrice)}`} · {test.turnaroundText}</span>
                     </li>
                   ))}
+                  {labTests.length === 0 && <li className="py-4 text-center text-slate-500">В этой лаборатории такого исследования нет.</li>}
                 </ul>
               </section>
             </div>
