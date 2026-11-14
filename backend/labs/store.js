@@ -353,6 +353,21 @@ export const createLabStore = ({ DatabaseSync, file, now = () => Date.now(), see
 
   if (!db.prepare('SELECT 1 AS found FROM lab_tests LIMIT 1').get()) immediate(() => seedDemo(now()));
 
+  /*
+   * База, заполненная прежней версией каталога: названия и адреса демо-филиалов
+   * обновляются из текущей (только строки demo = 1; цены, записи и свои филиалы
+   * администратора не трогаются).
+   */
+  const storedVersion = Number(meta.get.get('catalog_version')?.value || 0);
+  if (storedVersion > 0 && storedVersion < LAB_CATALOG_VERSION) {
+    immediate(() => {
+      const at = now();
+      const update = db.prepare('UPDATE lab_branches SET name = ?, address = ?, updated_at = ? WHERE id = ? AND demo = 1');
+      for (const branch of buildLabSeed({ seed }).branches) update.run(branch.name, branch.address, at, branch.id);
+      meta.set.run('catalog_version', String(LAB_CATALOG_VERSION));
+    });
+  }
+
   /* ------------------------------ Чтение ------------------------------ */
 
   const statements = {

@@ -1,10 +1,12 @@
-import { Baby, Building2, ChevronDown, Clock, LayoutGrid, Navigation, ShieldCheck, SlidersHorizontal, Timer, UserRound, X } from 'lucide-react';
+import { Baby, Building2, ChevronDown, Clock, LayoutGrid, Navigation, ShieldCheck, SlidersHorizontal, TestTube, Timer, UserRound, X } from 'lucide-react';
 import './SearchFilters.css';
 
 const MODES = [
   { value: 'all', label: 'Все', icon: LayoutGrid },
   { value: 'doctor', label: 'Врачи', icon: UserRound },
   { value: 'facility', label: 'Учреждения', icon: Building2 },
+  // Демо-лаборатории: вкладка видна, только когда они загружены (options.hasLabs).
+  { value: 'lab', label: 'Лаборатории', icon: TestTube },
 ];
 
 const EXTRA_OPTIONS = [
@@ -56,6 +58,8 @@ export default function SearchFilters({
   onNearest,
 }) {
   const isFacility = filters.cardDisplayMode === 'facility';
+  const isLab = filters.cardDisplayMode === 'lab';
+  const modes = MODES.filter((mode) => mode.value !== 'lab' || options.hasLabs);
   const activeFilters = [];
   const add = (field, label, emptyValue = 'all') => {
     if (filters[field] !== emptyValue) {
@@ -64,7 +68,7 @@ export default function SearchFilters({
   };
 
   if (filters.searchQuery) add('searchQuery', `Поиск: ${filters.searchQuery}`, '');
-  add('cardDisplayMode', filters.cardDisplayMode === 'doctor' ? 'Врачи' : 'Учреждения');
+  add('cardDisplayMode', { doctor: 'Врачи', facility: 'Учреждения', lab: 'Лаборатории' }[filters.cardDisplayMode] || 'Учреждения');
   add('doctorProfile', filters.doctorProfile);
   add('facilityType', filters.facilityType);
   add('ownership', filters.ownership === 'Государственная' ? 'Государственные' : 'Частные');
@@ -94,8 +98,8 @@ export default function SearchFilters({
 
   return (
     <section className="search-filters" aria-label="Фильтры поиска">
-      <div className="filter-modes" role="group" aria-label="Что ищем">
-        {MODES.map((mode) => (
+      <div className={`filter-modes${modes.length > 3 ? ' filter-modes--four' : ''}`} role="group" aria-label="Что ищем">
+        {modes.map((mode) => (
           <button
             key={mode.value}
             type="button"
@@ -107,13 +111,16 @@ export default function SearchFilters({
         ))}
       </div>
 
-      <FilterSelect
-        label={isFacility ? 'Тип учреждения' : 'Специальность врача'}
-        value={isFacility ? filters.facilityType : filters.doctorProfile}
-        onChange={(value) => onChange(isFacility ? 'facilityType' : 'doctorProfile', value)}
-        placeholder={isFacility ? 'Любой тип' : 'Любая специальность'}
-        options={isFacility ? options.facilityTypes : options.doctorProfiles}
-      />
+      {/* У лабораторий нет специальности и типа: выбор анализов и цен — на странице лаборатории. */}
+      {!isLab && (
+        <FilterSelect
+          label={isFacility ? 'Тип учреждения' : 'Специальность врача'}
+          value={isFacility ? filters.facilityType : filters.doctorProfile}
+          onChange={(value) => onChange(isFacility ? 'facilityType' : 'doctorProfile', value)}
+          placeholder={isFacility ? 'Любой тип' : 'Любая специальность'}
+          options={isFacility ? options.facilityTypes : options.doctorProfiles}
+        />
+      )}
 
       <div className="filter-pills" role="group" aria-label="Форма собственности">
         {['Государственная', 'Частная'].map((ownership) => (

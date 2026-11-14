@@ -59,7 +59,7 @@ describe('Лаборатории: исходные данные', { skip: !Datab
     store.close();
   });
 
-  it('филиалы стоят в точках настоящих пунктов сдачи анализов из OSM, по одному в точке; адрес без номера дома', () => {
+  it('филиалы стоят в точках настоящих пунктов сдачи анализов из OSM, по одному в точке; адрес — дом пункта', () => {
     const facilities = new Map(kazanFacilities.map((item) => [item.id, item]));
     const meters = (a, b) => Math.hypot((a.lat - b.lat) * 111_320, (a.lng - b.lng) * 111_320 * Math.cos((a.lat * Math.PI) / 180));
     const branches = buildLabSeed().branches;
@@ -70,7 +70,7 @@ describe('Лаборатории: исходные данные', { skip: !Datab
       assert.match(point.name, /^(KDL|Инвитро|Ситилаб)$/u, `${branch.id}: в OSM здесь не пункт сдачи анализов`);
       assert.ok(meters(branch, point) < 1, `${branch.id}: точка не совпадает с OSM`);
       assert.ok(branch.district, `${branch.id}: нет района`);
-      assert.doesNotMatch(branch.address, /\d/u, `${branch.id}: в адресе номер дома`);
+      assert.match(branch.address, /^[^,]+, \d[^,]*, Казань$/u, `${branch.id}: адрес без дома: ${branch.address}`);
       for (const other of branches) {
         if (other !== branch) assert.ok(meters(branch, other) > 100, `${branch.id} и ${other.id} ближе 100 м`);
       }
@@ -363,5 +363,48 @@ describe('Лаборатории: подбор корзины', { skip: !Databas
     assert.equal((await quote.quote({ tests: [] })).status, 'invalid');
     assert.equal((await quote.quote({ tests: ['NOPE_CODE'] })).status, 'invalid');
     store.close();
+  });
+});
+
+describe('Лаборатории на карте: филиалы, osmId и обновление старой базы', { skip: !DatabaseSync && 'нужен node:sqlite' }, () => {
+  it('список лабораторий отдаёт у филиалов часы работы и объект OSM; карточки — вида «Лаборатория»', async () => {
+    const { createLabService } = await import('../backend/labs/service.js');
+    const { labItemsFrom } = await import('../frontend/src/labs/labPlaces.js');
+    const service = createLabService({ store: createLabStore({ DatabaseSync, file: ':memory:' }) });
+    const payload = service.labs();
+    const branches = payload.labs.flatMap((lab) => lab.branches);
+    assert.equal(branches.length, LAB_BRANCH_POINTS.length);
+    assert.ok(branches.every((branch) => /^osm-node-\d+$/u.test(branch.osmId) && branch.hours && Object.keys(branch.hours).length === 7));
+    const items = labItemsFrom(payload);
+    assert.equal(items.length, branches.length);
+    for (const item of items) {
+      assert.equal(item.facilityType, 'Лаборатория');
+      assert.equal(item.isLab, true);
+      assert.equal(item.demo, true);
+      assert.match(item.address, /, Казань$/u);
+      assert.ok(item.labId && item.osmId);
+      assert.deepEqual(Object.keys(item.schedule), ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']);
+      assert.match(item.hours, /^Пн/u);
+    }
+    // Подряд идущие дни с одинаковыми часами — одной группой, выходной — словом.
+    const sample = labItemsFrom({ labs: [{ id: 'lab-x', name: 'X', branches: [{ id: 'b', name: 'X · Y', address: 'улица Y, 1, Казань', lat: 55.8, lng: 49.1, hours: { 1: [['07:00', '19:00']], 2: [['07:00', '19:00']], 3: [['07:00', '19:00']], 4: [['07:00', '19:00']], 5: [['07:00', '19:00']], 6: [['08:00', '15:00']], 7: [] } }] }] })[0];
+    assert.equal(sample.hours, 'Пн–Пт 07:00–19:00; Сб 08:00–15:00; Вс — выходной');
+    assert.equal(sample.schedule.sun, 'Выходной');
+  });
+
+  it('база прежней версии каталога: адреса и названия демо-филиалов обновляются при запуске', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'medkarta-labs-upgrade-'));
+    const file = path.join(dir, 'labs.sqlite');
+    createLabStore({ DatabaseSync, file }).close?.();
+    const db = new DatabaseSync(file);
+    const [labId, key] = LAB_BRANCH_POINTS[0];
+    db.prepare("UPDATE lab_branches SET address = 'Казань, старый адрес (демо-филиал, номер дома не указан)' WHERE id = ?").run(`${labId}-${key}`);
+    db.prepare("UPDATE meta SET value = '3' WHERE key = 'catalog_version'").run();
+    db.close();
+    const store = createLabStore({ DatabaseSync, file });
+    const branch = store.listBranches({ labId }).find((item) => item.id === `${labId}-${key}`);
+    assert.equal(branch.address, buildLabSeed().branches.find((item) => item.id === branch.id).address);
+    store.close?.();
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

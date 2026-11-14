@@ -2,7 +2,7 @@
  * © 2026 МедКарта Казань. Все права защищены.
  * Этот код является интеллектуальной собственностью автора.
  */
-import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, MotionConfig, motion as Motion, useReducedMotion } from 'motion/react';
 import { AttributionControl, MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import MarkerClusterGroup from 'react-leaflet-cluster';
@@ -70,6 +70,7 @@ import PlaceDoctorList from './PlaceDoctorList';
 import { DataReportButton, SearchFeedbackPrompt } from './FeedbackWidgets';
 import DmsPanel from './DmsPanel';
 import { fetchServerConfig, loadDemoData, readDemoPreference, setDemoPreference } from './demoMode';
+import { labItemsFrom } from './labs/labPlaces';
 import MyBookingsPanel from './MyBookingsPanel';
 import PlaceDetailsModal from './PlaceDetailsModal';
 import DemoDoctorSchedule from './DemoDoctorSchedule';
@@ -179,10 +180,11 @@ const blueArrowIcon = createBeautifulArrow('#3b82f6');
 
 const violetArrowIcon = createBeautifulArrow('#8b5cf6');
 const amberArrowIcon = createBeautifulArrow('#f59e0b');
+const tealArrowIcon = createBeautifulArrow('#0d9488');
 const userDotIcon = createBeautifulArrow('#ef4444', true);
 const hasGeolocationSupport = typeof navigator !== 'undefined' && Boolean(navigator.geolocation);
 const defaultLocation = [55.7963, 49.1088];
-const institutionTypes = ['Клиника', 'Больница', 'Госпиталь', 'Медцентр', 'Поликлиника', 'Амбулатория', 'Медучреждение', 'Стоматология'];
+const institutionTypes = ['Клиника', 'Больница', 'Госпиталь', 'Медцентр', 'Поликлиника', 'Амбулатория', 'Медучреждение', 'Стоматология', 'Лаборатория'];
 const institutionTypeSet = new Set(institutionTypes);
 
 const resolveFacilityType = (item) => {
@@ -657,6 +659,7 @@ const withOsmSchedule = (item) => {
   return parsed ? { ...item, schedule: parsed } : item;
 };
 
+
 /*
  * Часы в справочнике — казанские, поэтому «открыто сейчас» считается не по поясу
  * устройства. kazanWallClock возвращает Date, у которого getDay/getHours/getMinutes
@@ -963,7 +966,7 @@ const readUrlState = () => {
     facilityType: text('facilityType'),
     doctorProfile: text('doctorProfile'),
     ownership: oneOf('ownership', ['Государственная', 'Частная']),
-    cardDisplayMode: oneOf('cardDisplayMode', ['all', 'doctor', 'facility']),
+    cardDisplayMode: oneOf('cardDisplayMode', ['all', 'doctor', 'facility', 'lab']),
     sortBy: oneOf('sortBy', SORT_MODES),
     services: (params.get(URL_KEYS.services) || '')
       .split('|')
@@ -1612,7 +1615,7 @@ export default function App() {
     if (result.district && districtSetRef.current.has(result.district)) {
       setSelectedDistrict(result.district);
     }
-    if (result.cardDisplayMode && ['all', 'doctor', 'facility'].includes(result.cardDisplayMode)) {
+    if (result.cardDisplayMode && ['all', 'doctor', 'facility', 'lab'].includes(result.cardDisplayMode)) {
       setCardDisplayMode(result.cardDisplayMode);
     }
     if (result.openOnly === true) setOpenOnly(true);
@@ -1755,11 +1758,13 @@ export default function App() {
     // Источники: проверенные врачи с официальных сайтов больниц,
     // учреждения из OpenStreetMap и данные по клиникам.
     // Реальная частная клиника из демо-набора заменяет свою карточку из OSM, а не дублирует её.
-    const replacedByDemo = new Set(demoState.items.map((item) => item.osmId).filter(Boolean));
+    // Филиал демо-лаборатории тоже заменяет карточку своего пункта из OSM.
+    const labs = demoState.enabled ? demoState.labs || EMPTY_LIST : EMPTY_LIST;
+    const replacedByDemo = new Set([...demoState.items, ...labs].map((item) => item.osmId).filter(Boolean));
     const osmFacilities = replacedByDemo.size > 0 ? kazanFacilities.filter((item) => !replacedByDemo.has(item.id)) : kazanFacilities;
     // «Только демо» (DEMO_ONLY на сервере): на карте только вымышленные клиники и врачи.
-    const all = demoState.demoOnly ? [...demoState.items]
-      : [...verifiedDoctors, ...doctorsData, ...osmFacilities.map(withOsmSchedule), ...clinicsFacilities, ...COLLECTED_FACILITIES, ...demoState.items];
+    const all = demoState.demoOnly ? [...demoState.items, ...labs]
+      : [...verifiedDoctors, ...doctorsData, ...osmFacilities.map(withOsmSchedule), ...clinicsFacilities, ...COLLECTED_FACILITIES, ...demoState.items, ...labs];
     // Демо-режим: государственные учреждения скрыты из выдачи (флаг сервера PUBLIC_CLINICS).
     const base = demoState.enabled && !demoState.publicClinics ? all.filter((item) => item.ownership !== PUBLIC_OWNERSHIP) : all;
     const clinicAddressMap = new Map();
@@ -1815,7 +1820,7 @@ export default function App() {
         const hasCoords = typeof item.lat === 'number' && typeof item.lng === 'number';
         return Boolean(address) && !/уточняется/i.test(address) && hasCoords;
       });
-  }, [clinicsFacilities, demoState.items, demoState.enabled, demoState.publicClinics, demoState.demoOnly]);
+  }, [clinicsFacilities, demoState.items, demoState.labs, demoState.enabled, demoState.publicClinics, demoState.demoOnly]);
 
   const activeOrigin = isManualOrigin && customOrigin ? customOrigin : userLocation;
   // Поле ввода обновляется мгновенно, тяжёлая фильтрация — с задержкой.
@@ -1994,7 +1999,7 @@ export default function App() {
         const weekSchedule = buildWeekSchedule(doc.schedule, now);
         const facilityType = resolveFacilityType(doc);
         const doctorProfile = resolveDoctorProfile(doc);
-        const entityKind = doctorProfile ? 'doctor' : 'facility';
+        const entityKind = doc.isLab ? 'lab' : doctorProfile ? 'doctor' : 'facility';
         const telHref = toTelHref(doc.phone);
         const websiteUrl = toSafeUrl(doc.website);
         const servicePrices = Array.isArray(doc.servicePrices)
@@ -2091,7 +2096,15 @@ export default function App() {
       try {
         const data = await loadDemoData({ fictionalOnly: config.demoOnly });
         // Запись и скрытие госучреждений — только если демо включено и на сервере.
-        if (!cancelled) setDemoState({ enabled: true, ...data, booking: config.demo && config.booking, publicClinics: !config.demo || config.publicClinics, demoOnly: config.demoOnly });
+        if (!cancelled) setDemoState({ enabled: true, ...data, labs: EMPTY_LIST, booking: config.demo && config.booking, publicClinics: !config.demo || config.publicClinics, demoOnly: config.demoOnly });
+        // Демо-лаборатории — отдельным запросом: их нет — карта и врачи работают как раньше.
+        try {
+          const response = await fetch('/api/labs/labs', { credentials: 'same-origin' });
+          const labs = response.ok ? labItemsFrom(await response.json()) : EMPTY_LIST;
+          if (!cancelled && labs.length > 0) setDemoState((current) => ({ ...current, labs }));
+        } catch {
+          // Лаборатории необязательны.
+        }
       } catch {
         // Демо-набор необязателен: без него работает обычный справочник.
       }
@@ -2829,6 +2842,13 @@ export default function App() {
     }
   }, [enrichedDoctors]);
   const facilityCards = useMemo(() => sortedDoctors.filter((item) => item.entityKind === 'facility'), [sortedDoctors]);
+  const labCards = useMemo(() => sortedDoctors.filter((item) => item.entityKind === 'lab'), [sortedDoctors]);
+  // Режим «Все»: врачи, учреждения и лаборатории — отдельными секциями (классы целиком, для Tailwind).
+  const listGroups = useMemo(() => [
+    { key: 'doctor', title: 'Врачи', cards: doctorCards, moreWord: 'врачей', header: 'border-blue-100 bg-blue-50/60 text-blue-700 dark:border-blue-800 dark:bg-blue-900/60 dark:text-blue-300', more: 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-900 dark:text-blue-300 dark:hover:bg-blue-800' },
+    { key: 'facility', title: 'Учреждения', cards: facilityCards, moreWord: 'учреждений', header: 'border-emerald-100 bg-emerald-50/60 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300', more: 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-900 dark:text-emerald-300 dark:hover:bg-emerald-800' },
+    { key: 'lab', title: 'Лаборатории', cards: labCards, moreWord: 'лабораторий', header: 'border-teal-100 bg-teal-50/60 text-teal-700 dark:border-teal-800 dark:bg-teal-900/60 dark:text-teal-300', more: 'border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100 dark:border-teal-800 dark:bg-teal-900 dark:text-teal-300 dark:hover:bg-teal-800' },
+  ].filter((group) => group.cards.length > 0), [doctorCards, facilityCards, labCards]);
 
   useEffect(() => {
     if (targetStopsTrigger && targetStopsTrigger.length > 0 && enrichedDoctors.length > 0) {
@@ -3282,7 +3302,7 @@ export default function App() {
 
       const hasFavorite = items.some((it) => it.isFavorite);
       const isGovernment = items.some((it) => /государ/i.test(String(it.ownership || '')));
-      const ownershipIcon = isGovernment ? blueArrowIcon : violetArrowIcon;
+      const ownershipIcon = items.every((it) => it.isLab) ? tealArrowIcon : isGovernment ? blueArrowIcon : violetArrowIcon;
 
       const icon = isRouteTarget
         ? routeIconFor(routeIndex + 1)
@@ -3544,6 +3564,7 @@ export default function App() {
   const renderListingCard = (doc, index = 0) => {
     const isTarget = routeTargets.some((t) => t.id === doc.id);
     const isDoctorCard = doc.entityKind === 'doctor';
+    const isLabCard = doc.entityKind === 'lab';
     const distanceLabel = doc.distanceKm == null ? null : formatDistance(doc.distanceKm * 1000);
     const dmsBadge = dmsPlan && doc.dmsCoverage ? coverageBadge(doc.dmsCoverage, dmsPlan) : null;
     const subtitle = isDoctorCard ? doc.doctorProfile || doc.specialty : doc.facilityType || doc.specialty;
@@ -3555,7 +3576,7 @@ export default function App() {
     return (
       <div
         key={doc.id}
-        className={`card-fade-in @container rounded-2xl border bg-white p-3 shadow-sm transition-all dark:bg-slate-800 dark:text-white ${isTarget ? 'border-blue-400 ring-2 ring-blue-100 dark:border-blue-500 dark:ring-blue-900' : isDoctorCard ? 'border-blue-100 hover:shadow-md dark:border-blue-900' : 'border-emerald-100 hover:shadow-md dark:border-emerald-900'}`}
+        className={`card-fade-in @container rounded-2xl border bg-white p-3 shadow-sm transition-all dark:bg-slate-800 dark:text-white ${isTarget ? 'border-blue-400 ring-2 ring-blue-100 dark:border-blue-500 dark:ring-blue-900' : isDoctorCard ? 'border-blue-100 hover:shadow-md dark:border-blue-900' : isLabCard ? 'border-teal-100 hover:shadow-md dark:border-teal-900' : 'border-emerald-100 hover:shadow-md dark:border-emerald-900'}`}
         data-testid="place-card"
       >
         <div className="flex items-start gap-2">
@@ -3579,12 +3600,9 @@ export default function App() {
 
         <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] font-semibold">
           {doc.demo && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 uppercase tracking-[0.08em] text-amber-800 dark:bg-amber-900 dark:text-amber-100" title={doc.realClinic ? 'Клиника реальная, врачи и расписание вымышлены' : 'Вымышленная запись для проверки сценариев'}>
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 uppercase tracking-[0.08em] text-amber-800 dark:bg-amber-900 dark:text-amber-100" title="Демо: название, врачи, расписание и цены вымышлены; адрес — реальной частной клиники (OpenStreetMap)">
               <FlaskConical size={11} aria-hidden="true" /> Демо
             </span>
-          )}
-          {doc.realClinic && (
-            <span className="rounded-full bg-sky-50 px-2 py-0.5 text-sky-700 dark:bg-sky-900/50 dark:text-sky-200" title="Название, адрес и часы — из OpenStreetMap">Реальная клиника</span>
           )}
           {doc.openState === OPEN_STATE.OPEN && <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-100">Открыто</span>}
           {doc.openState === OPEN_STATE.CLOSED && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-500 dark:bg-slate-700 dark:text-slate-300">Закрыто</span>}
@@ -3619,6 +3637,17 @@ export default function App() {
           >
             <span className="truncate">{doc.demo && isDoctorCard && demoState.booking ? 'Расписание' : 'Подробнее'}</span>
           </button>
+          {isLabCard && doc.labId && (
+            <Link
+              to={`/labs/lab/${doc.labId}`}
+              className="inline-flex min-w-0 flex-1 items-center justify-center gap-1 rounded-lg bg-teal-600 px-2 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-teal-700"
+              data-testid="card-lab-prices"
+              title="Цены на анализы и запись"
+              aria-label={`Цены на анализы и запись: ${doc.name}`}
+            >
+              <TestTube size={13} className="shrink-0" aria-hidden="true" /> <span className="truncate">Цены</span>
+            </Link>
+          )}
           {doc.demo && isDoctorCard && demoState.booking && doc.doctorId && (
             <button
               type="button"
@@ -3655,8 +3684,8 @@ export default function App() {
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.18em] ${isDoctorCard ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-100' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-100'}`}>
-                {isDoctorCard ? 'Врач' : 'Учреждение'}
+              <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.18em] ${isDoctorCard ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-100' : doc.isLab ? 'bg-teal-100 text-teal-700 dark:bg-teal-900 dark:text-teal-100' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-100'}`}>
+                {isDoctorCard ? 'Врач' : doc.isLab ? 'Лаборатория' : 'Учреждение'}
               </span>
               {doc.demo && (
                 <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.12em] text-amber-800 dark:bg-amber-900 dark:text-amber-100" title="Вымышленная запись для проверки сценариев">
@@ -3724,13 +3753,21 @@ export default function App() {
             {verifiedLabel ? `Официальный сайт · проверено ${verifiedLabel}` : 'Проверено по официальному сайту'}
             <ExternalLink size={11} className="opacity-60" aria-hidden="true" />
           </a>
-        ) : doc.demo && doc.realClinic ? (
-          <p className="mt-3 text-[11px] leading-4 text-amber-700 dark:text-amber-300" data-testid="real-clinic-note">
-            Клиника реальная: название, адрес, точка и часы работы — из OpenStreetMap. {isDoctorCard ? 'Врач, его расписание и цены' : 'Врачи, расписание и цены'} — вымышленные, демонстрационные; запись в клинику не уходит, телефон клиники в демо не показываем.
-          </p>
+        ) : doc.isLab ? (
+          <div className="mt-3 space-y-2" data-testid="demo-lab-note">
+            <Link
+              to={`/labs/lab/${doc.labId}`}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-teal-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-teal-700"
+            >
+              <TestTube size={14} aria-hidden="true" /> Цены на анализы, подготовка и запись
+            </Link>
+            <p className="text-[11px] leading-4 text-amber-700 dark:text-amber-300">
+              Демо-данные: название лаборатории, цены, сроки и расписание вымышлены. Филиал стоит по адресу реального пункта сдачи анализов (OpenStreetMap).
+            </p>
+          </div>
         ) : doc.demo ? (
-          <p className="mt-3 text-[11px] leading-4 text-amber-700 dark:text-amber-300">
-            Демо-данные: вымышленная клиника для проверки сценариев. Сайт и телефон не настоящие.
+          <p className="mt-3 text-[11px] leading-4 text-amber-700 dark:text-amber-300" data-testid="demo-clinic-note">
+            Демо-данные: название клиники, {isDoctorCard ? 'врач, его расписание и цены' : 'врачи, расписание и цены'} вымышлены. Адрес — здание реальной частной клиники (OpenStreetMap): запись туда не уходит, телефон в демо не настоящий.
           </p>
         ) : isOsm ? (
           <p className="mt-3 text-[11px] leading-4 text-slate-400 dark:text-slate-500" title="Открытые данные OpenStreetMap: адрес и часы работы могут быть неточны">
@@ -4226,12 +4263,12 @@ export default function App() {
                   <FlaskConical size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
                   {demoState.demoOnly ? (
                     <p data-testid="demo-only-note">
-                      <b>Демо-версия.</b> Все клиники, врачи, адреса, расписание, цены и программы ДМС вымышлены.
+                      <b>Демо-версия.</b> Названия клиник, врачи, расписание, цены и программы ДМС вымышлены; клиники стоят по адресам реальных частных клиник (OpenStreetMap).
                       {demoState.booking && ' Запись демонстрационная — никуда не отправляется.'}
                     </p>
                   ) : (
                     <p>
-                      <b>Демо-режим.</b> Врачи, расписание, цены и ДМС с пометкой «Демо» вымышлены; клиники — вымышленные и реальные частные (данные OSM).
+                      <b>Демо-режим.</b> Клиники и лаборатории с пометкой «Демо»: названия, врачи, расписание, цены и ДМС вымышлены, адреса — реальных частных клиник (OSM).
                       {demoState.booking && ' Запись демонстрационная — в клиники ничего не уходит.'}
                       {!demoState.publicClinics && ' Госклиники временно скрыты.'}{' '}
                       <button type="button" onClick={disableDemo} className="font-semibold underline underline-offset-2">Выключить</button>
@@ -4287,7 +4324,7 @@ export default function App() {
               )}
               <SearchFilters
                 filters={filters}
-                options={{ doctorProfiles, facilityTypes, clinics, services: allServices, travelLimits: TRAVEL_LIMIT_OPTIONS }}
+                options={{ doctorProfiles, facilityTypes, clinics, services: allServices, travelLimits: TRAVEL_LIMIT_OPTIONS, hasLabs: (demoState.labs || EMPTY_LIST).length > 0 }}
                 travel={{
                   modeLabel: TRAVEL_MODE_LABEL[travelMode] || '',
                   originKnown: travelOriginKnown,
@@ -4389,34 +4426,25 @@ export default function App() {
                       </>
                     )}
                   </div>
-                ) : cardDisplayMode === 'all' && doctorCards.length > 0 && facilityCards.length > 0 ? (
+                ) : cardDisplayMode === 'all' && listGroups.length > 1 ? (
                   <>
-                    <div className="rounded-2xl border border-blue-100 bg-blue-50/60 px-4 py-2 text-xs font-bold uppercase tracking-[0.16em] text-blue-700 dark:border-blue-800 dark:bg-blue-900/60 dark:text-blue-300">
-                      Врачи ({doctorCards.length})
-                    </div>
-                    {doctorCards.slice(0, visibleCount).map(renderListingCard)}
-                    {doctorCards.length > visibleCount && (
-                      <button
-                        type="button"
-                        onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}
-                        className="w-full rounded-2xl border border-blue-200 bg-blue-50 py-3 text-sm font-semibold text-blue-700 transition-all hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-900 dark:text-blue-300 dark:hover:bg-blue-800"
-                      >
-                        Показать ещё ({doctorCards.length - visibleCount} врачей)
-                      </button>
-                    )}
-                    <div className="rounded-2xl border border-emerald-100 bg-emerald-50/60 px-4 py-2 text-xs font-bold uppercase tracking-[0.16em] text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300">
-                      Учреждения ({facilityCards.length})
-                    </div>
-                    {facilityCards.slice(0, visibleCount).map(renderListingCard)}
-                    {facilityCards.length > visibleCount && (
-                      <button
-                        type="button"
-                        onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}
-                        className="w-full rounded-2xl border border-emerald-200 bg-emerald-50 py-3 text-sm font-semibold text-emerald-700 transition-all hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-900 dark:text-emerald-300 dark:hover:bg-emerald-800"
-                      >
-                        Показать ещё ({facilityCards.length - visibleCount} учреждений)
-                      </button>
-                    )}
+                    {listGroups.map((group) => (
+                      <Fragment key={group.key}>
+                        <div className={`rounded-2xl border px-4 py-2 text-xs font-bold uppercase tracking-[0.16em] ${group.header}`}>
+                          {group.title} ({group.cards.length})
+                        </div>
+                        {group.cards.slice(0, visibleCount).map(renderListingCard)}
+                        {group.cards.length > visibleCount && (
+                          <button
+                            type="button"
+                            onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}
+                            className={`w-full rounded-2xl border py-3 text-sm font-semibold transition-all ${group.more}`}
+                          >
+                            Показать ещё ({group.cards.length - visibleCount} {group.moreWord})
+                          </button>
+                        )}
+                      </Fragment>
+                    ))}
                   </>
                 ) : (
                   <>

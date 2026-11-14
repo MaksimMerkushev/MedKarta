@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { loadSqlite } from '../demo/bookingStore.js';
 import { addDays, demoNow, isDay, moscowDay, moscowParts } from '../demo/time.js';
 import { logger } from '../observability/safeLogger.js';
-import { BIOMATERIALS, CATEGORIES, PREPARATION_NOTE } from './catalog.js';
+import { BIOMATERIALS, CATEGORIES, LAB_BRANCH_POINTS, PREPARATION_NOTE } from './catalog.js';
 import { createLabQuote, describeTurnaround, LAB_DISCLAIMER } from './quote.js';
 import { createLabStore, LAB_WINDOW_DAYS, LabError } from './store.js';
 
@@ -86,6 +86,9 @@ export const createLabService = ({ store, getEngine = async () => null, now = ()
     };
   };
 
+  // Объект OSM, на месте которого стоит демо-филиал: карта заменяет им карточку пункта из OSM.
+  const OSM_OF_BRANCH = new Map(LAB_BRANCH_POINTS.map(([labId, key, , , , , , osmId]) => [`${labId}-${key}`, osmId]));
+
   const labs = () => {
     const snapshot = store.snapshot();
     return {
@@ -93,7 +96,7 @@ export const createLabService = ({ store, getEngine = async () => null, now = ()
       labs: [...snapshot.labs.values()].map((lab) => {
         const branches = snapshot.branches.filter((branch) => branch.labId === lab.id);
         const codes = new Set(branches.flatMap((branch) => [...(snapshot.offerings.get(branch.id) || new Map()).values()].filter((offering) => offering.available).map((offering) => offering.testCode)));
-        return { ...lab, branchesCount: branches.length, testsCount: codes.size, branches: branches.map((branch) => ({ id: branch.id, name: branch.name, address: branch.address, lat: branch.lat, lng: branch.lng, district: branch.district })) };
+        return { ...lab, branchesCount: branches.length, testsCount: codes.size, branches: branches.map((branch) => ({ id: branch.id, name: branch.name, address: branch.address, lat: branch.lat, lng: branch.lng, district: branch.district, hours: branch.hours, osmId: OSM_OF_BRANCH.get(branch.id) || null })) };
       }),
       disclaimer: LAB_DISCLAIMER,
     };
