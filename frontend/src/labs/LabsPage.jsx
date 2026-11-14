@@ -18,10 +18,12 @@ import {
 } from 'lucide-react';
 
 import { KAZAN_PLACES } from '@shared/kazanPlaces.js';
+import { searchLabTests } from '@shared/labSearch.js';
 import {
   cancelLabBooking, fetchAccountLabBookings, fetchLab, fetchLabCatalog, fetchLabTest, forgetLabBooking, formatLabDay, formatRub,
   lookupLabBookings, quoteLabs, readLabBookings, readLabCart, writeLabCart,
 } from '../services/labs';
+import { plural } from '../ui/format';
 import { navigate, useLocation } from '../ui/navigation';
 import { Link } from '../ui/router';
 import LabBookingDialog from './LabBookingDialog';
@@ -57,11 +59,36 @@ const readInitialRequest = (search) => {
   }
 };
 
-const branchIcon = (label, active) => L.divIcon({
-  className: '',
-  html: `<div style="transform:translate(-50%,-100%);white-space:nowrap;padding:3px 7px;border-radius:10px;font:600 12px system-ui;color:${active ? '#fff' : '#334155'};background:${active ? '#7c3aed' : '#fff'};border:1px solid ${active ? '#6d28d9' : '#cbd5e1'};box-shadow:0 1px 3px rgba(0,0,0,.25)">${label}</div>`,
-  iconSize: [0, 0],
-});
+/*
+ * Значки филиалов. У divIcon нулевой размер (точка — сам филиал), поэтому содержимое
+ * позиционируется абсолютно от этой точки и получает ширину по тексту (max-content):
+ * иначе блок сжимается до нуля, фон — только поля, а цена вылезает наружу.
+ *   price — филиал подходит под корзину: пузырь с ценой и хвостиком к точке
+ *           (best — самая низкая цена, зелёный, как «Дешевле всего» в списке);
+ *   idle  — корзина пуста: фиолетовая точка;
+ *   muted — не подходит под корзину: серая точка поменьше.
+ */
+const FONT = "700 12px/1.25 system-ui,-apple-system,'Segoe UI',sans-serif";
+const branchIcon = (kind, label = '') => {
+  if (kind === 'price' || kind === 'best') {
+    const fill = kind === 'best' ? '#059669' : '#7c3aed';
+    return L.divIcon({
+      className: '',
+      iconSize: [0, 0],
+      html: `<div style="position:absolute;left:0;bottom:0;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center">`
+        + `<div style="width:max-content;padding:4px 9px;border-radius:999px;font:${FONT};color:#fff;background:${fill};border:2px solid #fff;box-shadow:0 2px 6px rgba(15,23,42,.35);white-space:nowrap">${label}</div>`
+        + `<div style="width:9px;height:9px;margin-top:-6px;background:${fill};border-right:2px solid #fff;border-bottom:2px solid #fff;transform:rotate(45deg)"></div>`
+        + '</div>',
+    });
+  }
+  const size = kind === 'muted' ? 10 : 14;
+  const color = kind === 'muted' ? '#94a3b8' : '#7c3aed';
+  return L.divIcon({
+    className: '',
+    iconSize: [0, 0],
+    html: `<div style="position:absolute;left:0;top:0;width:${size}px;height:${size}px;transform:translate(-50%,-50%);border-radius:50%;background:${color};border:2px solid #fff;box-shadow:0 1px 4px rgba(15,23,42,.4)"></div>`,
+  });
+};
 
 function FlyTo({ point }) {
   const map = useMap();
@@ -71,17 +98,46 @@ function FlyTo({ point }) {
   return null;
 }
 
-function BranchMap({ branches, options = [], focus = null, onSelect }) {
+// Все филиалы в кадре: у лаборатории они бывают в разных концах города.
+function FitBranches({ branches }) {
+  const map = useMap();
+  const key = branches.map((branch) => `${branch.lat},${branch.lng}`).join(';');
+  useEffect(() => {
+    const points = branches.map((branch) => [branch.lat, branch.lng]);
+    if (points.length > 1) map.fitBounds(points, { padding: [36, 36], maxZoom: 15 });
+    else if (points.length === 1) map.setView(points[0], 15);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map, key]);
+  return null;
+}
+
+/** На узком экране карта под списком: «На карте» сначала прокручивает к ней. */
+const revealMap = (element) => {
+  const rect = element?.getBoundingClientRect?.();
+  if (rect && (rect.top < 0 || rect.bottom > window.innerHeight)) element.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+};
+
+function BranchMap({ branches, options = [], focus = null, onSelect, fit = false }) {
   const byBranch = new Map(options.map((option) => [option.branch.id, option]));
+  const cheapest = options.length > 0 ? Math.min(...options.map((option) => option.total)) : null;
   return (
     <MapContainer center={CENTER} zoom={12} className="h-full w-full" attributionControl={false} scrollWheelZoom>
       <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' />
       <AttributionControl position="bottomright" prefix={false} />
+      {fit && <FitBranches branches={branches} />}
       <FlyTo point={focus} />
       {branches.map((branch) => {
         const option = byBranch.get(branch.id);
         return (
-          <Marker key={branch.id} position={[branch.lat, branch.lng]} icon={branchIcon(option ? formatRub(option.total) : '●', Boolean(option))} eventHandlers={{ click: () => onSelect?.(branch.id) }}>
+          <Marker
+            key={branch.id}
+            position={[branch.lat, branch.lng]}
+            icon={option ? branchIcon(option.total === cheapest ? 'best' : 'price', formatRub(option.total)) : branchIcon(options.length > 0 ? 'muted' : 'idle')}
+            // Цены — поверх точек, самые дешёвые — поверх остальных цен.
+            zIndexOffset={option ? (option.total === cheapest ? 2000 : 1000) : 0}
+            title={option ? `${branch.name}: ${formatRub(option.total)}` : branch.name}
+            eventHandlers={{ click: () => onSelect?.(branch.id) }}
+          >
             <Popup>
               <strong>{branch.name}</strong><br />{branch.address}{option ? <><br />Итого: {formatRub(option.total)}</> : null}
             </Popup>
@@ -106,7 +162,7 @@ function Shell({ children, title, back = null, onMyBookings }) {
         </button>
       </header>
       <p className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-[12.5px] text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
-        <Info size={13} className="mr-1 inline" aria-hidden="true" />Демо-режим: лаборатории, цены, сроки и время вымышлены, запись никуда не уходит. Филиалы стоят там, где в Казани действительно есть пункты сдачи анализов (OpenStreetMap), но сами лаборатории вымышлены; адрес — без номера дома.
+        <Info size={13} className="mr-1 inline" aria-hidden="true" />Демо-режим: лаборатории, цены, сроки и время вымышлены, запись никуда не уходит. Филиалы стоят по адресам, где в Казани действительно есть пункты сдачи анализов (OpenStreetMap), но сами лаборатории вымышлены.
       </p>
       <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
     </div>
@@ -182,14 +238,11 @@ function CatalogView({ catalog, cart, setCart, initialRequest, onMyBookings }) {
   const [dialog, setDialog] = useState(null);
   const [focus, setFocus] = useState(null);
   const resultsRef = useRef(null);
+  const mapRef = useRef(null);
   const tests = catalog.tests;
   const byCode = useMemo(() => new Map(tests.map((test) => [test.code, test])), [tests]);
 
-  const visible = useMemo(() => {
-    const needle = query.trim().toLowerCase().replace(/ё/g, 'е');
-    return tests.filter((test) => (!category || test.category === category)
-      && (!needle || `${test.name} ${test.code}`.toLowerCase().replace(/ё/g, 'е').includes(needle)));
-  }, [tests, query, category]);
+  const visible = useMemo(() => searchLabTests(category ? tests.filter((test) => test.category === category) : tests, query), [tests, query, category]);
 
   const request = useMemo(() => ({
     tests: cart,
@@ -276,7 +329,7 @@ function CatalogView({ catalog, cart, setCart, initialRequest, onMyBookings }) {
               <ul className="space-y-2">
                 {catalog.labs.map((lab) => (
                   <li key={lab.id}><Link to={`/labs/lab/${lab.id}`} className="flex items-center justify-between rounded-2xl border border-slate-200 p-3 hover:border-violet-400 dark:border-slate-700">
-                    <span className="font-semibold">{lab.name}</span><span className="text-[12.5px] text-slate-500">{lab.branchesCount} филиалов</span>
+                    <span className="font-semibold">{lab.name}</span><span className="text-[12.5px] text-slate-500">{lab.branchesCount} {plural(lab.branchesCount, 'филиал', 'филиала', 'филиалов')}</span>
                   </Link></li>
                 ))}
               </ul>
@@ -284,7 +337,7 @@ function CatalogView({ catalog, cart, setCart, initialRequest, onMyBookings }) {
           </section>
 
           <section className="rounded-3xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900" aria-label="Корзина и условия" data-testid="labs-cart">
-            <h2 className="flex items-center gap-2 text-[15px] font-bold"><ShoppingBasket size={17} aria-hidden="true" />Корзина: {cart.length ? `${cart.length} ${cart.length === 1 ? 'исследование' : cart.length < 5 ? 'исследования' : 'исследований'}` : 'пусто'}</h2>
+            <h2 className="flex items-center gap-2 text-[15px] font-bold"><ShoppingBasket size={17} aria-hidden="true" />Корзина: {cart.length ? `${cart.length} ${plural(cart.length, 'исследование', 'исследования', 'исследований')}` : 'пусто'}</h2>
             {cart.length === 0 && <p className="mt-1 text-[13px] text-slate-500">Добавьте исследования из направления — подбор сравнит полную стоимость в лабораториях.</p>}
             <div className="mt-2 flex flex-wrap gap-1.5">
               {cart.map((code) => (
@@ -308,6 +361,7 @@ function CatalogView({ catalog, cart, setCart, initialRequest, onMyBookings }) {
             <div className="mt-3 flex flex-wrap gap-1.5" role="radiogroup" aria-label="Порядок">
               {SORT_OPTIONS.map(([value, label]) => (
                 <button key={value} type="button" role="radio" aria-checked={filters.sort === value} onClick={() => setFilter('sort', value)} disabled={value === 'distance' && !filters.place}
+                  title={value === 'distance' && !filters.place ? 'Сначала выберите, откуда ехать' : undefined}
                   className={`rounded-full px-3 py-1 text-[12.5px] ${filters.sort === value ? 'bg-slate-900 font-semibold text-white dark:bg-white dark:text-slate-900' : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'} disabled:opacity-40`}>{label}</button>
               ))}
             </div>
@@ -318,10 +372,13 @@ function CatalogView({ catalog, cart, setCart, initialRequest, onMyBookings }) {
             {shown.status === 'error' && <p className="text-[13.5px] text-rose-700">{shown.error}</p>}
             {result && result.status === 'ok' && (
               <>
-                <p className="text-[13px] text-slate-600 dark:text-slate-300" data-testid="labs-results-summary">Подходит {result.total} {result.total === 1 ? 'филиал' : result.total < 5 ? 'филиала' : 'филиалов'}. {result.comparisonScope}</p>
+                <p className="text-[13px] text-slate-600 dark:text-slate-300" data-testid="labs-results-summary">{plural(result.total, 'Подходит', 'Подходят', 'Подходят')} {result.total} {plural(result.total, 'филиал', 'филиала', 'филиалов')}. {result.comparisonScope}</p>
                 {result.notes.map((note) => <p key={note} className="rounded-xl bg-sky-50 p-2.5 text-[12.5px] text-sky-900 dark:bg-sky-950/40 dark:text-sky-100">{note}</p>)}
                 {result.options.map((option, position) => (
-                  <LabOptionCard key={option.branch.id} option={option} index={position + 1} onBook={(item, slot) => setDialog({ option: item, slotId: slot?.id || null })} onFocus={(item) => setFocus([item.branch.lat, item.branch.lng])} />
+                  <LabOptionCard key={option.branch.id} option={option} index={position + 1} onBook={(item, slot) => setDialog({ option: item, slotId: slot?.id || null })} onFocus={(item) => {
+                    setFocus([item.branch.lat, item.branch.lng]);
+                    revealMap(mapRef.current);
+                  }} />
                 ))}
               </>
             )}
@@ -345,7 +402,7 @@ function CatalogView({ catalog, cart, setCart, initialRequest, onMyBookings }) {
             )}
           </section>
         </div>
-        <div className="h-[420px] overflow-hidden rounded-3xl border border-slate-200 lg:sticky lg:top-4 lg:h-[calc(100vh-180px)] dark:border-slate-800" data-testid="labs-map">
+        <div ref={mapRef} className="h-[420px] overflow-hidden rounded-3xl border border-slate-200 lg:sticky lg:top-4 lg:h-[calc(100vh-180px)] dark:border-slate-800" data-testid="labs-map">
           <BranchMap branches={catalog.branches} options={result?.options || []} focus={focus} onSelect={(branchId) => {
             const card = resultsRef.current?.querySelector(`[data-branch="${branchId}"]`);
             card?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
@@ -423,6 +480,7 @@ function LabView({ id, cart, onMyBookings }) {
   const [query, setQuery] = useState('');
   const [dialog, setDialog] = useState(null);
   const [focus, setFocus] = useState(null);
+  const mapRef = useRef(null);
   useEffect(() => {
     const controller = new AbortController();
     fetchLab(id, { signal: controller.signal }).then((data) => setState({ status: 'ready', data, error: null }))
@@ -430,7 +488,7 @@ function LabView({ id, cart, onMyBookings }) {
     return () => controller.abort();
   }, [id]);
   const data = state.data;
-  const needle = query.trim().toLowerCase();
+  const labTests = useMemo(() => searchLabTests(data?.tests, query), [data, query]);
   return (
     <Shell title={data?.lab?.name || 'Лаборатория'} back="/labs" onMyBookings={onMyBookings}>
       <div className="mx-auto grid max-w-7xl grid-cols-1 gap-4 p-4 lg:grid-cols-2" data-testid="labs-lab-page">
@@ -455,7 +513,10 @@ function LabView({ id, cart, onMyBookings }) {
                       <p className="mt-1 text-slate-500">{branch.fees.map((fee) => `${fee.name} — ${formatRub(fee.price)}`).join(' · ')}</p>
                       <div className="mt-2 flex gap-2">
                         <button type="button" disabled={cart.length === 0} onClick={() => setDialog(branch)} className="rounded-xl bg-violet-600 px-3 py-1.5 text-[13px] font-semibold text-white disabled:opacity-40">Записаться с корзиной</button>
-                        <button type="button" onClick={() => setFocus([branch.lat, branch.lng])} className="rounded-xl border border-slate-200 px-3 py-1.5 text-[13px] dark:border-slate-700">На карте</button>
+                        <button type="button" onClick={() => {
+                          setFocus([branch.lat, branch.lng]);
+                          revealMap(mapRef.current);
+                        }} className="rounded-xl border border-slate-200 px-3 py-1.5 text-[13px] dark:border-slate-700">На карте</button>
                       </div>
                       {cart.length === 0 && <p className="mt-1 text-[12px] text-slate-500">Сначала добавьте исследования в корзину.</p>}
                     </li>
@@ -464,19 +525,20 @@ function LabView({ id, cart, onMyBookings }) {
               </section>
               <section className="rounded-3xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
                 <h2 className="text-[15px] font-bold">Исследования и цены (демо)</h2>
-                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск по названию" className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[13.5px] dark:border-slate-700 dark:bg-slate-800" />
+                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Например: ОАК, ферритин, сахар" aria-label="Поиск исследования" className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[13.5px] dark:border-slate-700 dark:bg-slate-800" />
                 <ul className="mt-2 max-h-[360px] divide-y divide-slate-100 overflow-y-auto text-[13px] dark:divide-slate-800">
-                  {data.tests.filter((test) => !needle || test.name.toLowerCase().includes(needle)).map((test) => (
+                  {labTests.map((test) => (
                     <li key={test.code} className="flex justify-between gap-3 py-1.5">
                       <Link to={`/labs/test/${test.code}`} className="hover:text-violet-700">{test.name}</Link>
                       <span className="shrink-0 text-slate-600 dark:text-slate-300">{test.minPrice === test.maxPrice ? formatRub(test.minPrice) : `${formatRub(test.minPrice)}–${formatRub(test.maxPrice)}`} · {test.turnaroundText}</span>
                     </li>
                   ))}
+                  {labTests.length === 0 && <li className="py-4 text-center text-slate-500">В этой лаборатории такого исследования нет.</li>}
                 </ul>
               </section>
             </div>
-            <div className="h-[420px] overflow-hidden rounded-3xl border border-slate-200 lg:sticky lg:top-4 lg:h-[calc(100vh-180px)] dark:border-slate-800">
-              <BranchMap branches={data.branches} focus={focus} />
+            <div ref={mapRef} className="h-[420px] overflow-hidden rounded-3xl border border-slate-200 lg:sticky lg:top-4 lg:h-[calc(100vh-180px)] dark:border-slate-800">
+              <BranchMap branches={data.branches} focus={focus} fit />
             </div>
           </>
         )}

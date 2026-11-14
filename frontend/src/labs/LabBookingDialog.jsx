@@ -9,15 +9,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CalendarCheck, Check, Clock, FlaskConical, Loader2, MapPin, X } from 'lucide-react';
 
+import { describeTurnaround } from '@shared/labSearch.js';
 import {
-  cancelLabBooking, createLabBooking, fetchLabSlots, formatLabDay, formatRub, newIdempotencyKey, rememberLabBooking, forgetLabBooking,
+  cancelLabBooking, createLabBooking, fetchLabSlots, formatLabDay, formatReadyAt, formatRub, newIdempotencyKey, rememberLabBooking, forgetLabBooking,
 } from '../services/labs';
 
-const readyText = (hours) => {
-  if (!hours) return null;
-  if (hours <= 10) return 'результат в день сдачи';
-  const days = Math.ceil(hours / 24);
-  return `результат через ${days} ${days === 1 ? 'день' : days < 5 ? 'дня' : 'дней'}`;
+// Срок — той же формулой, что в карточке подбора; дата — от выбранного времени.
+const readyText = (hours, startAt) => {
+  const text = describeTurnaround(hours);
+  if (!text) return null;
+  const at = startAt ? formatReadyAt(new Date(Date.parse(startAt) + hours * 3_600_000).toISOString()) : null;
+  return `Результат ${text}${at ? ` (≈ ${at})` : ''}, ориентировочно`;
 };
 
 export default function LabBookingDialog({ branch, lab, tests, initialSlotId = null, onClose, onBooked }) {
@@ -145,7 +147,7 @@ export default function LabBookingDialog({ branch, lab, tests, initialSlotId = n
                   <li key={`${line.code || line.kind}`} className="flex justify-between gap-3"><span>{line.name}</span><span className="shrink-0 tabular-nums">{formatRub(line.price)}</span></li>
                 ))}
               </ul>
-              {booking.readyInHours > 0 && <p className="text-[13px] text-slate-500">{readyText(booking.readyInHours)}, ориентировочно.</p>}
+              {booking.readyInHours > 0 && <p className="text-[13px] text-slate-500">{readyText(booking.readyInHours, booking.slot?.startAt)}.</p>}
               {booking.status !== 'CANCELLED' && (
                 <button type="button" onClick={cancel} disabled={submitting} data-testid="lab-booking-cancel" className="w-full rounded-2xl border border-rose-200 px-4 py-2.5 text-[14px] font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-60 dark:border-rose-900 dark:text-rose-300 dark:hover:bg-rose-950/40">
                   {submitting ? 'Отменяю…' : 'Отменить запись'}
@@ -167,7 +169,7 @@ export default function LabBookingDialog({ branch, lab, tests, initialSlotId = n
                   <div className="mt-2 flex justify-between border-t border-slate-200 pt-2 text-[15px] font-bold dark:border-slate-700">
                     <span>Итого за визит</span><span data-testid="lab-booking-total">{formatRub(quote.total)}</span>
                   </div>
-                  {readyHours > 0 && <p className="mt-1 text-[12px] text-slate-500">{readyText(readyHours)}, ориентировочно</p>}
+                  {readyHours > 0 && <p className="mt-1 text-[12px] text-slate-500" data-testid="lab-booking-ready">{readyText(readyHours, selected?.startAt)}</p>}
                   {missingTests.length > 0 && <p className="mt-2 text-[13px] font-medium text-rose-700 dark:text-rose-300">В этом филиале нет части исследований — запись невозможна. Выберите другой филиал.</p>}
                 </section>
               )}

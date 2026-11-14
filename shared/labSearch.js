@@ -20,6 +20,23 @@ const CODE = /^[A-Z0-9_]{2,40}$/;
 const ID = /^[a-z0-9][a-z0-9-]{1,79}$/;
 export const MAX_LAB_TESTS = 25;
 
+/*
+ * Готовность для человека: «в день сдачи», «через 1 день», «через 5 дней». Общая
+ * для подбора, карточки и диалога записи — чтобы они не расходились.
+ * Срок — в календарных днях от дня сдачи. Считаем, что сдали около 9:00, а
+ * результаты выдают до 20:00: 30 часов — это завтра днём («через 1 день»), а не
+ * «через 2 дня», как дало бы деление с округлением вверх.
+ */
+export const describeTurnaround = (hours) => {
+  if (!Number.isFinite(hours) || hours <= 0) return null;
+  const ready = 9 + hours;
+  const days = Math.floor(ready / 24) + (ready % 24 > 20 ? 1 : 0);
+  if (days === 0) return 'в день сдачи';
+  const tail = days % 100;
+  const word = tail >= 11 && tail <= 14 ? 'дней' : days % 10 === 1 ? 'день' : days % 10 >= 2 && days % 10 <= 4 ? 'дня' : 'дней';
+  return `через ${days} ${word}`;
+};
+
 const uniqueList = (list, valid, max) => (Array.isArray(list) ? [...new Set(list.filter((item) => typeof item === 'string' && valid(item)))].slice(0, max) : []);
 
 /** Запрос подбора лаборатории; ошибки — список кодов, неизвестное отбрасывается. */
@@ -92,4 +109,65 @@ export const describeLabRequest = (request, { testNames = [], placeLabel = null 
   if (request?.maxTurnaroundHours) parts.push(request.maxTurnaroundHours <= 10 ? 'результат в день сдачи' : `результат не позже чем через ${Math.ceil(request.maxTurnaroundHours / 24)} дн.`);
   if (request?.sort && LAB_SORT_LABELS[request.sort]) parts.push(LAB_SORT_LABELS[request.sort]);
   return parts;
+};
+
+/* Поиск исследования в каталоге */
+
+const searchText = (value) => String(value || '').toLowerCase().replace(/ё/gu, 'е').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+
+/** Отличаются не больше чем одной правкой: замена, вставка, удаление или две соседние буквы местами. */
+const withinOneEdit = (a, b) => {
+  if (a === b) return true;
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i += 1;
+  if (a.length === b.length) {
+    if (a.slice(i + 1) === b.slice(i + 1)) return true;
+    return a[i] === b[i + 1] && a[i + 1] === b[i] && a.slice(i + 2) === b.slice(i + 2);
+  }
+  return a.length > b.length ? a.slice(i + 1) === b.slice(i) : a.slice(i) === b.slice(i + 1);
+};
+
+// Опечатку прощаем в словах от 5 букв: в «ОАК» или «ТТГ» одна буква — уже другое исследование.
+const FUZZY_FROM = 5;
+// Падеж: «моча» находит «анализ мочи», «кровь» — «кровь из вены» и «крови».
+const stemOf = (word) => (word.length >= 4 && /[аеиоуыэюяьй]$/u.test(word) ? word.slice(0, -1) : word);
+// Уровни: 0 — слово начинается с запроса, 1 — ещё и без падежного окончания, 2 — ещё и с опечаткой.
+const wordMatches = (query, word, level) => word.startsWith(query)
+  || (level >= 1 && word.startsWith(stemOf(query)))
+  || (level >= 2 && query.length >= FUZZY_FROM && [query.length - 1, query.length, query.length + 1].some((size) => withinOneEdit(query, word.slice(0, size))));
+
+/** Насколько фраза каталога (название, код или синоним) подходит под запрос: меньше — лучше. */
+const phraseScore = (phrase, query, words) => {
+  if (phrase === query) return 0;
+  if (phrase.startsWith(query)) return 1;
+  const phraseWords = phrase.split(' ');
+  const all = (level) => words.every((word) => phraseWords.some((item) => wordMatches(word, item, level)));
+  if (all(0)) return 2;
+  if (all(1)) return 3;
+  if (phrase.includes(query)) return 4;
+  if (all(2)) return 5;
+  return Infinity;
+};
+
+/*
+ * Исследования по запросу: по названию, коду и синонимам («ОАК», «сахар в крови»,
+ * «витамин Д»). Регистр, «ё» и знаки не важны; каждое слово запроса — начало
+ * слова в названии или синониме; в словах от 5 букв прощается одна опечатка
+ * («ферритинн»). Сначала точные совпадения, затем по началу, затем с опечаткой;
+ * при равенстве — порядок каталога. Пустой запрос — весь список.
+ */
+export const searchLabTests = (tests, rawQuery) => {
+  const list = Array.isArray(tests) ? tests : [];
+  const query = searchText(rawQuery);
+  if (!query) return list;
+  const words = query.split(' ');
+  return list
+    .map((test, index) => {
+      const phrases = [test.name, test.code, ...(Array.isArray(test.synonyms) ? test.synonyms : [])].map(searchText).filter(Boolean);
+      return { test, index, score: Math.min(...phrases.map((phrase) => phraseScore(phrase, query, words))) };
+    })
+    .filter((item) => Number.isFinite(item.score))
+    .sort((a, b) => a.score - b.score || a.index - b.index)
+    .map((item) => item.test);
 };

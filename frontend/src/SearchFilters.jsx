@@ -122,8 +122,10 @@ export default function SearchFilters({
         />
       )}
 
-      <div className="filter-pills" role="group" aria-label="Форма собственности">
-        {['Государственная', 'Частная'].map((ownership) => (
+      {/* Демо-лаборатории все частные, без отметки «для детей» и вне ДМС: эти кнопки
+          у них дали бы пустую выдачу. Уже выбранное условие видно в «Выбрано» ниже. */}
+      <div className="filter-pills" role="group" aria-label={isLab ? 'Условия' : 'Форма собственности'}>
+        {!isLab && ['Государственная', 'Частная'].map((ownership) => (
           <FilterPill
             key={ownership}
             active={filters.ownership === ownership}
@@ -132,15 +134,17 @@ export default function SearchFilters({
             {ownership === 'Государственная' ? 'Государственные' : 'Частные'}
           </FilterPill>
         ))}
-        <FilterPill active={filters.childrenOnly} onClick={() => onChange('childrenOnly', !filters.childrenOnly)}>
-          <Baby size={15} aria-hidden="true" /> Для детей
-        </FilterPill>
+        {!isLab && (
+          <FilterPill active={filters.childrenOnly} onClick={() => onChange('childrenOnly', !filters.childrenOnly)}>
+            <Baby size={15} aria-hidden="true" /> Для детей
+          </FilterPill>
+        )}
         {filters.cardDisplayMode !== 'doctor' && (
           <FilterPill active={filters.openOnly} onClick={() => onChange('openOnly', !filters.openOnly)}>
             <Clock size={15} aria-hidden="true" /> Открыто сейчас
           </FilterPill>
         )}
-        {dms.available && (
+        {dms.available && !isLab && (
           <FilterPill active={Boolean(filters.dmsOnly && dms.planName)} onClick={() => onChange('dmsOnly', !(filters.dmsOnly && dms.planName))}>
             <ShieldCheck size={15} aria-hidden="true" /> {dms.planName ? 'По моему ДМС' : 'По ДМС…'}
           </FilterPill>

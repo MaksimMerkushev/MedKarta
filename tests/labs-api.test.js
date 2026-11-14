@@ -57,6 +57,9 @@ describe('Лаборатории: публичный API', { skip: !DatabaseSync
     assert.equal(catalog.status, 200);
     assert.ok(catalog.body.tests.length >= 50 && catalog.body.categories.length >= 8);
     assert.ok(catalog.body.tests.find((test) => test.code === 'FERRITIN').minPrice > 0);
+    // Синонимы для поиска на витрине — без повтора названия.
+    const cbc = catalog.body.tests.find((test) => test.code === 'CBC_DIFF');
+    assert.ok(cbc.synonyms.includes('ОАК') && !cbc.synonyms.includes(cbc.name));
     const test = await labs.call('/api/labs/tests/CBC_DIFF');
     assert.equal(test.status, 200);
     assert.ok(test.body.test.preparation && test.body.test.synonyms.includes('ОАК'));
@@ -65,6 +68,7 @@ describe('Лаборатории: публичный API', { skip: !DatabaseSync
     const lab = await labs.call('/api/labs/labs/lab-mediana');
     assert.equal(lab.status, 200);
     assert.ok(lab.body.branches.length >= 3 && lab.body.branches.every((branch) => branch.collection && branch.fees.length > 0));
+    assert.ok(lab.body.tests.find((item) => item.code === 'GLUCOSE').synonyms.includes('сахар в крови'));
   });
 
   it('подбор: 200 с вариантами; пустая корзина — 400', async () => {

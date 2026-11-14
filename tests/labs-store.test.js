@@ -329,7 +329,11 @@ describe('Лаборатории: подбор корзины', { skip: !Databas
   it('быстрее результат, время в пути (по прямой — с пометкой «примерно»), срок готовности', async () => {
     const { store, quote } = setup();
     const fast = await quote.quote({ tests: ['CBC_DIFF'], sort: 'turnaround' });
-    assert.deepEqual(fast.options.map((option) => option.turnaroundHours), [...fast.options.map((option) => option.turnaroundHours)].sort((a, b) => a - b));
+    // Порядок — по времени готовности (ближайшее окно + срок), а не по одному сроку.
+    const readyTimes = fast.options.map((option) => Date.parse(option.readyAt));
+    assert.ok(readyTimes.every(Number.isFinite));
+    assert.deepEqual(readyTimes, [...readyTimes].sort((a, b) => a - b));
+    assert.ok(fast.options[0].badges.includes('fastest'));
     const near = await quote.quote({ tests: ['CBC_DIFF'], originPlace: 'tukay', travel: { maxMinutes: 10 } });
     assert.ok(near.options.every((option) => option.travel.minutes <= 10 && option.travel.approximate));
     assert.match(near.notes.join(' '), /примерное/u);
