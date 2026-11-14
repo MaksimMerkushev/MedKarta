@@ -188,16 +188,19 @@ export const createLabQuote = ({ store, getEngine = async () => null, now = () =
 
     const sort = request.sort || (request.origin && request.travel?.maxMinutes ? 'total' : 'total');
     const byTotal = (a, b) => a.total - b.total || (a.travel?.minutes ?? 999) - (b.travel?.minutes ?? 999);
+    // «Быстрее результат» — когда результат будет готов: ближайшее свободное время
+    // плюс срок. Короткий срок при записи только через неделю — не быстрее.
+    const readyMs = (entry) => (entry.readyAt ? Date.parse(entry.readyAt) : Infinity);
     const comparators = {
       total: byTotal,
       distance: (a, b) => (a.travel?.minutes ?? 999) - (b.travel?.minutes ?? 999) || a.total - b.total,
-      turnaround: (a, b) => a.turnaroundHours - b.turnaroundHours || a.total - b.total,
+      turnaround: (a, b) => (readyMs(a) - readyMs(b)) || a.turnaroundHours - b.turnaroundHours || a.total - b.total,
       soonest: (a, b) => Date.parse(a.slots[0]?.startAt || 0) - Date.parse(b.slots[0]?.startAt || 0) || a.total - b.total,
     };
     candidates.sort(comparators[sort] || byTotal);
 
     const cheapest = candidates.length ? Math.min(...candidates.map((entry) => entry.total)) : null;
-    const fastest = candidates.length ? Math.min(...candidates.map((entry) => entry.turnaroundHours)) : null;
+    const fastest = candidates.length ? Math.min(...candidates.map(readyMs)) : null;
     const view = (entry) => ({
       branch: { id: entry.branch.id, name: entry.branch.name, address: entry.branch.address, district: entry.branch.district, lat: entry.branch.lat, lng: entry.branch.lng, phone: entry.branch.phone, collection: entry.branch.collection, hours: entry.branch.hours },
       lab: { id: entry.lab.id, name: entry.lab.name },
@@ -217,7 +220,7 @@ export const createLabQuote = ({ store, getEngine = async () => null, now = () =
       singleVisit: true,
       badges: [
         ...(entry.total === cheapest ? ['cheapest'] : []),
-        ...(entry.turnaroundHours === fastest ? ['fastest'] : []),
+        ...(Number.isFinite(fastest) && readyMs(entry) === fastest ? ['fastest'] : []),
       ],
       ...(entry.missing ? { missing: entry.missing } : {}),
     });
