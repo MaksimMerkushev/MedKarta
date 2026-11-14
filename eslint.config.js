@@ -55,6 +55,7 @@ export default defineConfig([
       'shared/**/*.js',
       'data/**/*.js',
       'scripts/**/*.{js,mjs}',
+      'services/**/*.{js,mjs}',
       'tools/**/*.js',
       'vite.config.js',
       'eslint.config.js',
@@ -90,19 +91,19 @@ export default defineConfig([
               name: './models.js',
               importNames: ['mintSanitizedPlannerRequest'],
               message:
-                'SanitizedPlannerRequest создаётся только в privacy/gateway.js — см. docs/privacy-architecture.md.',
+                'SanitizedPlannerRequest создаётся только в privacy/gateway.js — см. internal-docs/privacy-architecture.md.',
             },
             {
               name: '../privacy/models.js',
               importNames: ['mintSanitizedPlannerRequest'],
               message:
-                'SanitizedPlannerRequest создаётся только в privacy/gateway.js — см. docs/privacy-architecture.md.',
+                'SanitizedPlannerRequest создаётся только в privacy/gateway.js — см. internal-docs/privacy-architecture.md.',
             },
             {
               name: './privacy/models.js',
               importNames: ['mintSanitizedPlannerRequest'],
               message:
-                'SanitizedPlannerRequest создаётся только в privacy/gateway.js — см. docs/privacy-architecture.md.',
+                'SanitizedPlannerRequest создаётся только в privacy/gateway.js — см. internal-docs/privacy-architecture.md.',
             },
           ],
         },

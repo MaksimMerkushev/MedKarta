@@ -37,7 +37,7 @@ flowchart LR
 
 Сплошные стрелки — работа во время запросов пользователя, пунктир —
 необязательные связи и офлайн-скрипты, которые запускаются вручную и не на
-боевом сервере ([routing.md](routing.md), [data-pipeline.md](data-pipeline.md)).
+боевом сервере (`internal-docs/routing.md`, `internal-docs/data-pipeline.md`).
 
 Что важно на этом уровне:
 
@@ -91,14 +91,14 @@ flowchart TB
 |---|---|---|---|
 | SPA | React 19, Vite 8, Tailwind 4, Leaflet | карта, фильтры, ассистент, кабинет, демо-запись; расстояния, «топ-3» и покрытие ДМС считаются здесь | [frontend/src/](../frontend/src/App.jsx) |
 | API-сервер | Node.js `node:http`, без фреймворков | все `/api/*`, при `SERVE_STATIC` — статика из `dist/`, заголовки безопасности | [backend/server.js](../backend/server.js) |
-| nginx | конфигурация из документации | TLS, статика, ограничение частоты до Node | [deployment.md](deployment.md) |
+| nginx | конфигурация из документации | TLS, статика, ограничение частоты до Node | `internal-docs/deployment.md` |
 | SQLite кабинета | `node:sqlite` | пользователи, сессии, избранное | [sqliteStore.js](../backend/accounts/sqliteStore.js) |
 | SQLite демо-записи | `node:sqlite` | слоты, удержания, записи | [bookingStore.js](../backend/demo/bookingStore.js) |
 | Журнал аналитики | файлы JSON Lines по дням | обезличенные продуктовые события | [eventStore.js](../backend/analytics/eventStore.js) |
 | Граф дорог | бинарный файл `GMK1` | маршруты и время в пути | [format.js](../backend/routing/format.js) |
 
 nginx в репозитории не конфигурируется — его настройки приведены в
-[deployment.md](deployment.md). Без nginx `backend/server.js` сам отдаёт
+`internal-docs/deployment.md`. Без nginx `backend/server.js` сам отдаёт
 `dist/` со сжатием gzip и `ETag` ([05-backend.md](05-backend.md)).
 
 ## Компоненты сервера
@@ -174,12 +174,12 @@ flowchart LR
 | Token Vault | соответствия `@DOCTOR_A → id справочника`, ключ — HMAC от сессии и запроса, TTL | [07-privacy.md](07-privacy.md) |
 | Внешний планировщик | единственный исходящий вызов модели; принимает только `SanitizedPlannerRequest`; повторная проверка тела перед отправкой | [06-ai-assistant.md](06-ai-assistant.md) |
 | Локальный планировщик | детерминированный план по уже извлечённым структурам | [06-ai-assistant.md](06-ai-assistant.md) |
-| Validator и Policy Engine | строгая проверка JSON-плана; авторизация токенов в сессии, бюджет сложности | [06-ai-assistant.md](06-ai-assistant.md), [08-security.md](08-security.md) |
+| Validator и Policy Engine | строгая проверка JSON-плана; авторизация токенов в сессии, бюджет сложности | [06-ai-assistant.md](06-ai-assistant.md), `internal-docs/08-security.md` |
 | Executor и Result Builder | исполнение плана по справочнику, выбор ближайшего, шаблонный ответ | [06-ai-assistant.md](06-ai-assistant.md) |
 | chatBridge и строгий подбор | превращение понятых условий в запрос подбора; исполнение подбора по демо-набору | [11-demo-booking.md](11-demo-booking.md) |
 | Коннекторы записи | единый интерфейс к источнику слотов и записи (пока демо), кэш слотов для внешних МИС | [11-demo-booking.md](11-demo-booking.md) |
 | Движок маршрутизации | граф в типизированных массивах, A*, «один ко многим», привязка к дороге | [09-routing-engine.md](09-routing-engine.md) |
-| Кабинет | сессии в cookie, scrypt, SQLite | [accounts.md](accounts.md) |
+| Кабинет | сессии в cookie, scrypt, SQLite | `internal-docs/accounts.md` |
 | Наблюдаемость | журнал по белому списку полей, метрики с перечислимыми метками | [17-performance-and-observability.md](17-performance-and-observability.md) |
 
 ## Главный сценарий: от фразы до маршрута
@@ -284,7 +284,7 @@ flowchart LR
 
 ## Развёртывание
 
-Рекомендуемая схема из [deployment.md](deployment.md): одна машина, nginx
+Рекомендуемая схема из `internal-docs/deployment.md`: одна машина, nginx
 снаружи, Node только на `127.0.0.1`.
 
 ```mermaid
@@ -323,7 +323,7 @@ flowchart TB
 | Fail-closed | при сомнении — локальный план, а не отправка | [policies.js](../backend/privacy/policies.js), [outbound-leakage.test.js](../tests/outbound-leakage.test.js) |
 | Детерминированные условия | подбор исполняет код по разбору текста, модель выбирает только действие | [chatBridge.js](../backend/demo/chatBridge.js), [demo-scenarios.test.js](../tests/demo-scenarios.test.js) |
 | Безопасность в коде, а не в настройках хостинга | заголовки ставит сервер; лимиты — в процессе | [securityHeaders.js](../backend/http/securityHeaders.js), [boundary.test.js](../tests/boundary.test.js) |
-| Общий контракт фронтенда и сервера | `shared/` — единственное место общих правил; фронтенд и бэкенд не импортируют друг друга | проверено поиском по импортам при аудите; отдельного теста нет ([18-known-limitations.md](18-known-limitations.md)) |
+| Общий контракт фронтенда и сервера | `shared/` — единственное место общих правил; фронтенд и бэкенд не импортируют друг друга | проверено поиском по импортам при аудите; отдельного теста нет (`internal-docs/18-known-limitations.md`) |
 | Слабый сервер как ограничение | один поток разбора, бюджеты процессорного времени, плоские массивы в движке | [rateLimit.js](../backend/http/rateLimit.js), [astar.js](../backend/routing/astar.js) |
 
 Решения и рассмотренные альтернативы — в [adr/](adr/README.md).

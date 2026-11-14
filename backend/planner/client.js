@@ -11,12 +11,23 @@
  * уходят наружу, только если одновременно ошиблись Gateway и эта проверка.
  */
 
+import { aiHealth } from '../observability/aiHealth.js';
 import { aiTraceSink } from '../observability/aiTrace.js';
 import { isSanitizedPlannerRequest } from '../privacy/models.js';
 import { detectEntities } from '../privacy/detectors.js';
 import { checkClosedVocabulary, isKnownPlace, isStreetMention } from '../privacy/vocabulary.js';
 import { PLAN_JSON_SCHEMA } from './schema.js';
 import { buildHintBlock, PLANNER_SYSTEM_PROMPT } from './prompts.js';
+import { defineChannel, REASONING_EFFORTS, sameJson } from './outboundChannels.js';
+import { inspectOutboundBytes } from './outboundInspector.js';
+
+// Канал планировщика: доверенный системный текст — только его промпт; подсказки шлюза проверяются.
+export const PLANNER_CHANNEL = defineChannel('planner', {
+  isTrustedSystem: (content) => content === PLANNER_SYSTEM_PROMPT,
+  isKnownSchema: (schema) => sameJson(schema, PLAN_JSON_SCHEMA),
+  freeText: false,
+  maxTokens: 700,
+});
 
 export class PlannerError extends Error {
   constructor(message, code) {
@@ -115,7 +126,7 @@ export const isAllowedUpstreamUrl = (value) => {
  * OpenRouter: reasoning.effort. Не задано — параметр не отправляется:
  * другие OpenAI-совместимые API могут его не знать.
  */
-export const REASONING_EFFORTS = Object.freeze(['none', 'minimal', 'low', 'medium', 'high']);
+export { REASONING_EFFORTS };
 
 /**
  * Тело запроса к модели. Одно на ассистента и на проверки (npm run ai:check),
@@ -149,13 +160,39 @@ export const requestCompletion = async ({
   timeoutMs = 20_000,
   logger = null,
   provider = 'external',
+  // Канал (planner/outboundChannels.js): что в запросе доверенное, объявлено им, а не вызовом.
+  channel,
+  // Локальный ML-слой для финальной проверки свободного текста: только добавляет проверки.
+  ner = null,
 }) => {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // Исход вызова для раздела «Система» и проверки готовности: код и время, без текста.
+  const started = Date.now();
+  let recorded = false;
+  const outcome = (ok, code = null, usage = null) => {
+    if (recorded) return;
+    recorded = true;
+    aiHealth.record({ ok, code, ms: Date.now() - started, promptTokens: usage?.promptTokens, completionTokens: usage?.completionTokens });
+  };
   // Локальная диагностика: тот же запрос и настоящий ответ, без ключа и заголовков авторизации.
   const sink = aiTraceSink();
   const wire = sink && /openrouter\.ai/u.test(String(url)) ? { ...body, usage: { include: true } } : body;
-  const exchange = sink ? { provider, startedAt: new Date().toISOString(), request: { url: String(url), method: 'POST', headerNames: ['Content-Type', 'Authorization (скрыт)'], bytes: Buffer.byteLength(JSON.stringify(wire)), body: wire } } : null;
+  // Тело сериализуется один раз: проверяются и отправляются одни и те же байты (toJSON, геттеры
+  // и изменения объекта после проверки на отправку не влияют).
+  let bytes;
+  try {
+    bytes = JSON.stringify(wire);
+  } catch {
+    throw new PlannerError('Тело запроса не сериализуется — отправка отменена', PLANNER_ERROR.OUTBOUND_ASSERTION);
+  }
+  // Независимо от проверок вызывающего: что именно уйдёт в сеть. Любая находка или сбой — отказ.
+  const problems = await inspectOutboundBytes(bytes, { channel, ner });
+  if (problems.length > 0) {
+    logger?.event('outbound.blocked', { kinds: problems, provider });
+    throw new PlannerError('Исходящий запрос не прошёл финальную проверку — отправка отменена', PLANNER_ERROR.OUTBOUND_ASSERTION);
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const exchange = sink ? { provider, startedAt: new Date().toISOString(), request: { url: String(url), method: 'POST', headerNames: ['Content-Type', 'Authorization (скрыт)'], bytes: Buffer.byteLength(bytes), body: JSON.parse(bytes) } } : null;
 
   try {
     const response = await fetchImpl(url, {
@@ -167,7 +204,7 @@ export const requestCompletion = async ({
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify(wire),
+      body: bytes,
     });
     if (exchange) {
       const text = await response.clone().text();
@@ -185,6 +222,7 @@ export const requestCompletion = async ({
       // Тело ошибки не логируется и не пересылается: провайдеры часто
       // возвращают в нём фрагмент запроса.
       logger?.event('planner.upstream_error', { status: response.status, provider });
+      outcome(false, `http_${response.status}`);
       // Непрочитанное тело держит сокет: после серии 429 копятся соединения.
       try {
         await response.body?.cancel();
@@ -203,30 +241,32 @@ export const requestCompletion = async ({
         : '';
 
     if (!raw.trim()) {
+      outcome(false, 'empty');
       throw new PlannerError('empty completion', PLANNER_ERROR.EMPTY);
     }
 
-    return {
-      raw: raw.trim(),
-      provider,
-      usage: {
-        promptTokens: payload?.usage?.prompt_tokens ?? null,
-        completionTokens: payload?.usage?.completion_tokens ?? null,
-      },
+    const usage = {
+      promptTokens: payload?.usage?.prompt_tokens ?? null,
+      completionTokens: payload?.usage?.completion_tokens ?? null,
     };
+    outcome(true, null, usage);
+    return { raw: raw.trim(), provider, usage };
   } catch (error) {
     if (exchange && !exchange.response) {
       exchange.error = error?.code || error?.name || 'error';
       sink(exchange);
     }
     if (error?.name === 'AbortError') {
+      outcome(false, 'timeout');
       throw new PlannerError('planner timeout', PLANNER_ERROR.TIMEOUT);
     }
     if (error instanceof PlannerError) {
+      outcome(false, String(error.code || 'upstream').toLowerCase());
       throw error;
     }
     // Код транспорта (proxy_auth, proxy_timeout, tls…) — без сообщения: в нём бывают адреса.
     const code = typeof error?.code === 'string' && /^[a-z_]{2,32}$/i.test(error.code) ? error.code : 'unknown';
+    outcome(false, code);
     logger?.event('planner.transport_error', { provider, code });
     throw new PlannerError('planner transport error', PLANNER_ERROR.UPSTREAM);
   } finally {
@@ -302,7 +342,7 @@ export const createExternalPlanner = ({
       );
     }
 
-    return requestCompletion({ url, apiKey, body, fetchImpl, timeoutMs, logger, provider: name });
+    return requestCompletion({ url, apiKey, body, fetchImpl, timeoutMs, logger, provider: name, channel: PLANNER_CHANNEL });
   };
 
   return Object.freeze({ name, generate });

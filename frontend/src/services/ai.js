@@ -78,7 +78,7 @@ export const packMessages = (chatMessages) => {
  * Пропуск к ассистенту (cookie mk_ai, только для /api/chat): сервер выдаёт его
  * вошедшему пользователю, но в самом пропуске нет id аккаунта, и /api/chat
  * сессию не читает — запросы к ассистенту не связываются с аккаунтом
- * (docs/privacy/04-health-data.md). Пропуск живёт час; когда он кончается,
+ * (internal-docs/privacy/04-health-data.md). Пропуск живёт час; когда он кончается,
  * /api/chat отвечает 401 assistant_pass_required — берём новый и повторяем.
  */
 const ASSISTANT_PASS_ENDPOINT = '/api/account/assistant-pass';

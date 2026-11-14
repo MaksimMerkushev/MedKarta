@@ -569,7 +569,7 @@ export const createAdminService = ({
      * сервере), только с правом users.password и свежим подтверждением
      * личности администратора, с вводом email и причиной в журнал. Личность
      * владельца администратор подтверждает вне системы — порядок в
-     * docs/admin-security-runbook.md. Пароль при этом не меняется.
+     * internal-docs/admin-security-runbook.md. Пароль при этом не меняется.
      */
     resetUserMfa(actor, id, body = {}) {
       requirePermission(actor, 'users.password', { action: 'user.mfa_reset' });

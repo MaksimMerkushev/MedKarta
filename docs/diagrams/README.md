@@ -27,7 +27,7 @@
 | Модель данных | ER | [13-data-model.md](../13-data-model.md) |
 
 Диаграммы, которые были в проекте раньше: поток данных и последовательность
-одного запроса в [privacy-architecture.md](../privacy-architecture.md),
+одного запроса в `internal-docs/privacy-architecture.md`,
 раздел 1.
 
 Проверка синтаксиса: `node docs/tools/check-docs.mjs --mermaid-out <каталог>`

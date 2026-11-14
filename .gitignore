@@ -59,3 +59,8 @@ data/collected/demo-*.json
 data/review/
 # Рабочие файлы ассистента
 Claude outputs/
+
+# Внутренняя документация — отдельный приватный репозиторий (см. docs/README.md, «Внутренние документы»).
+/internal-docs
+# Файлы локальной модели NER: загружаются services/pii-ner/fetch-model.mjs и сверяются по SHA-256
+services/pii-ner/model/

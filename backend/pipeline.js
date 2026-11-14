@@ -17,6 +17,9 @@ import { createPrivacyGateway } from './privacy/gateway.js';
 import { createStoreFromEnv, createTokenVault } from './storage/tokenVault.js';
 import { createExternalPlanner, PLANNER_ERROR } from './planner/client.js';
 import { createExternalTriage, MAX_CLARIFY_ROUNDS, validateTriage } from './planner/triage.js';
+import { createNerClient, nerConfigFromEnv } from './privacy/nerClient.js';
+import { createNerLayer } from './privacy/nerLayer.js';
+import { normalizeUserText } from './privacy/inputNormalize.js';
 import { createProxyFetch, parseProxyUrl } from './planner/proxyFetch.js';
 import { validatePlan } from './planner/validator.js';
 import { planLocally } from './planner/localPlanner.js';
@@ -37,6 +40,9 @@ import { publicClinicsHidden } from './demo/flags.js';
 import { logger as defaultLogger } from './observability/safeLogger.js';
 import { metrics as defaultMetrics } from './observability/metrics.js';
 import { isExplicitRequest } from './understanding/turnRoles.js';
+import { createLabAssistant } from './labs/assistant.js';
+import { getDefaultLabService } from './labs/service.js';
+import { createExternalLabParser } from './planner/labParser.js';
 
 /** Причины решения шлюза, которые сами говорят о здоровье: в журнал — как «policy». */
 const HEALTH_REASONS = new Set([FAIL_CLOSED_REASON.EMERGENCY, FAIL_CLOSED_REASON.MEDICAL_TEXT, FAIL_CLOSED_REASON.LOW_CLASSIFIER_CONFIDENCE]);
@@ -53,6 +59,33 @@ const DOCTOR_WORDS = /(?<!\p{L})(?:врач\p{L}*|доктор\p{L}*|специ�
  * @param {object} deps инъектируются, чтобы тесты подставляли фикстуру
  *   справочника и фальшивый планировщик без сети и реальной базы.
  */
+/*
+ * Объём разбора одного запроса. Разбор реплик синхронный: пока он идёт,
+ * Node не отвечает никому. Обычный диалог из 20 реплик — 1–2 тыс. символов,
+ * а 20 реплик по 1000 символов разбирались бы сотни миллисекунд. Поэтому в
+ * разбор идут последние реплики пользователя, пока их сумма не больше
+ * MAX_HISTORY_CHARS; самая свежая остаётся всегда (её длину и так ограничивает
+ * shared/contract.js). Реплики ассистента между оставленными сохраняются.
+ */
+export const MAX_HISTORY_CHARS = 6000;
+export const limitHistory = (messages, maxChars = MAX_HISTORY_CHARS) => {
+  if (!Array.isArray(messages)) return [];
+  let total = 0;
+  let start = messages.length;
+  let keptUser = 0;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === 'user') {
+      const length = String(message.content ?? '').length;
+      if (keptUser > 0 && total + length > maxChars) break;
+      total += length;
+      keptUser += 1;
+    }
+    start = index;
+  }
+  return start === 0 ? messages : messages.slice(start);
+};
+
 export const createPipeline = ({
   catalog,
   vault,
@@ -67,6 +100,16 @@ export const createPipeline = ({
    * классификатора (как при недоступной модели).
    */
   triage = null,
+  /*
+   * Лаборатории (labs/assistant.js): анализы, корзина, подбор лаборатории.
+   * null — ассистент о лабораториях не знает (как и было до модуля).
+   */
+  labs = null,
+  /*
+   * Локальный ML-слой распознавания ПДн (privacy/nerLayer.js, флаг PII_NER).
+   * null — только правила, как раньше.
+   */
+  ner = null,
   /*
    * Демо-запись: ответ на «нужен ЛОР завтра после 18:00» несёт запрос
    * строгого подбора (action.booking), который интерфейс исполняет через
@@ -135,8 +178,23 @@ export const createPipeline = ({
   const runTriage = async (gate, takeBudget = () => true) => {
     const started = Date.now();
     try {
+      let turns = gate.context.triageTurns;
+      if (ner) {
+        /*
+         * Локальная модель — после правил, на уже очищенных репликах. Недоступна,
+         * перегружена, ответила не по формату — жалоба наружу не уходит: ответит
+         * локальный классификатор. Обходного пути без модели нет.
+         */
+        try {
+          turns = await ner.maskTurns(turns);
+        } catch (error) {
+          metrics.increment('ner.error', { code: error?.code || 'unknown' });
+          logger.warn('ner.unavailable', { request_id: gate.requestId, code: error?.code || 'unknown' });
+          return null;
+        }
+      }
       const params = {
-        turns: gate.context.triageTurns,
+        turns,
         tokens: gate.context.triageTokens,
         isChild: Boolean(gate.context.booking?.child),
       };
@@ -180,6 +238,10 @@ export const createPipeline = ({
       probe = null,
     }) {
       const started = Date.now();
+      // Вход — к виду, в котором правила видят то же, что человек (privacy/inputNormalize.js):
+      // невидимые символы, двойники букв, разметка и латинская раскладка не обходят шлюз.
+      messages = (Array.isArray(messages) ? messages : []).map((message) => (message && typeof message.content === 'string' ? { ...message, content: normalizeUserText(message.content) } : message));
+      messages = limitHistory(messages);
       /*
        * Оценка процессорного времени: только тяжёлые участки (разбор реплик,
        * исполнение плана), без ожидания модели и очереди. По ней chat.js
@@ -223,6 +285,30 @@ export const createPipeline = ({
           action: buildEmergencyAction(gate.context?.classification?.emergency?.id),
           diagnostics: { requestId: gate.requestId, decision: gate.decision, planSource: 'none', cpuMs: cpuMs() },
         };
+      }
+
+      /*
+       * Анализы и лаборатории: разбор на сервере, модель — только для неизвестных
+       * названий. Если в реплике нет просьбы о враче, ответ готов здесь; если есть —
+       * лабораторная часть добавится к ответу о записи к врачу.
+       */
+      let labAnswer = null;
+      if (labs) {
+        try {
+          labAnswer = await labs.handle({ messages, takeExternalBudget });
+        } catch (error) {
+          logger.error('labs.assistant_failed', error);
+          labAnswer = null;
+        }
+        if (probe) probe.labs = labAnswer;
+        if (labAnswer && !labAnswer.withDoctor) {
+          metrics.increment('labs.assistant', { kind: 'lab' });
+          logger.event('pipeline.done', { request_id: gate.requestId, action: 'FIND_LAB', plan_source: 'labs', latency_ms: Date.now() - started });
+          return {
+            action: labAnswer.action,
+            diagnostics: { requestId: gate.requestId, decision: gate.decision, reason: gate.reason, planSource: 'labs', stops: 0, cpuMs: cpuMs() },
+          };
+        }
       }
 
       /*
@@ -482,6 +568,13 @@ export const createPipeline = ({
         latency_ms: Date.now() - started,
       });
 
+      // «Нужен эндокринолог и анализ ТТГ»: к записи к врачу — подбор лаборатории.
+      if (labAnswer?.withDoctor && labAnswer.action.labs) {
+        action.labs = labAnswer.action.labs;
+        action.replyText = `${action.replyText}\n\n${labAnswer.action.replyText}`;
+        metrics.increment('labs.assistant', { kind: 'with_doctor' });
+      }
+
       return {
         action,
         diagnostics: {
@@ -718,16 +811,32 @@ const buildDefaultPipeline = async () => {
     logger: defaultLogger,
   };
   const planner = createExternalPlanner(upstream);
+  // Локальная модель ПДн: включается флагом PII_NER=on; без адреса сервиса жалобы наружу не уходят.
+  const nerConfig = nerConfigFromEnv();
+  const ner = nerConfig.enabled ? createNerLayer({ client: createNerClient(nerConfig), logger: defaultLogger, metrics: defaultMetrics }) : null;
+  if (nerConfig.enabled && !nerConfig.socketPath && !nerConfig.port) {
+    defaultLogger.warn('ner.misconfigured', { status: 'PII_NER=on без PII_NER_SOCKET/PII_NER_PORT: внешний триаж отключён' });
+  }
   // Тот же провайдер и ключ; модель для жалоб можно задать отдельно (AI_TRIAGE_MODEL).
-  const triage = createExternalTriage({ ...upstream, model: process.env.AI_TRIAGE_MODEL || upstream.model });
+  const triage = createExternalTriage({ ...upstream, model: process.env.AI_TRIAGE_MODEL || upstream.model, ner });
+  // Лаборатории: каталог и подбор — на сервере; модель — только для неизвестных названий анализов.
+  const labs = createLabAssistant({
+    getService: getDefaultLabService,
+    // Фрагменты названий — свободный текст: та же финальная проверка и тот же ML-слой, что у жалоб.
+    parser: createExternalLabParser({ ...upstream, model: process.env.AI_LAB_MODEL || process.env.AI_TRIAGE_MODEL || upstream.model, ner }),
+    logger: defaultLogger,
+    metrics: defaultMetrics,
+  });
 
   return createPipeline({
     catalog,
     vault,
     planner,
     triage,
+    ner,
     routing: await createRoutingProviderFromEnv(),
     booking: { enabled: bookingModeFromEnv(), publicHidden: publicClinicsHidden(), now: () => demoNow() },
+    labs,
   });
 };
 

@@ -16,6 +16,7 @@
 import { INVISIBLE_CHARS } from './normalize.js';
 import { looksLikePatronymic, looksLikeSurname } from './morphology.js';
 import { isFirstName } from './firstNames.js';
+import { isMedicalPhrase } from './medicalLexicon.js';
 
 /** Виды чувствительных сущностей. Значение — префикс session-токена. */
 export const ENTITY_KIND = Object.freeze({
@@ -553,7 +554,8 @@ const runPatternDetectors = (scan) => {
  * с заглавной и фамильной морфологией уже кандидат — ложная редактура
  * безопаснее пропуска.
  */
-const SELF_INTRO = /(?:зовут|(?<!\p{L})(?:фамилия|имя|отчество|фио)(?:\s+(?:пациент|мам|пап|сын|доч|реб[её]нк|жен|муж)\p{L}*)?\s*[:\-—]?|я\s*[—-]\s*|это\s+я,?)\s*/giu;
+// «я — …» и «это я» — отдельными словами: окончание «-я» («Зиля — кашель», «волнуется — тянет») не самопредставление.
+const SELF_INTRO = /(?:зовут|(?<!\p{L})(?:фамилия|имя|отчество|фио)(?:\s+(?:пациент|мам|пап|сын|доч|реб[её]нк|жен|муж)\p{L}*)?\s*[:\-—]?|(?<!\p{L})я\s*[—-]\s*|(?<!\p{L})это\s+я,?)\s*/giu;
 
 /** Родственники: после них в запросе обычно стоит имя или фамилия. */
 const KINSHIP = /^(?:мам|пап|мат|отц|отец|сын|доч|жен|муж|бабушк|бабул|дедушк|дед|брат|сестр|реб[её]нк|ребенок|внук|внучк|тёщ|тещ|свекров|племянн|пациент)\p{L}*$/iu;
@@ -779,8 +781,10 @@ const KIN_WORD = /^(?:сын\p{L}{0,3}|доч\p{L}{0,4}|внук\p{L}{0,3}|вн�
 export const detectEntities = (original) => {
   const scan = buildScanView(original);
   // «Сыну 3 года»: родство — не имя, иначе теряется и приём для ребёнка.
+  // Лекарство, анализ или эпоним с заглавной («Метформин», «болезнь Бехтерева») — не имя: это смысл жалобы.
   const spans = mergeSpans([...runPatternDetectors(scan), ...detectPersons(scan)])
-    .filter((span) => span.kind !== ENTITY_KIND.PERSON || !KIN_WORD.test(scan.text.slice(span.start, span.end).trim()));
+    .filter((span) => span.kind !== ENTITY_KIND.PERSON || !KIN_WORD.test(scan.text.slice(span.start, span.end).trim()))
+    .filter((span) => span.kind !== ENTITY_KIND.PERSON || !isMedicalPhrase(scan.text.slice(span.start, span.end)));
   return { scan, spans };
 };
 
@@ -793,6 +797,33 @@ const NUMBER_WORDS = new Set([
   'сто', 'двести', 'триста', 'четыреста', 'пятьсот', 'шестьсот', 'семьсот', 'восемьсот',
   'девятьсот', 'тысяча', 'тысячи', 'тысяч', 'плюс',
 ]);
+
+/*
+ * Слово, разорванное эмодзи: две буквы, эмодзи, две буквы. Буквы вокруг
+ * проверяются заглядыванием, а не «\p{L}{2,}» в начале: с ним поиск на слове
+ * из тысячи букв без эмодзи шёл от каждой буквы до конца слова и обратно —
+ * квадратичное время, 15 таких реплик останавливали сервер на 2,5 секунды.
+ * Совпадения те же (tests/obfuscation.test.js сверяет с прежним выражением).
+ */
+const BROKEN_BY_EMOJI = /(?<=\p{L}{2})\p{Extended_Pictographic}+(?=\p{L}{2})/u;
+/* Слово, разорванное косой чертой: «Кондра/шову». Поиск начинается только с заглавной буквы — время линейное. */
+const BROKEN_BY_SLASH = /\p{Lu}\p{Ll}{2,}[/|\\]\p{Ll}{2,}/u;
+
+/** Слово разорвано эмодзи или косой чертой: «Кондрат🙂ьеву», «Кондра/шову». */
+export const hasBrokenWord = (text) => {
+  const value = String(text || '');
+  return BROKEN_BY_EMOJI.test(value) || BROKEN_BY_SLASH.test(value);
+};
+
+/*
+ * Последнее слово реплики (от двух букв), если после него только пробелы, —
+ * для поиска фамилии, разрезанной между репликами (gateway.js). «(?<!\p{L})»
+ * разрешает начинать поиск только с начала слова: без него выражение на слове
+ * из тысячи букв посреди реплики пробовало каждую букву как начало и для
+ * каждой шло до конца слова — квадратичное время. Находит то же самое.
+ */
+const TRAILING_WORD = /(?<!\p{L})(\p{L}{2,})\s*$/u;
+export const trailingWord = (text) => String(text ?? '').match(TRAILING_WORD)?.[1] || null;
 
 /**
  * Признаки нарочитого разрыва текста («Г а л я в и ч»). Нужны для fail-closed:
@@ -845,7 +876,7 @@ export const detectObfuscation = (text) => {
    * «Кондра/шову». Для врачей из справочника такую запись склеивает
    * резолвер; всё остальное — неизвестное слово, которое пытались спрятать.
    */
-  const brokenWord = /\p{L}{2,}\p{Extended_Pictographic}+\p{L}{2,}|\p{Lu}\p{Ll}{2,}[/|\\]\p{Ll}{2,}/u.test(String(text || ''));
+  const brokenWord = hasBrokenWord(text);
 
   return {
     longestLetterRun,

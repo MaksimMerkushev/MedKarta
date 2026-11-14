@@ -49,6 +49,7 @@ import {
   CalendarCheck,
   ShieldPlus,
   FlaskConical,
+  TestTube,
   CircleUserRound,
   LayoutDashboard,
   LogIn,
@@ -1467,6 +1468,8 @@ export default function App() {
    * подбора. Подбор исполняет сервер (DemoOffers → /api/booking/search).
    */
   const [assistantBookings, setAssistantBookings] = useState({});
+  // Подбор лабораторий под ответами ассистента: корзина и условия по номеру реплики.
+  const [assistantLabs, setAssistantLabs] = useState({});
   const bookingEnabledRef = useRef(false);
   const [bookingTarget, setBookingTarget] = useState(null);
   // Окно подробностей карточки: в списке — кратко, всё остальное — здесь.
@@ -1495,6 +1498,7 @@ export default function App() {
       setIsChatNoticeOpen(false);
       setAssistantPicks({});
       setAssistantBookings({});
+      setAssistantLabs({});
       setAssistantEpoch((value) => value + 1);
       setBookingTarget(null);
       pendingPicksRef.current = null;
@@ -1539,6 +1543,13 @@ export default function App() {
     if (bookingMode && namedOrigin) {
       setCustomOrigin([namedOrigin.lat, namedOrigin.lng]);
       setIsManualOrigin(true);
+    }
+    // Анализы: подбор лаборатории исполняет сервер (/api/labs/quote) по корзине из ответа.
+    if (result.labs?.search && Number.isInteger(meta.messageId)) {
+      setAssistantLabs((current) => {
+        const kept = Object.entries(current).slice(-19);
+        return { ...Object.fromEntries(kept), [meta.messageId]: result.labs };
+      });
     }
     if (bookingMode) {
       setAssistantBookings((current) => {
@@ -4228,6 +4239,17 @@ export default function App() {
                   )}
                 </div>
               )}
+              {demoState.enabled && (
+                <Link
+                  to="/labs"
+                  data-testid="labs-link"
+                  className="mb-3 flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-[13px] font-semibold text-violet-800 transition-colors hover:bg-violet-100 dark:border-violet-800 dark:bg-violet-900/30 dark:text-violet-100 dark:hover:bg-violet-900/50"
+                >
+                  <TestTube size={16} aria-hidden="true" />
+                  <span className="flex-1">Анализы и лаборатории</span>
+                  <span className="text-[12px] font-normal text-violet-700 dark:text-violet-200">сравнить цены →</span>
+                </Link>
+              )}
               {demoState.booking && isMyBookingsOpen && (
                 <MyBookingsPanel
                   bookings={myBookings}
@@ -4799,6 +4821,7 @@ export default function App() {
               onShowAllPicks={showAllPicks}
               demoNotice={demoState.enabled}
               bookings={demoState.booking ? assistantBookings : null}
+              labs={demoState.enabled ? assistantLabs : null}
               bookingOrigin={bookingOrigin}
               bookingPlanId={dmsPlan?.id || null}
               bookingsRefresh={bookingsRefresh}
