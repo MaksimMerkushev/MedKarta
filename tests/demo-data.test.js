@@ -21,6 +21,7 @@ import { flattenPrivateCatalog, validatePrivateCatalog } from '../shared/private
 import { demoPrivateCatalog } from '../data/demo/index.js';
 import { coverageFor } from '../shared/dms.js';
 import { kazanFacilities } from '../data/facilities.js';
+import { LAB_BRANCH_POINTS } from '../backend/labs/catalog.js';
 import { createRoutingEngine } from '../backend/routing/engine.js';
 import { loadGraph } from '../backend/routing/graph.js';
 
@@ -86,24 +87,65 @@ describe('Демо-набор: объём', () => {
   });
 });
 
+describe('Демо-набор: где стоят клиники', () => {
+  const meters = (a, b) => Math.hypot((a.lat - b.lat) * 111_320, (a.lng - b.lng) * 111_320 * Math.cos((a.lat * Math.PI) / 180));
+  const GOV = /(гбуз|гауз|государ|городск|республиканск|поликлиник|больниц|диспансер|травмпункт|мсч|фкуз|университетск)/i;
+
+  it('в здании реальной частной клиники: точка и адрес — объекта OSM, с номером дома', () => {
+    for (const clinic of catalog.clinics.filter((item) => !item.real)) {
+      for (const branch of clinic.branches) {
+        assert.match(branch.osmId || '', /^osm-(?:node|way)-\d+$/u, branch.id);
+        assert.match(branch.address, /, \d[^,]*, Казань$/u, branch.address);
+        const osm = kazanFacilities.find((item) => item.id === branch.osmId);
+        // Стоматологии — объекты amenity=dentist, которых нет в facilities.js; остальные — частные клиники оттуда.
+        if (clinic.facilityType === 'Стоматология') continue;
+        assert.ok(osm, `${branch.id}: ${branch.osmId} нет в facilities.js`);
+        assert.equal(osm.ownership, 'Частная', branch.id);
+        assert.doesNotMatch(osm.name, GOV, branch.id);
+        assert.equal(branch.lat, osm.lat);
+        assert.equal(branch.lng, osm.lng);
+      }
+    }
+  });
+
+  it('одна клиника — одно здание: до других демо-точек не меньше 80 м (разные дома), не на территории госучреждения', () => {
+    const points = [
+      ...catalog.clinics.flatMap((clinic) => clinic.branches.map((branch) => ({ id: branch.id, lat: branch.lat, lng: branch.lng }))),
+      ...LAB_BRANCH_POINTS.map((point) => ({ id: `${point[0]}-${point[1]}`, lat: point[5], lng: point[6] })),
+    ];
+    for (const point of points) {
+      for (const other of points) if (other !== point) assert.ok(meters(point, other) >= 80, `${point.id} и ${other.id} ближе 80 м — один дом`);
+    }
+    // Новые точки вымышленных сетей — не у госучреждения (у клиник с часами по OSM здание своё, частное, проверено выше).
+    const government = kazanFacilities.filter((item) => item.ownership === 'Государственная');
+    for (const clinic of catalog.clinics.filter((item) => !item.real)) {
+      for (const branch of clinic.branches) {
+        const nearest = Math.min(...government.map((item) => meters(item, branch)));
+        assert.ok(nearest >= 60, `${branch.id}: ${Math.round(nearest)} м до государственного учреждения`);
+      }
+    }
+  });
+});
+
 describe('Демо-набор: маркировка и отделение от реальных данных', () => {
   it('каждая запись явно демонстрационная', () => {
     assert.equal(catalog.meta.source, 'demo');
     assert.match(catalog.meta.disclaimer, /вымышлены/);
-    for (const clinic of catalog.clinics.filter((item) => !item.real)) {
+    // У всех клиник название вымышленное, с «Демо»: настоящий бренд с вымышленными врачами не показывается.
+    for (const clinic of catalog.clinics) {
       assert.match(clinic.name, /демо/i, clinic.name);
-      assert.match(clinic.website, /^https:\/\/[a-z0-9-]+\.example$/);
       assert.match(clinic.description, /Демонстрационная/);
-      for (const branch of clinic.branches) {
-        assert.match(branch.address, /демо-адрес/);
-        assert.match(branch.phone, /^\+7 \(843\) 000-\d{2}-00$/);
-      }
+      assert.match(clinic.description, /OpenStreetMap/);
+    }
+    for (const clinic of catalog.clinics.filter((item) => !item.real)) {
+      assert.match(clinic.website, /^https:\/\/[a-z0-9-]+\.example$/);
+      for (const branch of clinic.branches) assert.match(branch.phone, /^\+7 \(843\) 000-\d{2}-00$/);
     }
     for (const doctor of catalog.doctors) assert.match(doctor.description, /вымышленное лицо/);
-    // Реальная клиника: описание говорит, что настоящее, а что вымышлено; телефона нет.
+    // Клиники с часами здания по OSM: ни телефона, ни сайта настоящей клиники.
     for (const clinic of catalog.clinics.filter((item) => item.real)) {
-      assert.match(clinic.description, /Реальная частная клиника/);
-      assert.match(clinic.description, /вымышленные/);
+      assert.equal(clinic.website, null, clinic.id);
+      assert.match(clinic.description, /вымышлены/);
       for (const branch of clinic.branches) assert.equal(branch.phone, null, branch.id);
     }
     assert.ok(catalog.insurance.providers.every((provider) => provider.demo === true && /Демо/.test(provider.name)));
@@ -127,14 +169,12 @@ describe('Демо-набор: маркировка и отделение от �
     assert.deepEqual(validatePrivateCatalog(demoPrivateCatalog), []);
   });
 
-  it('точки вымышленных филиалов — в Казани и не на адресах реальных учреждений из OSM', () => {
-    for (const clinic of catalog.clinics.filter((item) => !item.real)) {
-      for (const branch of clinic.branches) {
-        assert.ok(branch.lat > 55.70 && branch.lat < 55.90 && branch.lng > 48.95 && branch.lng < 49.30, branch.id);
-        const near = kazanFacilities.find((item) => Math.abs(item.lat - branch.lat) < 0.0004 && Math.abs(item.lng - branch.lng) < 0.0007);
-        assert.equal(near, undefined, `${branch.id} стоит на точке реального учреждения ${near?.name}`);
-      }
+  it('филиалы — в Казани; карточка объекта OSM на их месте заменяется демо-карточкой (osmId)', () => {
+    for (const clinic of catalog.clinics) {
+      for (const branch of clinic.branches) assert.ok(branch.lat > 55.70 && branch.lat < 55.90 && branch.lng > 48.95 && branch.lng < 49.30, branch.id);
     }
+    const items = flattenPrivateCatalog(demoPrivateCatalog);
+    assert.ok(items.length > 0 && items.every((item) => /^osm-(?:node|way)-\d+$/u.test(item.osmId || '')), 'у каждой карточки демо-набора есть osmId');
   });
 });
 
@@ -144,20 +184,21 @@ describe('Демо-набор: реальные частные клиники', 
    * (data/demo/realClinics.js). Здесь — что снимок совпадает с OSM и что
    * ни одно учреждение не государственное.
    */
-  const VERIFIED_PRIVATE = new Set(['Разумед', 'Будь здоров', 'Айболит', 'Кузляр', 'Ситидок', 'Мать и дитя', 'Клиника Нуриевых']);
+  // Сети, чей частный статус проверен (названия по OSM; в демо они не показываются).
+  const VERIFIED_PRIVATE = new Set(['разумед', 'будь здоров', 'айболит', 'кузляр', 'ситидок', 'мать и дитя', 'клиника нуриевых']);
   const GOV_WORDS = /(гбуз|гауз|государ|городск|республиканск|поликлиник|больниц|диспансер|мсч|фкуз|университетск)/i;
 
-  it('только частные: сети из проверенного списка, в OSM — «Частная», без признаков госучреждения', () => {
+  it('только частные: здания сетей из проверенного списка, в OSM — «Частная», без признаков госучреждения; название — демо', () => {
     for (const clinic of catalog.clinics.filter((item) => item.real)) {
-      assert.ok(VERIFIED_PRIVATE.has(clinic.name), clinic.name);
       assert.equal(clinic.ownership, 'Частная');
-      assert.doesNotMatch(clinic.name, GOV_WORDS);
       for (const branch of clinic.branches) {
         const osm = kazanFacilities.find((item) => item.id === branch.osmId);
         assert.ok(osm, `${branch.id}: нет ${branch.osmId} в facilities.js`);
+        assert.ok(VERIFIED_PRIVATE.has(osm.name.toLowerCase()), osm.name);
         assert.equal(osm.ownership, 'Частная', branch.id);
         assert.doesNotMatch(osm.name, GOV_WORDS);
-        assert.equal(osm.name.toLowerCase(), clinic.name.toLowerCase());
+        // Название в демо — своё, не бренд здания.
+        assert.notEqual(clinic.name.toLowerCase(), osm.name.toLowerCase());
       }
     }
   });

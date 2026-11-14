@@ -150,7 +150,7 @@ export const SCENARIOS = [
 
   /*
    * Контрольный набор: написан после заморозки кода, по нему код не настраивался. Первый
-   * результат записан в docs/ai-pipeline-report.md как есть, до любых исправлений.
+   * результат записан в internal-docs/ai-pipeline-report.md как есть, до любых исправлений.
    */
   { id: 'X01', group: 'holdout', turns: ['Третий день к вечеру ломит поясницу'], expect: { doctor: BACK, clarifyOk: true, noFilters: ['evening', 'timeFrom', 'timeTo', 'date'] } },
   { id: 'X02', group: 'holdout', turns: ['По утрам першит горло'], expect: { doctor: ['lor', 'therapist'], clarifyOk: true, noFilters: ['morning', 'timeFrom', 'timeTo'] } },

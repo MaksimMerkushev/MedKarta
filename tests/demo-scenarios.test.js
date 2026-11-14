@@ -135,7 +135,7 @@ describe('Демо-сценарии: строгий подбор', needsSqlite, 
     assert.equal(action.booking.request.dms.required, true);
     const result = await run(action, { planId: 'demo-basic' });
     assert.equal(result.status, 'ok');
-    const basicClinics = new Set(['demo-beresta', 'demo-semya', 'demo-travma', 'demo-real-aibolit']);
+    const basicClinics = new Set(['demo-beresta', 'demo-semya', 'demo-travma', 'demo-luchik']);
     for (const option of result.options) {
       assert.equal(option.coverage.status, 'covered');
       assert.equal(option.coverage.planId, 'demo-basic');
@@ -235,13 +235,13 @@ describe('Демо-сценарии: строгий подбор', needsSqlite, 
     for (const option of result.options) {
       assert.equal(option.demo, true);
       assert.match(option.doctor.id, /^demo-doc-/);
+      // Название клиники — демо; адрес — здания реальной частной клиники (OSM), запись туда не уходит.
+      assert.match(option.clinic.name, /демо/i);
+      assert.ok(option.clinic.address, option.clinic.branchId);
+      if (!option.clinic.real) assert.match(option.clinic.address, /, \d[^,]*, Казань$/u);
       if (option.clinic.real) {
-        // Реальная клиника: адрес настоящий, телефона нет — запись туда не уходит.
         assert.equal(option.clinic.phone, null);
         assert.ok(index.branches.get(option.clinic.branchId).clinic.real);
-      } else {
-        assert.match(option.clinic.name, /демо/i);
-        assert.match(option.clinic.address, /демо-адрес/);
       }
     }
   });
@@ -522,7 +522,7 @@ describe('Демо-сценарии: сложные условия — без п
     const yasen = await run(await chat('лор в клинике Ясень'));
     assert.equal(yasen.status, 'ok');
     assert.ok(yasen.options.every((option) => option.clinic.id === 'demo-yasen'));
-    const none = await run(await chat('дерматолог в Разумеде'));
+    const none = await run(await chat('дерматолог в Кедре'));
     assert.equal(none.status, 'empty');
     assert.equal(none.blocking.key, 'clinic');
     assert.ok(none.relax.some((item) => item.key === 'clinic' && item.count > 0));
@@ -579,12 +579,12 @@ describe('Демо-сценарии: противоречия и чего в д�
     assert.match(result.relax[0].label, /Платный приём/);
   });
 
-  it('«в Ситидок или Разумед» — выбор клиники, а не маршрут через обе', async () => {
-    const action = await chat('кардиолог в Ситидок или Разумед завтра');
+  it('«в Меридиан или Кедр» — выбор клиники, а не маршрут через обе', async () => {
+    const action = await chat('кардиолог в Меридиан или Кедр завтра');
     assert.ok(action.booking, action.replyText);
     const result = await run(action);
     assert.equal(result.status, 'ok');
-    assert.ok(result.options.every((option) => ['demo-real-citidoc', 'demo-real-razumed'].includes(option.clinic.id)));
+    assert.ok(result.options.every((option) => ['demo-meridian', 'demo-kedr'].includes(option.clinic.id)));
     assert.ok(result.options.every((option) => option.slots.every((slot) => slot.day === TOMORROW)));
   });
 });
@@ -607,9 +607,9 @@ describe('Демо-сценарии: тонкости языка — не нао
     assert.ok(result.options.length > 0 && result.options.every((option) => option.doctor.id !== 'demo-doc-efimov-timur'));
   });
 
-  it('«в Айболит на Максимова» — только этот филиал', async () => {
-    const action = await chat('педиатр в Айболит на Максимова');
-    assert.deepEqual(action.booking.request.branchIds, ['demo-real-aibolit-maksimova']);
+  it('«в Лучик на Максимова» — только этот филиал', async () => {
+    const action = await chat('педиатр в Лучик на Максимова');
+    assert.deepEqual(action.booking.request.branchIds, ['demo-luchik-maksimova']);
   });
 
   it('«желательно женщина» — женщины первыми, мужчины не выброшены', async () => {
@@ -638,14 +638,14 @@ describe('Демо-сценарии: тонкости языка — не нао
     assert.deepEqual(later.booking.request.date, { kind: 'date', day: AFTER_TOMORROW });
   });
 
-  it('«не в клинике Разумед» — подбор без неё, и карта не фильтрует по ней', async () => {
-    const action = await chat('хочу к кардиологу не в клинике Разумед');
-    assert.ok(action.booking.request.excludeBranchIds.every((id) => id.startsWith('demo-real-razumed')));
+  it('«не в клинике Кедр» — подбор без неё, и карта не фильтрует по ней', async () => {
+    const action = await chat('хочу к кардиологу не в клинике Кедр');
+    assert.ok(action.booking.request.excludeBranchIds.every((id) => id.startsWith('demo-kedr')));
     assert.ok(action.booking.request.excludeBranchIds.length > 0);
     assert.equal(action.clinic, null);
     assert.equal(action.searchQuery, null);
     const result = await run(action);
-    assert.ok(result.options.every((option) => option.clinic.id !== 'demo-real-razumed'));
+    assert.ok(result.options.every((option) => option.clinic.id !== 'demo-kedr'));
   });
 
   it('«ЛОР не дальше 15 минут от дома» — без маршрута «ЛОР → дом» на карте', async () => {
@@ -689,15 +689,15 @@ describe('Демо-сценарии: тонкости языка — не нао
     assert.ok(result.options.every((option) => ['neurologist', 'therapist'].includes(option.doctor.specialtyKey)));
   });
 
-  it('«Разумед не надо», «Кузляр не предлагай», «не в Айболите и не в Мать и дитя» — исключения, в т. ч. вместо маршрута', async () => {
-    const after = await chat('мне надо к урологу, и в Разумед не надо');
-    assert.ok(after.booking.request.excludeBranchIds.every((id) => id.startsWith('demo-real-razumed')) && after.booking.request.excludeBranchIds.length > 0);
+  it('«Кедр не надо», «Окуляр не предлагай», «не в Лучике и не в Колыбель» — исключения, в т. ч. вместо маршрута', async () => {
+    const after = await chat('мне надо к урологу, и в Кедр не надо');
+    assert.ok(after.booking.request.excludeBranchIds.every((id) => id.startsWith('demo-kedr')) && after.booking.request.excludeBranchIds.length > 0);
     assert.deepEqual(after.booking.request.branchIds, []);
-    const two = await chat('лор, но не в Айболите и не в Мать и дитя, в будни до обеда');
+    const two = await chat('лор, но не в Лучике и не в Колыбель, в будни до обеда');
     assert.ok(two.booking, two.replyText);
     assert.equal(two.buildRoute, false);
     const result = await run(two);
-    assert.ok(result.options.every((option) => !['demo-real-aibolit', 'demo-real-mamadeti'].includes(option.clinic.id)));
+    assert.ok(result.options.every((option) => !['demo-luchik', 'demo-kolybel'].includes(option.clinic.id)));
   });
 
   it('«на следующей неделе в понедельник или вторник» — дни следующей недели', async () => {
@@ -793,12 +793,12 @@ describe('Демо-сценарии: длинные реплики, самоис
     assert.deepEqual(mother.booking.request.unsupported, []);
   });
 
-  it('«Записаться в Кузляр к окулисту …» — запись, а не маршрут; пусто — сначала по два условия, а не «снять всё»', async () => {
-    const action = await chat('Записаться в Кузляр к окулисту, ребёнку 10 лет, подбор очков, в пн или вт до 14:00, можно по ДМС Demo Standard');
+  it('«Записаться в Окуляр к окулисту …» — запись, а не маршрут; пусто — сначала по два условия, а не «снять всё»', async () => {
+    const action = await chat('Записаться в Окуляр к окулисту, ребёнку 10 лет, подбор очков, в пн или вт до 14:00, можно по ДМС Demo Standard');
     assert.ok(action.booking, action.replyText);
     assert.equal(action.buildRoute, false);
     const { request } = action.booking;
-    assert.ok(request.branchIds.length > 0 && request.branchIds.every((id) => id.startsWith('demo-real-kuzlyar')));
+    assert.ok(request.branchIds.length > 0 && request.branchIds.every((id) => id.startsWith('demo-okulyar')));
     assert.equal(request.serviceId, 'proc.ophthalmologist.glasses');
     assert.equal(request.patient, 'child');
     const result = await run(action);
@@ -912,16 +912,16 @@ describe('Демо-сценарии: окна времени, диапазоны
     assert.ok(allSlots(result).some((slot) => slot.day === '2026-10-16'));
   });
 
-  it('«не в Айболит на Курской» — без одного филиала; «а в другой клинике?» — без прежней клиники', async () => {
-    const street = await chat('Педиатр, но не в Айболит на Курской, после 16, в любой день этой недели');
-    assert.deepEqual(street.booking.request.excludeBranchIds, ['demo-real-aibolit-kurskaya']);
+  it('«не в Лучик на Курской» — без одного филиала; «а в другой клинике?» — без прежней клиники', async () => {
+    const street = await chat('Педиатр, но не в Лучик на Курской, после 16, в любой день этой недели');
+    assert.deepEqual(street.booking.request.excludeBranchIds, ['demo-luchik-kurskaya']);
     assert.deepEqual(street.booking.request.branchIds, []);
     assert.equal(street.booking.request.date.kind, 'this_week');
-    const other = await chat(['невролог в Разумеде', 'а в другой клинике?']);
+    const other = await chat(['невролог в Кедре', 'а в другой клинике?']);
     assert.deepEqual(other.booking.request.branchIds, []);
-    assert.ok(other.booking.request.excludeBranchIds.length > 0 && other.booking.request.excludeBranchIds.every((id) => id.startsWith('demo-real-razumed')));
+    assert.ok(other.booking.request.excludeBranchIds.length > 0 && other.booking.request.excludeBranchIds.every((id) => id.startsWith('demo-kedr')));
     const result = await run(other);
-    assert.ok(result.options.every((option) => option.clinic.id !== 'demo-real-razumed'));
+    assert.ok(result.options.every((option) => option.clinic.id !== 'demo-kedr'));
   });
 
   it('«не старше 40 лет» о враче — «не могу проверить»; «по женским делам» — гинеколог; «на после завтра» — послезавтра', async () => {
@@ -978,7 +978,7 @@ describe('Демо-сценарии: своё время у каждого дн�
     const soft = await chat('нужен ЛОР, у меня Demo Basic, но если что я готов заплатить');
     assert.equal(soft.booking.request.dms.required, false);
     assert.equal(soft.booking.request.dms.prefer, true);
-    const adult = await chat('нужен хирург, но не детский, а взрослый, в Айболите');
+    const adult = await chat('нужен хирург, но не детский, а взрослый, в Лучике');
     assert.equal(adult.booking.request.patient, 'adult');
     const twins = await run(await chat('Педиатр для двойни 3 лет, нужно два слота подряд'));
     assert.equal(twins.blocking.key, 'unsupported');
@@ -1017,7 +1017,7 @@ describe('Демо-сценарии: уточняющие вопросы и ко
   });
 
   it('контекст держится: длинный диалог дополняет запрос, а «давай заново» начинает новый', async () => {
-    const dialog = ['Нужен ЛОР по ДМС Demo Standard', 'для дочки 6 лет', 'лучше на этой неделе', 'после 16', 'не в Советском районе', 'а женщина есть?', 'не дороже 3000', 'и не в Айболите'];
+    const dialog = ['Нужен ЛОР по ДМС Demo Standard', 'для дочки 6 лет', 'лучше на этой неделе', 'после 16', 'не в Советском районе', 'а женщина есть?', 'не дороже 3000', 'и не в Лучике'];
     const { request } = (await chat(dialog)).booking;
     assert.equal(request.specialty, 'lor');
     assert.equal(request.patient, 'child');
@@ -1039,8 +1039,8 @@ describe('Демо-сценарии: уточняющие вопросы и ко
   });
 
   it('контекст: «а на Ленинградской?» — другой филиал; «а Ефимов?» — другой врач без прежнего профиля; «а просто консультация?» — без процедуры', async () => {
-    const street = await chat(['лор', 'в Разумед на Пушкина', 'а на Ленинградской?']);
-    assert.deepEqual(street.booking.request.branchIds, ['demo-real-razumed-leningradskaya']);
+    const street = await chat(['лор', 'в Кедр на Пушкина', 'а на Ленинградской?']);
+    assert.deepEqual(street.booking.request.branchIds, ['demo-kedr-leningradskaya']);
     const doctor = await chat(['невролог Ефимова', 'а Ефимов?']);
     assert.deepEqual(doctor.booking.request.doctorIds, ['demo-doc-efimov-timur']);
     assert.equal(doctor.booking.request.specialty, null);
@@ -1058,7 +1058,7 @@ describe('Демо-сценарии: уточняющие вопросы и ко
 
   it('модель ответила поиском клиник («а в любой клинике?») — это всё равно запись к названному врачу', async () => {
     const clinics = { action: 'FIND_CLINIC', steps: [{ type: 'specialty', specialty: 'neurologist', selection: 'any', constraints: {} }], constraints: {}, reply_hint: 'doctors_found' };
-    const action = await chat(['невролог в Разумеде', 'а в Ситидок?', 'а в любой клинике?'], { respond: clinics });
+    const action = await chat(['невролог в Кедре', 'а в Меридиан?', 'а в любой клинике?'], { respond: clinics });
     assert.ok(action.booking, action.replyText);
     assert.equal(action.booking.request.specialty, 'neurologist');
     assert.deepEqual(action.booking.request.branchIds, []);
@@ -1066,7 +1066,7 @@ describe('Демо-сценарии: уточняющие вопросы и ко
 
   it('модель переспросила, хотя профиль назван словами, — запись; профиль только из жалобы — её вопрос остаётся', async () => {
     const clarify = { action: 'CLARIFY', steps: [], constraints: {}, reply_hint: 'need_clarification' };
-    const named = await chat(['невролог в Разумеде', 'а в любой клинике?'], { respond: clarify });
+    const named = await chat(['невролог в Кедре', 'а в любой клинике?'], { respond: clarify });
     assert.ok(named.booking, named.replyText);
     assert.equal(named.booking.request.specialty, 'neurologist');
     // «Голова и живот» — два профиля поровну: вопрос «к кому записаться?», а не выбор за пользователя.

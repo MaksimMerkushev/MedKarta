@@ -5,7 +5,7 @@
   "version": "2.0.0",
   "type": "module",
   "engines": {
-    "node": "^20.19.0 || >=22.12.0"
+    "node": ">=22.13.0"
   },
   "scripts": {
     "dev": "vite",
@@ -23,13 +23,15 @@
     "test": "node --test tests/*.test.js",
     "test:hybrid": "PRIVACY_OUTBOUND_MODE=hybrid node --test tests/*.test.js",
     "test:security": "node --test tests/*.test.js && PRIVACY_OUTBOUND_MODE=hybrid node --test tests/*.test.js",
-    "test:e2e": "node scripts/e2e-admin.mjs && node scripts/e2e-auth.mjs && node scripts/e2e-register.mjs && node scripts/e2e-assistant.mjs",
+    "test:e2e": "node scripts/e2e-admin.mjs && node scripts/e2e-auth.mjs && node scripts/e2e-register.mjs && node scripts/e2e-assistant.mjs && node scripts/e2e-labs.mjs && node scripts/e2e-mis.mjs",
+    "test:e2e:labs": "node scripts/e2e-labs.mjs",
     "test:e2e:assistant": "node scripts/e2e-assistant.mjs",
     "test:e2e:auth": "node scripts/e2e-auth.mjs",
     "test:e2e:register": "node scripts/e2e-register.mjs",
     "eval:privacy": "node scripts/privacy-eval.mjs",
     "ai:eval": "node scripts/ai-eval.mjs",
     "ai:diagnose": "node scripts/ai-diagnose.mjs --mode mock",
+    "labs:diagnose": "node scripts/labs-diagnose.mjs --mode mock",
     "ai:check": "node scripts/ai-check.mjs",
     "ai:bench": "node scripts/ai-bench.mjs",
     "ai:trace": "node scripts/ai-trace.mjs",
@@ -40,7 +42,10 @@
     "prices:doctors": "node scripts/generate-doctor-service-prices.mjs",
     "ownership:facilities": "node scripts/reclassify-facility-ownership.mjs",
     "accounts": "node scripts/accounts.mjs",
-    "mail:check": "node scripts/mail-check.mjs"
+    "mail:check": "node scripts/mail-check.mjs",
+    "backup": "node --no-warnings scripts/backup.mjs",
+    "mis:simulator": "node --no-warnings scripts/mis-simulator.mjs",
+    "test:e2e:mis": "node scripts/e2e-mis.mjs"
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.2.1",

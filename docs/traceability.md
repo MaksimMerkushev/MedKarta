@@ -22,12 +22,12 @@
 | Внешний планировщик и предохранитель | [planner/client.js](../backend/planner/client.js) (`createExternalPlanner`, `assertOutboundSafe`, `buildPlannerBody`), [prompts.js](../backend/planner/prompts.js), [schema.js](../backend/planner/schema.js) | [outbound-leakage.test.js](../tests/outbound-leakage.test.js), [planner-schema.test.js](../tests/planner-schema.test.js) | [06](06-ai-assistant.md) |
 | Транспорт через прокси | [proxyFetch.js](../backend/planner/proxyFetch.js) | [proxy-fetch.test.js](../tests/proxy-fetch.test.js) | [06](06-ai-assistant.md) |
 | Валидатор плана | [validator.js](../backend/planner/validator.js) (`validatePlan`) | [planner-validation.test.js](../tests/planner-validation.test.js) | [06](06-ai-assistant.md) |
-| Policy Engine | [policyEngine.js](../backend/executor/policyEngine.js) (`createPolicyEngine`) | [planner-validation.test.js](../tests/planner-validation.test.js) | [06](06-ai-assistant.md), [08](08-security.md) |
+| Policy Engine | [policyEngine.js](../backend/executor/policyEngine.js) (`createPolicyEngine`) | [planner-validation.test.js](../tests/planner-validation.test.js) | [06](06-ai-assistant.md), 08 (`internal-docs/08-security.md`) |
 | Локальный планировщик | [localPlanner.js](../backend/planner/localPlanner.js) (`planLocally`) | [pipeline.integration.test.js](../tests/pipeline.integration.test.js) | [06](06-ai-assistant.md) |
 | Исполнение и шаблоны ответа | [actions.js](../backend/executor/actions.js), [resultBuilder.js](../backend/executor/resultBuilder.js), [catalogRepository.js](../backend/executor/catalogRepository.js) | [pipeline.integration.test.js](../tests/pipeline.integration.test.js) | [06](06-ai-assistant.md) |
 | Контекст диалога и сброс | [gateway.js](../backend/privacy/gateway.js) (`CONTEXT_RESET`, `MAX_CONTEXT_TURNS`), [services/ai.js](../frontend/src/services/ai.js) (`packMessages`) | [demo-scenarios.test.js](../tests/demo-scenarios.test.js), [booking-fuzz.test.js](../tests/booking-fuzz.test.js) | [06](06-ai-assistant.md) |
 | Безопасный журнал и метрики | [safeLogger.js](../backend/observability/safeLogger.js), [metrics.js](../backend/observability/metrics.js) | [logging.test.js](../tests/logging.test.js) | [17](17-performance-and-observability.md) |
-| Оценка обезличивания | [tools/privacy-eval/](../tools/privacy-eval/evaluate.js), [privacy-eval.mjs](../scripts/privacy-eval.mjs) | [privacy-eval.test.js](../tests/privacy-eval.test.js) | [privacy-evaluation.md](privacy-evaluation.md), [07](07-privacy.md) |
+| Оценка обезличивания | [tools/privacy-eval/](../tools/privacy-eval/evaluate.js), [privacy-eval.mjs](../scripts/privacy-eval.mjs) | [privacy-eval.test.js](../tests/privacy-eval.test.js) | `internal-docs/privacy-evaluation.md`, [07](07-privacy.md) |
 
 ## Демо-запись
 
@@ -41,7 +41,7 @@
 | HTTP записи (`/api/booking/*`, прежние `/api/demo/*`) | [api/demoBooking.js](../backend/api/demoBooking.js) | [demo-booking.test.js](../tests/demo-booking.test.js), [booking-api.test.js](../tests/booking-api.test.js) | [12](12-api-reference.md) |
 | Коннекторы записи и кэш слотов | [booking/connectors](../backend/booking/connectors), [slotCache.js](../backend/booking/slotCache.js) | [booking-connectors.test.js](../tests/booking-connectors.test.js), [booking-api.test.js](../tests/booking-api.test.js) | [11](11-demo-booking.md) |
 | Статистика для суперадминистратора | [backend/stats](../backend/stats), [Stats.jsx](../frontend/src/admin/pages/Stats.jsx) | [admin-stats.test.js](../tests/admin-stats.test.js), `scripts/e2e-admin.mjs` | [stats.md](stats.md) |
-| Генерация демо-набора | [generator.js](../backend/demo/generator.js), [demo-generate.mjs](../scripts/demo-generate.mjs) | [demo-data.test.js](../tests/demo-data.test.js) | [demo.md](demo.md) |
+| Генерация демо-набора | [generator.js](../backend/demo/generator.js), [demo-generate.mjs](../scripts/demo-generate.mjs) | [demo-data.test.js](../tests/demo-data.test.js) | `internal-docs/demo.md` |
 | Интерфейс подбора и записи | [DemoOffers.jsx](../frontend/src/DemoOffers.jsx), [BookingDialog.jsx](../frontend/src/BookingDialog.jsx), [MyBookingsPanel.jsx](../frontend/src/MyBookingsPanel.jsx) | нет автоматических тестов | [04](04-frontend.md) |
 
 ## Маршрутизация
@@ -53,7 +53,7 @@
 | A* и «один ко многим» | [astar.js](../backend/routing/astar.js) (`createSearch`, `run`, `runOneToMany`) | [routing.test.js](../tests/routing.test.js), [travel-times.test.js](../tests/travel-times.test.js) | [09](09-routing-engine.md) |
 | Движок, кеши, перезагрузка | [engine.js](../backend/routing/engine.js) (`createRoutingEngine`, `getDefaultRoutingEngine`) | [routing.test.js](../tests/routing.test.js) | [09](09-routing-engine.md) |
 | Рамка графа | [coverage.js](../backend/routing/coverage.js) | [routing-coverage.test.js](../tests/routing-coverage.test.js) | [09](09-routing-engine.md) |
-| Сборка из OSM | [osm.js](../backend/routing/osm.js), [build-road-graph.mjs](../scripts/build-road-graph.mjs) | [routing.test.js](../tests/routing.test.js) | [routing.md](routing.md) |
+| Сборка из OSM | [osm.js](../backend/routing/osm.js), [build-road-graph.mjs](../scripts/build-road-graph.mjs) | [routing.test.js](../tests/routing.test.js) | `internal-docs/routing.md` |
 | `/api/route`, `/api/travel-times` | [route.js](../backend/api/route.js), [travelTimes.js](../backend/api/travelTimes.js) | [routing.test.js](../tests/routing.test.js), [travel-times.test.js](../tests/travel-times.test.js) | [12](12-api-reference.md) |
 | Выбор «ближайшего» в ассистенте | [executor/routing.js](../backend/executor/routing.js) (`selectByTravelTime`, `createRoutingProviderFromEnv`) | косвенно — [pipeline.integration.test.js](../tests/pipeline.integration.test.js) (провайдер по прямой из [helpers.js](../tests/helpers.js)) | [09](09-routing-engine.md) |
 
@@ -67,8 +67,8 @@
 | Внешние карты, переход к записи | [externalMaps.js](../frontend/src/externalMaps.js), [booking.js](../frontend/src/booking.js) | [external-links.test.js](../tests/external-links.test.js) | [04](04-frontend.md) |
 | ДМС, услуги, частные клиники | [shared/dms.js](../shared/dms.js), [shared/services.js](../shared/services.js), [shared/privateCatalog.js](../shared/privateCatalog.js) | [private-data.test.js](../tests/private-data.test.js) | [10](10-medical-search-and-data.md), [13](13-data-model.md) |
 | Часы работы | [shared/openingHours.js](../shared/openingHours.js) | [opening-hours.test.js](../tests/opening-hours.test.js) | [10](10-medical-search-and-data.md) |
-| Сборщик данных | [tools/data/](../tools/data/collector.js), [data-collect.mjs](../scripts/data-collect.mjs) | [data-collector.test.js](../tests/data-collector.test.js) | [data-pipeline.md](data-pipeline.md) |
-| Кабинет | [api/account.js](../backend/api/account.js), [accounts/](../backend/accounts/service.js) | [accounts.test.js](../tests/accounts.test.js) | [accounts.md](accounts.md), [12](12-api-reference.md) |
-| Аналитика | [api/events.js](../backend/api/events.js), [eventStore.js](../backend/analytics/eventStore.js), [report.js](../backend/analytics/report.js), [shared/analytics.js](../shared/analytics.js) | [analytics.test.js](../tests/analytics.test.js) | [analytics.md](analytics.md) |
-| HTTP-сервер, статика, заголовки | [server.js](../backend/server.js), [securityHeaders.js](../backend/http/securityHeaders.js), [request.js](../backend/http/request.js) | [boundary.test.js](../tests/boundary.test.js) | [05](05-backend.md), [08](08-security.md) |
+| Сборщик данных | [tools/data/](../tools/data/collector.js), [data-collect.mjs](../scripts/data-collect.mjs) | [data-collector.test.js](../tests/data-collector.test.js) | `internal-docs/data-pipeline.md` |
+| Кабинет | [api/account.js](../backend/api/account.js), [accounts/](../backend/accounts/service.js) | [accounts.test.js](../tests/accounts.test.js) | `internal-docs/accounts.md`, [12](12-api-reference.md) |
+| Аналитика | [api/events.js](../backend/api/events.js), [eventStore.js](../backend/analytics/eventStore.js), [report.js](../backend/analytics/report.js), [shared/analytics.js](../shared/analytics.js) | [analytics.test.js](../tests/analytics.test.js) | `internal-docs/analytics.md` |
+| HTTP-сервер, статика, заголовки | [server.js](../backend/server.js), [securityHeaders.js](../backend/http/securityHeaders.js), [request.js](../backend/http/request.js) | [boundary.test.js](../tests/boundary.test.js) | [05](05-backend.md), 08 (`internal-docs/08-security.md`) |
 | Конфигурация демо | [api/config.js](../backend/api/config.js), [demo/flags.js](../backend/demo/flags.js), [demoMode.js](../frontend/src/demoMode.js) | [booking-constraints.test.js](../tests/booking-constraints.test.js) (флаги и `/api/config`) | [11](11-demo-booking.md) |

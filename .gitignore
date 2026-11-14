@@ -59,3 +59,6 @@ data/collected/demo-*.json
 data/review/
 # Рабочие файлы ассистента
 Claude outputs/
+
+# Внутренняя документация — отдельный приватный репозиторий (см. docs/README.md, «Внутренние документы»).
+/internal-docs

@@ -87,7 +87,7 @@ console.log(`  квота:        ${delivery.quota.dailyLimit || 'без огр�
 for (const problem of info.problems) console.log(`  проблема:     ${problem}`);
 
 if (!smtp || smtp.error || !delivery.emailEnabled) {
-  console.log('\nSMTP не настроен — проверять нечего (docs/mail-setup.md).');
+  console.log('\nSMTP не настроен — проверять нечего (internal-docs/mail-setup.md).');
   process.exit(1);
 }
 

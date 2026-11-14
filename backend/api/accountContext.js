@@ -59,7 +59,11 @@ export const demoBookingsOf = async (userId) => {
   try {
     const { getDefaultDemoBookingService } = await import('./demoBooking.js');
     const service = await getDefaultDemoBookingService();
-    return service?.store.accountBookings ? service.store.accountBookings(userId) : [];
+    const doctors = service?.store.accountBookings ? service.store.accountBookings(userId) : [];
+    // Записи в лаборатории — в той же выгрузке, с пометкой вида.
+    const { getDefaultLabService } = await import('../labs/service.js');
+    const labs = await getDefaultLabService();
+    return [...doctors, ...(labs ? labs.store.accountBookings(userId).map((item) => ({ ...item, kind: 'lab' })) : [])];
   } catch (error) {
     logger.error('account.export_bookings_failed', error);
     return [];
@@ -71,6 +75,8 @@ export const forgetDemoBookings = async (userId) => {
     const { getDefaultDemoBookingService } = await import('./demoBooking.js');
     const service = await getDefaultDemoBookingService();
     service?.store.forgetAccount(userId);
+    const { getDefaultLabService } = await import('../labs/service.js');
+    (await getDefaultLabService())?.store.forgetAccount(userId);
   } catch (error) {
     logger.error('account.forget_bookings_failed', error);
   }

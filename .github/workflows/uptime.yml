@@ -1,10 +1,9 @@
-# © 2026 МедКарта Казань. Все права защищены.
-#
-# Каждые 30 минут проверяет, что сайт отвечает. При сбое запуск падает, и GitHub
-# присылает письмо тому, кто последним менял расписание. GitHub отключает расписание
-# после 60 дней без коммитов в репозитории: тогда его нужно включить снова на вкладке Actions.
 name: Uptime
 
+# Внешняя проверка сайта. GitHub запускает расписание с задержками (на деле —
+# раз в несколько часов), поэтому это запасная проверка: основную ставьте во
+# внешнем сервисе мониторинга с оповещениями (internal-docs/15-server-deployment.md).
+# Падение задачи — письмо владельцу репозитория от GitHub.
 on:
   schedule:
     - cron: '*/30 * * * *'
@@ -15,14 +14,28 @@ permissions: {}
 jobs:
   check:
     runs-on: ubuntu-24.04
-    timeout-minutes: 3
+    timeout-minutes: 4
     steps:
-      - name: Check the site
+      - name: Frontend
+        run: |
+          body=$(curl -sS --retry 3 --retry-all-errors --retry-delay 20 --max-time 20 https://navimed.tech/)
+          echo "$body" | grep -q '/assets/' || { echo "Главная не ссылается на собранный фронтенд"; exit 1; }
+          asset=$(echo "$body" | grep -oE '/assets/[A-Za-z0-9._-]+\.js' | head -1)
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "https://navimed.tech$asset")
+          echo "frontend: главная и $asset → HTTP $code"
+          test "$code" = "200"
+      - name: API
         run: |
           code=$(curl -s -o /dev/null -w '%{http_code}' --retry 3 --retry-all-errors --retry-delay 20 --max-time 20 https://navimed.tech/api/health)
-          # Пока новая версия не выложена, маршрута нет: тогда проверяем, что приложение отвечает.
-          if [ "$code" = "404" ]; then
-            code=$(curl -s -o /dev/null -w '%{http_code}' --retry 3 --retry-all-errors --retry-delay 20 --max-time 20 https://navimed.tech/api/config)
-          fi
-          echo "HTTP $code"
+          echo "/api/health → HTTP $code"
+          test "$code" = "200"
+          curl -sS --max-time 20 https://navimed.tech/api/config | grep -q '"demo"' || { echo "/api/config не отвечает JSON"; exit 1; }
+      - name: Readiness (database, model, backups)
+        env:
+          MONITOR_TOKEN: ${{ secrets.MONITOR_TOKEN }}
+        run: |
+          if [ -z "$MONITOR_TOKEN" ]; then echo "Секрет MONITOR_TOKEN не задан — проверка готовности пропущена"; exit 0; fi
+          out=$(curl -s -w '\n%{http_code}' --max-time 20 -H "Authorization: Bearer $MONITOR_TOKEN" https://navimed.tech/api/health/ready)
+          code=$(echo "$out" | tail -1)
+          echo "/api/health/ready → HTTP $code: $(echo "$out" | head -1)"
           test "$code" = "200"

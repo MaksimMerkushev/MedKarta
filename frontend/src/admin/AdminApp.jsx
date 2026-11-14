@@ -8,7 +8,7 @@
  */
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity, ArrowLeft, BarChart3, FileClock, Gauge, Inbox, KeyRound, LayoutDashboard, LogOut, Menu, MonitorSmartphone, Settings, ShieldCheck, UserRound, Users, X,
+  Activity, ArrowLeft, BarChart3, FileClock, FlaskConical, Gauge, Inbox, KeyRound, LayoutDashboard, LogOut, Menu, MonitorSmartphone, Settings, ShieldCheck, UserRound, Users, X, PlugZap
 } from 'lucide-react';
 
 import { logoutAccount } from '../services/account';
@@ -32,6 +32,8 @@ const AuditPage = lazy(() => import('./pages/Audit'));
 const SystemPage = lazy(() => import('./pages/System'));
 const SettingsPage = lazy(() => import('./pages/Settings'));
 const PrivacyRequestsPage = lazy(() => import('./pages/PrivacyRequests'));
+const LabsAdminPage = lazy(() => import('./pages/Labs'));
+const IntegrationsPage = lazy(() => import('./pages/Integrations'));
 
 const NAV = [
   { path: '/admin', label: 'Дашборд', icon: Gauge, permission: 'dashboard.view', page: Dashboard },
@@ -41,6 +43,8 @@ const NAV = [
   { path: '/admin/sessions', label: 'Сессии', icon: MonitorSmartphone, permission: 'users.sessions', page: SessionsPage },
   { path: '/admin/audit', label: 'Журнал действий', icon: FileClock, permission: 'audit.view', page: AuditPage },
   { path: '/admin/privacy', label: 'Обращения по ПДн', icon: Inbox, permission: 'privacy.requests', page: PrivacyRequestsPage },
+  { path: '/admin/labs', label: 'Лаборатории', icon: FlaskConical, permission: 'labs.view', page: LabsAdminPage },
+  { path: '/admin/integrations', label: 'Интеграции с МИС', icon: PlugZap, permission: 'integrations.view', page: IntegrationsPage },
   { path: '/admin/system', label: 'Система', icon: Activity, permission: 'system.view', page: SystemPage },
   { path: '/admin/settings', label: 'Настройки', icon: Settings, permission: 'settings.view', page: SettingsPage },
 ];

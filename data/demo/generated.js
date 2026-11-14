@@ -17,7 +17,7 @@ export const demoCatalog = {
     "version": 2,
     "seed": "medkarta-demo-2026",
     "verifiedAt": "2026-10-09",
-    "disclaimer": "Демонстрационные данные: врачи, цены, расписание и программы ДМС вымышлены и не являются предложениями реальных организаций. Клиники с «Демо» в названии вымышлены; у реальных частных клиник настоящие только название, адрес, точка и часы работы (OpenStreetMap)."
+    "disclaimer": "Демонстрационные данные: врачи, цены, расписание и программы ДМС вымышлены и не являются предложениями реальных организаций. Названия клиник вымышлены; клиники стоят по адресам реальных частных клиник (OpenStreetMap), часы работы у части — тоже по OSM."
   },
   "clinics": [
     {
@@ -26,16 +26,17 @@ export const demoCatalog = {
       "ownership": "Частная",
       "facilityType": "Медцентр",
       "website": "https://demo-yasen.example",
-      "description": "Демонстрационная клиника МедКарты: вымышленная, для показа подбора и записи.",
+      "description": "Демонстрационная клиника МедКарты: название, врачи, цены и расписание вымышлены; стоит по адресу реальной частной клиники (OpenStreetMap).",
       "tier": "standard",
       "branches": [
         {
           "id": "demo-yasen-centr",
-          "name": "центр",
+          "name": "ул. Карла Маркса",
           "district": "Вахитовский",
-          "address": "Казань, Вахитовский район, демо-адрес (точка на карте условная)",
-          "lat": 55.7887,
-          "lng": 49.1221,
+          "address": "улица Карла Маркса, 46, Казань",
+          "lat": 55.7957753,
+          "lng": 49.1285114,
+          "osmId": "osm-node-2870373256",
           "phone": "+7 (843) 000-11-00",
           "hours": "Mo-Fr 08:00-21:00; Sa 09:00-18:00",
           "features": {
@@ -46,11 +47,12 @@ export const demoCatalog = {
         },
         {
           "id": "demo-yasen-sever",
-          "name": "Ново-Савиновский",
+          "name": "ул. Адоратского",
           "district": "Ново-Савиновский",
-          "address": "Казань, Ново-Савиновский район, демо-адрес (точка на карте условная)",
-          "lat": 55.8237,
-          "lng": 49.1186,
+          "address": "улица Адоратского, 4, Казань",
+          "lat": 55.8238444,
+          "lng": 49.1480044,
+          "osmId": "osm-node-4370958405",
           "phone": "+7 (843) 000-12-00",
           "hours": "Mo-Fr 08:00-21:00; Sa 09:00-18:00",
           "features": {
@@ -67,16 +69,17 @@ export const demoCatalog = {
       "ownership": "Частная",
       "facilityType": "Медцентр",
       "website": "https://demo-beresta.example",
-      "description": "Демонстрационная клиника МедКарты: вымышленная, для показа подбора и записи.",
+      "description": "Демонстрационная клиника МедКарты: название, врачи, цены и расписание вымышлены; стоит по адресу реальной частной клиники (OpenStreetMap).",
       "tier": "economy",
       "branches": [
         {
           "id": "demo-beresta-azino",
-          "name": "Азино",
+          "name": "пр. Победы, Азино",
           "district": "Советский",
-          "address": "Казань, Советский район, демо-адрес (точка на карте условная)",
-          "lat": 55.7536,
-          "lng": 49.2047,
+          "address": "проспект Победы, 158 к1, Казань",
+          "lat": 55.7835625,
+          "lng": 49.2210088,
+          "osmId": "osm-node-12152154836",
           "phone": "+7 (843) 000-13-00",
           "hours": "Mo-Fr 08:00-21:00; Sa 09:00-18:00",
           "features": {
@@ -87,11 +90,12 @@ export const demoCatalog = {
         },
         {
           "id": "demo-beresta-gorki",
-          "name": "Горки",
+          "name": "пр. Победы, Горки",
           "district": "Приволжский",
-          "address": "Казань, Приволжский район, демо-адрес (точка на карте условная)",
-          "lat": 55.765,
-          "lng": 49.163,
+          "address": "проспект Победы, 45А, Казань",
+          "lat": 55.75549,
+          "lng": 49.2165063,
+          "osmId": "osm-node-7119218488",
           "phone": "+7 (843) 000-14-00",
           "hours": "Mo-Fr 08:00-21:00; Sa 09:00-18:00",
           "features": {
@@ -108,16 +112,17 @@ export const demoCatalog = {
       "ownership": "Частная",
       "facilityType": "Медцентр",
       "website": "https://demo-kama.example",
-      "description": "Демонстрационная клиника МедКарты: вымышленная, для показа подбора и записи.",
+      "description": "Демонстрационная клиника МедКарты: название, врачи, цены и расписание вымышлены; стоит по адресу реальной частной клиники (OpenStreetMap).",
       "tier": "premium",
       "branches": [
         {
           "id": "demo-kama-centr",
-          "name": "центр",
+          "name": "Астрономическая ул.",
           "district": "Вахитовский",
-          "address": "Казань, Вахитовский район, демо-адрес (точка на карте условная)",
-          "lat": 55.7818,
-          "lng": 49.1341,
+          "address": "Астрономическая улица, 8/21, Казань",
+          "lat": 55.7887178,
+          "lng": 49.1154689,
+          "osmId": "osm-node-8154400428",
           "phone": "+7 (843) 000-15-00",
           "hours": "Mo-Fr 08:00-21:00; Sa 09:00-18:00; Su 10:00-16:00",
           "features": {
@@ -134,16 +139,17 @@ export const demoCatalog = {
       "ownership": "Частная",
       "facilityType": "Клиника",
       "website": "https://demo-detstvo.example",
-      "description": "Демонстрационная клиника МедКарты: вымышленная, для показа подбора и записи.",
+      "description": "Демонстрационная клиника МедКарты: название, врачи, цены и расписание вымышлены; стоит по адресу реальной частной клиники (OpenStreetMap).",
       "tier": "standard",
       "branches": [
         {
           "id": "demo-detstvo-gorki",
-          "name": "Горки",
-          "district": "Приволжский",
-          "address": "Казань, Приволжский район, демо-адрес (точка на карте условная)",
-          "lat": 55.765,
-          "lng": 49.163,
+          "name": "2-я Юго-Западная ул.",
+          "district": "Московский",
+          "address": "2-я Юго-Западная улица, 36, Казань",
+          "lat": 55.8227829,
+          "lng": 49.0820727,
+          "osmId": "osm-node-8850204717",
           "phone": "+7 (843) 000-16-00",
           "hours": "Mo-Fr 08:00-21:00; Sa 09:00-18:00; Su 10:00-16:00",
           "features": {
@@ -154,11 +160,12 @@ export const demoCatalog = {
         },
         {
           "id": "demo-detstvo-derbyshki",
-          "name": "Дербышки",
+          "name": "ул. Курынова",
           "district": "Советский",
-          "address": "Казань, Советский район, демо-адрес (точка на карте условная)",
-          "lat": 55.8575,
-          "lng": 49.223,
+          "address": "улица Александра Курынова, 4 к3, Казань",
+          "lat": 55.8002429,
+          "lng": 49.2421488,
+          "osmId": "osm-node-12173297471",
           "phone": "+7 (843) 000-17-00",
           "hours": "Mo-Fr 08:00-21:00; Sa 09:00-18:00; Su 10:00-16:00",
           "features": {
@@ -175,16 +182,17 @@ export const demoCatalog = {
       "ownership": "Частная",
       "facilityType": "Клиника",
       "website": "https://demo-pediatr-plus.example",
-      "description": "Демонстрационная клиника МедКарты: вымышленная, для показа подбора и записи.",
+      "description": "Демонстрационная клиника МедКарты: название, врачи, цены и расписание вымышлены; стоит по адресу реальной частной клиники (OpenStreetMap).",
       "tier": "economy",
       "branches": [
         {
           "id": "demo-pediatr-plus-avia",
-          "name": "Авиастроительный",
+          "name": "ул. Максимова",
           "district": "Авиастроительный",
-          "address": "Казань, Авиастроительный район, демо-адрес (точка на карте условная)",
-          "lat": 55.856,
-          "lng": 49.088,
+          "address": "улица Максимова, 40, Казань",
+          "lat": 55.8629234,
+          "lng": 49.0838749,
+          "osmId": "osm-node-11891391361",
           "phone": "+7 (843) 000-18-00",
           "hours": "Mo-Fr 08:00-21:00; Sa 09:00-18:00",
           "features": {
@@ -201,16 +209,17 @@ export const demoCatalog = {
       "ownership": "Частная",
       "facilityType": "Стоматология",
       "website": "https://demo-dent.example",
-      "description": "Демонстрационная клиника МедКарты: вымышленная, для показа подбора и записи.",
+      "description": "Демонстрационная клиника МедКарты: название, врачи, цены и расписание вымышлены; стоит по адресу реальной частной клиники (OpenStreetMap).",
       "tier": "standard",
       "branches": [
         {
           "id": "demo-dent-avia",
-          "name": "Авиастроительный",
-          "district": "Авиастроительный",
-          "address": "Казань, Авиастроительный район, демо-адрес (точка на карте условная)",
-          "lat": 55.856,
-          "lng": 49.088,
+          "name": "ул. Короленко",
+          "district": "Ново-Савиновский",
+          "address": "улица Короленко, 89, Казань",
+          "lat": 55.8392689,
+          "lng": 49.1007186,
+          "osmId": "osm-node-8693099095",
           "phone": "+7 (843) 000-19-00",
           "hours": "Mo-Fr 08:00-21:00; Sa 09:00-18:00",
           "features": {
@@ -221,11 +230,12 @@ export const demoCatalog = {
         },
         {
           "id": "demo-dent-moskovsky",
-          "name": "Московский",
-          "district": "Московский",
-          "address": "Казань, Московский район, демо-адрес (точка на карте условная)",
-          "lat": 55.8189,
-          "lng": 49.0805,
+          "name": "Горсоветская ул.",
+          "district": "Кировский",
+          "address": "Горсоветская улица, 33, Казань",
+          "lat": 55.8162931,
+          "lng": 49.0855722,
+          "osmId": "osm-node-10969591065",
           "phone": "+7 (843) 000-20-00",
           "hours": "Mo-Fr 08:00-21:00; Sa 09:00-18:00",
           "features": {
@@ -242,16 +252,17 @@ export const demoCatalog = {
       "ownership": "Частная",
       "facilityType": "Стоматология",
       "website": "https://demo-ulybka.example",
-      "description": "Демонстрационная клиника МедКарты: вымышленная, для показа подбора и записи.",
+      "description": "Демонстрационная клиника МедКарты: название, врачи, цены и расписание вымышлены; стоит по адресу реальной частной клиники (OpenStreetMap).",
       "tier": "premium",
       "branches": [
         {
           "id": "demo-ulybka-centr",
-          "name": "центр",
+          "name": "ул. Николая Ершова",
           "district": "Вахитовский",
-          "address": "Казань, Вахитовский район, демо-адрес (точка на карте условная)",
-          "lat": 55.796,
-          "lng": 49.116,
+          "address": "улица Николая Ершова, 8, Казань",
+          "lat": 55.7920424,
+          "lng": 49.1535423,
+          "osmId": "osm-node-4785740608",
           "phone": "+7 (843) 000-21-00",
           "hours": "Mo-Fr 08:00-21:00; Sa 09:00-18:00; Su 10:00-16:00",
           "features": {
@@ -268,16 +279,17 @@ export const demoCatalog = {
       "ownership": "Частная",
       "facilityType": "Клиника",
       "website": "https://demo-zhenskoe.example",
-      "description": "Демонстрационная клиника МедКарты: вымышленная, для показа подбора и записи.",
+      "description": "Демонстрационная клиника МедКарты: название, врачи, цены и расписание вымышлены; стоит по адресу реальной частной клиники (OpenStreetMap).",
       "tier": "standard",
       "branches": [
         {
           "id": "demo-zhenskoe-kirov",
-          "name": "Кировский",
+          "name": "Шоссейная ул.",
           "district": "Кировский",
-          "address": "Казань, Кировский район, демо-адрес (точка на карте условная)",
-          "lat": 55.804,
-          "lng": 49.07,
+          "address": "Шоссейная улица, 57, Казань",
+          "lat": 55.8074808,
+          "lng": 49.0913268,
+          "osmId": "osm-node-11862401450",
           "phone": "+7 (843) 000-22-00",
           "hours": "Mo-Fr 08:00-21:00; Sa 09:00-18:00",
           "features": {
@@ -294,16 +306,17 @@ export const demoCatalog = {
       "ownership": "Частная",
       "facilityType": "Медцентр",
       "website": "https://demo-travma.example",
-      "description": "Демонстрационная клиника МедКарты: вымышленная, для показа подбора и записи.",
+      "description": "Демонстрационная клиника МедКарты: название, врачи, цены и расписание вымышлены; стоит по адресу реальной частной клиники (OpenStreetMap).",
       "tier": "standard",
       "branches": [
         {
           "id": "demo-travma-sever",
-          "name": "Ново-Савиновский",
+          "name": "пр. Ибрагимова",
           "district": "Ново-Савиновский",
-          "address": "Казань, Ново-Савиновский район, демо-адрес (точка на карте условная)",
-          "lat": 55.8268,
-          "lng": 49.1395,
+          "address": "проспект Ибрагимова, 45, Казань",
+          "lat": 55.8300716,
+          "lng": 49.0926819,
+          "osmId": "osm-node-11878846902",
           "phone": "+7 (843) 000-23-00",
           "hours": "Mo-Fr 08:00-21:00; Sa 09:00-18:00; Su 10:00-16:00",
           "features": {
@@ -320,16 +333,17 @@ export const demoCatalog = {
       "ownership": "Частная",
       "facilityType": "Клиника",
       "website": "https://demo-derma.example",
-      "description": "Демонстрационная клиника МедКарты: вымышленная, для показа подбора и записи.",
+      "description": "Демонстрационная клиника МедКарты: название, врачи, цены и расписание вымышлены; стоит по адресу реальной частной клиники (OpenStreetMap).",
       "tier": "standard",
       "branches": [
         {
           "id": "demo-derma-dubravnaya",
-          "name": "Дубравная",
-          "district": "Приволжский",
-          "address": "Казань, Приволжский район, демо-адрес (точка на карте условная)",
-          "lat": 55.7398,
-          "lng": 49.1495,
+          "name": "Профсоюзная ул.",
+          "district": "Вахитовский",
+          "address": "Профсоюзная улица, 6, Казань",
+          "lat": 55.793602,
+          "lng": 49.1105352,
+          "osmId": "osm-node-9814971411",
           "phone": "+7 (843) 000-24-00",
           "hours": "Mo-Fr 08:00-21:00; Sa 09:00-18:00",
           "features": {
@@ -346,16 +360,17 @@ export const demoCatalog = {
       "ownership": "Частная",
       "facilityType": "Медцентр",
       "website": "https://demo-neuro.example",
-      "description": "Демонстрационная клиника МедКарты: вымышленная, для показа подбора и записи.",
+      "description": "Демонстрационная клиника МедКарты: название, врачи, цены и расписание вымышлены; стоит по адресу реальной частной клиники (OpenStreetMap).",
       "tier": "premium",
       "branches": [
         {
           "id": "demo-neuro-ametyevo",
-          "name": "Аметьево",
+          "name": "ул. Зур Урам",
           "district": "Советский",
-          "address": "Казань, Советский район, демо-адрес (точка на карте условная)",
-          "lat": 55.7712,
-          "lng": 49.1755,
+          "address": "улица Зур Урам, 7, Казань",
+          "lat": 55.8060463,
+          "lng": 49.1976051,
+          "osmId": "osm-node-7114178585",
           "phone": "+7 (843) 000-25-00",
           "hours": "Mo-Fr 08:00-21:00; Sa 09:00-18:00",
           "features": {
@@ -372,16 +387,17 @@ export const demoCatalog = {
       "ownership": "Частная",
       "facilityType": "Клиника",
       "website": "https://demo-semya.example",
-      "description": "Демонстрационная клиника МедКарты: вымышленная, для показа подбора и записи.",
+      "description": "Демонстрационная клиника МедКарты: название, врачи, цены и расписание вымышлены; стоит по адресу реальной частной клиники (OpenStreetMap).",
       "tier": "economy",
       "branches": [
         {
           "id": "demo-semya-moskovsky",
-          "name": "Московский",
-          "district": "Московский",
-          "address": "Казань, Московский район, демо-адрес (точка на карте условная)",
-          "lat": 55.811,
-          "lng": 49.065,
+          "name": "Гвардейская ул.",
+          "district": "Советский",
+          "address": "Гвардейская улица, 1/24, Казань",
+          "lat": 55.793153,
+          "lng": 49.172136,
+          "osmId": "osm-node-1210539939",
           "phone": "+7 (843) 000-26-00",
           "hours": "Mo-Fr 08:00-21:00; Sa 09:00-18:00",
           "features": {
@@ -393,18 +409,18 @@ export const demoCatalog = {
       ]
     },
     {
-      "id": "demo-real-razumed",
-      "name": "Разумед",
+      "id": "demo-kedr",
+      "name": "Демо-клиника «Кедр»",
       "ownership": "Частная",
       "facilityType": "Клиника",
-      "website": "https://razumed.su/",
-      "description": "Реальная частная клиника: название, адрес, точка и часы работы — из OpenStreetMap. Врачи, цены, расписание и запись здесь вымышленные, демонстрационные — клиника о них не знает.",
+      "website": null,
+      "description": "Демонстрационная клиника: название, врачи, цены, расписание и запись вымышлены. Адрес, точка и часы работы — реальной частной клиники (OpenStreetMap); она о демо-данных не знает.",
       "real": true,
       "source": "OSM",
       "tier": "standard",
       "branches": [
         {
-          "id": "demo-real-razumed-pushkina",
+          "id": "demo-kedr-pushkina",
           "name": "ул. Пушкина",
           "district": "Вахитовский",
           "address": "улица Пушкина, 25, Казань",
@@ -416,7 +432,7 @@ export const demoCatalog = {
           "features": {}
         },
         {
-          "id": "demo-real-razumed-leningradskaya",
+          "id": "demo-kedr-leningradskaya",
           "name": "Ленинградская ул.",
           "district": "Авиастроительный",
           "address": "Ленинградская улица, Казань",
@@ -430,18 +446,18 @@ export const demoCatalog = {
       ]
     },
     {
-      "id": "demo-real-budzdorov",
-      "name": "Будь здоров",
+      "id": "demo-vitaris",
+      "name": "Демо-клиника «Витарис»",
       "ownership": "Частная",
       "facilityType": "Клиника",
-      "website": "https://kazan.klinikabudzdorov.ru",
-      "description": "Реальная частная клиника: название, адрес, точка и часы работы — из OpenStreetMap. Врачи, цены, расписание и запись здесь вымышленные, демонстрационные — клиника о них не знает.",
+      "website": null,
+      "description": "Демонстрационная клиника: название, врачи, цены, расписание и запись вымышлены. Адрес, точка и часы работы — реальной частной клиники (OpenStreetMap); она о демо-данных не знает.",
       "real": true,
       "source": "OSM",
       "tier": "premium",
       "branches": [
         {
-          "id": "demo-real-budzdorov-narimanova",
+          "id": "demo-vitaris-narimanova",
           "name": "ул. Нариманова",
           "district": "Вахитовский",
           "address": "улица Нариманова, Казань",
@@ -455,18 +471,18 @@ export const demoCatalog = {
       ]
     },
     {
-      "id": "demo-real-aibolit",
-      "name": "Айболит",
+      "id": "demo-luchik",
+      "name": "Демо-медцентр «Лучик»",
       "ownership": "Частная",
       "facilityType": "Медцентр",
-      "website": "https://mc-aybolit.ru/",
-      "description": "Реальная частная клиника: название, адрес, точка и часы работы — из OpenStreetMap. Врачи, цены, расписание и запись здесь вымышленные, демонстрационные — клиника о них не знает.",
+      "website": null,
+      "description": "Демонстрационная клиника: название, врачи, цены, расписание и запись вымышлены. Адрес, точка и часы работы — реальной частной клиники (OpenStreetMap); она о демо-данных не знает.",
       "real": true,
       "source": "OSM",
       "tier": "economy",
       "branches": [
         {
-          "id": "demo-real-aibolit-maksimova",
+          "id": "demo-luchik-maksimova",
           "name": "ул. Максимова",
           "district": "Авиастроительный",
           "address": "улица Максимова, 1",
@@ -478,7 +494,7 @@ export const demoCatalog = {
           "features": {}
         },
         {
-          "id": "demo-real-aibolit-kurskaya",
+          "id": "demo-luchik-kurskaya",
           "name": "Курская ул.",
           "district": "Советский",
           "address": "Курская улица, 8А, Казань",
@@ -492,18 +508,18 @@ export const demoCatalog = {
       ]
     },
     {
-      "id": "demo-real-kuzlyar",
-      "name": "Кузляр",
+      "id": "demo-okulyar",
+      "name": "Демо-центр зрения «Окуляр»",
       "ownership": "Частная",
       "facilityType": "Клиника",
-      "website": "https://kyzler.ru/",
-      "description": "Реальная частная клиника: название, адрес, точка и часы работы — из OpenStreetMap. Врачи, цены, расписание и запись здесь вымышленные, демонстрационные — клиника о них не знает.",
+      "website": null,
+      "description": "Демонстрационная клиника: название, врачи, цены, расписание и запись вымышлены. Адрес, точка и часы работы — реальной частной клиники (OpenStreetMap); она о демо-данных не знает.",
       "real": true,
       "source": "OSM",
       "tier": "standard",
       "branches": [
         {
-          "id": "demo-real-kuzlyar-kutuya",
+          "id": "demo-okulyar-kutuya",
           "name": "ул. Аделя Кутуя",
           "district": "Советский",
           "address": "улица Аделя Кутуя, Казань",
@@ -515,7 +531,7 @@ export const demoCatalog = {
           "features": {}
         },
         {
-          "id": "demo-real-kuzlyar-lobachevskogo",
+          "id": "demo-okulyar-lobachevskogo",
           "name": "ул. Лобачевского",
           "district": "Вахитовский",
           "address": "ул. Лобачевского, 16/34, Казань",
@@ -529,18 +545,18 @@ export const demoCatalog = {
       ]
     },
     {
-      "id": "demo-real-citidoc",
-      "name": "Ситидок",
+      "id": "demo-meridian",
+      "name": "Демо-клиника «Меридиан»",
       "ownership": "Частная",
       "facilityType": "Клиника",
-      "website": "https://mp.citidoc.ru/",
-      "description": "Реальная частная клиника: название, адрес, точка и часы работы — из OpenStreetMap. Врачи, цены, расписание и запись здесь вымышленные, демонстрационные — клиника о них не знает.",
+      "website": null,
+      "description": "Демонстрационная клиника: название, врачи, цены, расписание и запись вымышлены. Адрес, точка и часы работы — реальной частной клиники (OpenStreetMap); она о демо-данных не знает.",
       "real": true,
       "source": "OSM",
       "tier": "standard",
       "branches": [
         {
-          "id": "demo-real-citidoc-zelenaya",
+          "id": "demo-meridian-zelenaya",
           "name": "Зелёная ул.",
           "district": "Советский",
           "address": "Зелёная улица, 85 к1, Казань",
@@ -554,18 +570,18 @@ export const demoCatalog = {
       ]
     },
     {
-      "id": "demo-real-mamadeti",
-      "name": "Мать и дитя",
+      "id": "demo-kolybel",
+      "name": "Демо-клиника «Колыбель»",
       "ownership": "Частная",
       "facilityType": "Клиника",
-      "website": "https://mamadeti.ru",
-      "description": "Реальная частная клиника: название, адрес, точка и часы работы — из OpenStreetMap. Врачи, цены, расписание и запись здесь вымышленные, демонстрационные — клиника о них не знает.",
+      "website": null,
+      "description": "Демонстрационная клиника: название, врачи, цены, расписание и запись вымышлены. Адрес, точка и часы работы — реальной частной клиники (OpenStreetMap); она о демо-данных не знает.",
       "real": true,
       "source": "OSM",
       "tier": "premium",
       "branches": [
         {
-          "id": "demo-real-mamadeti-daurskaya",
+          "id": "demo-kolybel-daurskaya",
           "name": "Даурская ул.",
           "district": null,
           "address": "Даурская улица, Казань",
@@ -579,18 +595,18 @@ export const demoCatalog = {
       ]
     },
     {
-      "id": "demo-real-nurievy",
-      "name": "Клиника Нуриевых",
+      "id": "demo-garmonia",
+      "name": "Демо-клиника «Гармония»",
       "ownership": "Частная",
       "facilityType": "Клиника",
-      "website": "https://nnplus.ru",
-      "description": "Реальная частная клиника: название, адрес, точка и часы работы — из OpenStreetMap. Врачи, цены, расписание и запись здесь вымышленные, демонстрационные — клиника о них не знает.",
+      "website": null,
+      "description": "Демонстрационная клиника: название, врачи, цены, расписание и запись вымышлены. Адрес, точка и часы работы — реальной частной клиники (OpenStreetMap); она о демо-данных не знает.",
       "real": true,
       "source": "OSM",
       "tier": "standard",
       "branches": [
         {
-          "id": "demo-real-nurievy-serova",
+          "id": "demo-garmonia-serova",
           "name": "ул. Серова",
           "district": null,
           "address": "улица Серова, Казань",
@@ -602,7 +618,7 @@ export const demoCatalog = {
           "features": {}
         },
         {
-          "id": "demo-real-nurievy-zorge",
+          "id": "demo-garmonia-zorge",
           "name": "ул. Рихарда Зорге",
           "district": null,
           "address": "улица Рихарда Зорге, Казань",
@@ -5478,20 +5494,20 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-razumed-pushkina",
-        "demo-real-razumed-leningradskaya"
+        "demo-kedr-pushkina",
+        "demo-kedr-leningradskaya"
       ],
       "serviceIds": [
         "consult.therapist.first",
         "consult.therapist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-razumed-pushkina": "Tu,Fr 14:00-17:30,18:00-20:00",
-        "demo-real-razumed-leningradskaya": "Th 14:00-17:30,18:00-20:00"
+        "demo-kedr-pushkina": "Tu,Fr 14:00-17:30,18:00-20:00",
+        "demo-kedr-leningradskaya": "Th 14:00-17:30,18:00-20:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-razumed-pushkina",
+          "branchId": "demo-kedr-pushkina",
           "weekday": 2,
           "start": "14:00",
           "end": "20:00",
@@ -5501,7 +5517,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-razumed-leningradskaya",
+          "branchId": "demo-kedr-leningradskaya",
           "weekday": 4,
           "start": "14:00",
           "end": "20:00",
@@ -5511,7 +5527,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-razumed-pushkina",
+          "branchId": "demo-kedr-pushkina",
           "weekday": 5,
           "start": "14:00",
           "end": "20:00",
@@ -5526,7 +5542,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Разумед» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-belova-kamila",
@@ -5537,32 +5553,32 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-razumed-leningradskaya"
+        "demo-kedr-leningradskaya"
       ],
       "serviceIds": [
         "consult.lor.first",
         "consult.lor.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-razumed-leningradskaya": "Mo,Tu,Fr 16:00-20:00; Th 14:00-17:30,18:00-20:00"
+        "demo-kedr-leningradskaya": "Mo,Tu,Fr 16:00-20:00; Th 14:00-17:30,18:00-20:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-razumed-leningradskaya",
+          "branchId": "demo-kedr-leningradskaya",
           "weekday": 1,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-razumed-leningradskaya",
+          "branchId": "demo-kedr-leningradskaya",
           "weekday": 2,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-razumed-leningradskaya",
+          "branchId": "demo-kedr-leningradskaya",
           "weekday": 4,
           "start": "14:00",
           "end": "20:00",
@@ -5572,7 +5588,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-razumed-leningradskaya",
+          "branchId": "demo-kedr-leningradskaya",
           "weekday": 5,
           "start": "16:00",
           "end": "20:00",
@@ -5584,7 +5600,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Разумед» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-orlova-nailya",
@@ -5595,34 +5611,34 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-razumed-pushkina",
-        "demo-real-razumed-leningradskaya"
+        "demo-kedr-pushkina",
+        "demo-kedr-leningradskaya"
       ],
       "serviceIds": [
         "consult.neurologist.first",
         "consult.neurologist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-razumed-pushkina": "We,Fr 16:00-20:00",
-        "demo-real-razumed-leningradskaya": "Th 16:00-20:00"
+        "demo-kedr-pushkina": "We,Fr 16:00-20:00",
+        "demo-kedr-leningradskaya": "Th 16:00-20:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-razumed-pushkina",
+          "branchId": "demo-kedr-pushkina",
           "weekday": 3,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-razumed-leningradskaya",
+          "branchId": "demo-kedr-leningradskaya",
           "weekday": 4,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-razumed-pushkina",
+          "branchId": "demo-kedr-pushkina",
           "weekday": 5,
           "start": "16:00",
           "end": "20:00",
@@ -5634,7 +5650,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Разумед» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-sergeev-marat",
@@ -5645,18 +5661,18 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-razumed-leningradskaya"
+        "demo-kedr-leningradskaya"
       ],
       "serviceIds": [
         "consult.cardiologist.first",
         "consult.cardiologist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-razumed-leningradskaya": "Mo,Tu,Th,Fr 14:00-17:30,18:00-20:00; We 16:00-20:00"
+        "demo-kedr-leningradskaya": "Mo,Tu,Th,Fr 14:00-17:30,18:00-20:00; We 16:00-20:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-razumed-leningradskaya",
+          "branchId": "demo-kedr-leningradskaya",
           "weekday": 1,
           "start": "14:00",
           "end": "20:00",
@@ -5666,7 +5682,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-razumed-leningradskaya",
+          "branchId": "demo-kedr-leningradskaya",
           "weekday": 2,
           "start": "14:00",
           "end": "20:00",
@@ -5676,14 +5692,14 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-razumed-leningradskaya",
+          "branchId": "demo-kedr-leningradskaya",
           "weekday": 3,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-razumed-leningradskaya",
+          "branchId": "demo-kedr-leningradskaya",
           "weekday": 4,
           "start": "14:00",
           "end": "20:00",
@@ -5693,7 +5709,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-razumed-leningradskaya",
+          "branchId": "demo-kedr-leningradskaya",
           "weekday": 5,
           "start": "14:00",
           "end": "20:00",
@@ -5708,7 +5724,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Разумед» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-dmitriev-oleg",
@@ -5719,7 +5735,7 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-razumed-pushkina"
+        "demo-kedr-pushkina"
       ],
       "serviceIds": [
         "consult.gynecologist.first",
@@ -5727,25 +5743,25 @@ export const demoCatalog = {
         "proc.gynecologist.ultrasound"
       ],
       "hoursByBranch": {
-        "demo-real-razumed-pushkina": "Mo,Tu,Th,Fr 08:00-14:00; We 14:00-17:30,18:00-20:00"
+        "demo-kedr-pushkina": "Mo,Tu,Th,Fr 08:00-14:00; We 14:00-17:30,18:00-20:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-razumed-pushkina",
+          "branchId": "demo-kedr-pushkina",
           "weekday": 1,
           "start": "08:00",
           "end": "14:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-razumed-pushkina",
+          "branchId": "demo-kedr-pushkina",
           "weekday": 2,
           "start": "08:00",
           "end": "14:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-razumed-pushkina",
+          "branchId": "demo-kedr-pushkina",
           "weekday": 3,
           "start": "14:00",
           "end": "20:00",
@@ -5755,14 +5771,14 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-razumed-pushkina",
+          "branchId": "demo-kedr-pushkina",
           "weekday": 4,
           "start": "08:00",
           "end": "14:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-razumed-pushkina",
+          "branchId": "demo-kedr-pushkina",
           "weekday": 5,
           "start": "08:00",
           "end": "14:00",
@@ -5774,7 +5790,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Разумед» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-makarov-ildar",
@@ -5785,32 +5801,32 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-razumed-leningradskaya"
+        "demo-kedr-leningradskaya"
       ],
       "serviceIds": [
         "consult.endocrinologist.first",
         "consult.endocrinologist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-razumed-leningradskaya": "Mo,Tu,Fr 16:00-20:00; We 10:00-13:30,14:00-18:00"
+        "demo-kedr-leningradskaya": "Mo,Tu,Fr 16:00-20:00; We 10:00-13:30,14:00-18:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-razumed-leningradskaya",
+          "branchId": "demo-kedr-leningradskaya",
           "weekday": 1,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-razumed-leningradskaya",
+          "branchId": "demo-kedr-leningradskaya",
           "weekday": 2,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-razumed-leningradskaya",
+          "branchId": "demo-kedr-leningradskaya",
           "weekday": 3,
           "start": "10:00",
           "end": "18:00",
@@ -5820,7 +5836,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-razumed-leningradskaya",
+          "branchId": "demo-kedr-leningradskaya",
           "weekday": 5,
           "start": "16:00",
           "end": "20:00",
@@ -5832,7 +5848,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Разумед» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-ushakov-aydar",
@@ -5843,20 +5859,20 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-razumed-pushkina",
-        "demo-real-razumed-leningradskaya"
+        "demo-kedr-pushkina",
+        "demo-kedr-leningradskaya"
       ],
       "serviceIds": [
         "consult.gastroenterologist.first",
         "consult.gastroenterologist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-razumed-pushkina": "Mo,Fr 14:00-17:30,18:00-20:00; We 10:00-13:30,14:00-18:00",
-        "demo-real-razumed-leningradskaya": "Tu,Th 14:00-17:30,18:00-20:00"
+        "demo-kedr-pushkina": "Mo,Fr 14:00-17:30,18:00-20:00; We 10:00-13:30,14:00-18:00",
+        "demo-kedr-leningradskaya": "Tu,Th 14:00-17:30,18:00-20:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-razumed-pushkina",
+          "branchId": "demo-kedr-pushkina",
           "weekday": 1,
           "start": "14:00",
           "end": "20:00",
@@ -5866,7 +5882,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-razumed-leningradskaya",
+          "branchId": "demo-kedr-leningradskaya",
           "weekday": 2,
           "start": "14:00",
           "end": "20:00",
@@ -5876,7 +5892,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-razumed-pushkina",
+          "branchId": "demo-kedr-pushkina",
           "weekday": 3,
           "start": "10:00",
           "end": "18:00",
@@ -5886,7 +5902,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-razumed-leningradskaya",
+          "branchId": "demo-kedr-leningradskaya",
           "weekday": 4,
           "start": "14:00",
           "end": "20:00",
@@ -5896,7 +5912,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-razumed-pushkina",
+          "branchId": "demo-kedr-pushkina",
           "weekday": 5,
           "start": "14:00",
           "end": "20:00",
@@ -5911,7 +5927,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Разумед» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-valiullin-marat",
@@ -5922,20 +5938,20 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-razumed-pushkina",
-        "demo-real-razumed-leningradskaya"
+        "demo-kedr-pushkina",
+        "demo-kedr-leningradskaya"
       ],
       "serviceIds": [
         "consult.urologist.first",
         "consult.urologist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-razumed-pushkina": "Tu 14:00-17:30,18:00-20:00; Th 08:00-14:00",
-        "demo-real-razumed-leningradskaya": "We 14:00-17:30,18:00-20:00"
+        "demo-kedr-pushkina": "Tu 14:00-17:30,18:00-20:00; Th 08:00-14:00",
+        "demo-kedr-leningradskaya": "We 14:00-17:30,18:00-20:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-razumed-pushkina",
+          "branchId": "demo-kedr-pushkina",
           "weekday": 2,
           "start": "14:00",
           "end": "20:00",
@@ -5945,7 +5961,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-razumed-leningradskaya",
+          "branchId": "demo-kedr-leningradskaya",
           "weekday": 3,
           "start": "14:00",
           "end": "20:00",
@@ -5955,7 +5971,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-razumed-pushkina",
+          "branchId": "demo-kedr-pushkina",
           "weekday": 4,
           "start": "08:00",
           "end": "14:00",
@@ -5967,7 +5983,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Разумед» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-sokolov-vadim",
@@ -5978,18 +5994,18 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-razumed-pushkina"
+        "demo-kedr-pushkina"
       ],
       "serviceIds": [
         "consult.therapist.first",
         "consult.therapist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-razumed-pushkina": "Mo,Tu,Th 10:00-13:30,14:00-18:00; We 08:00-14:00"
+        "demo-kedr-pushkina": "Mo,Tu,Th 10:00-13:30,14:00-18:00; We 08:00-14:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-razumed-pushkina",
+          "branchId": "demo-kedr-pushkina",
           "weekday": 1,
           "start": "10:00",
           "end": "18:00",
@@ -5999,7 +6015,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-razumed-pushkina",
+          "branchId": "demo-kedr-pushkina",
           "weekday": 2,
           "start": "10:00",
           "end": "18:00",
@@ -6009,14 +6025,14 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-razumed-pushkina",
+          "branchId": "demo-kedr-pushkina",
           "weekday": 3,
           "start": "08:00",
           "end": "14:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-razumed-pushkina",
+          "branchId": "demo-kedr-pushkina",
           "weekday": 4,
           "start": "10:00",
           "end": "18:00",
@@ -6031,7 +6047,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Разумед» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-ilina-kamila",
@@ -6042,46 +6058,46 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-razumed-leningradskaya"
+        "demo-kedr-leningradskaya"
       ],
       "serviceIds": [
         "consult.neurologist.first",
         "consult.neurologist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-razumed-leningradskaya": "Mo,Tu,We,Th,Fr 16:00-20:00"
+        "demo-kedr-leningradskaya": "Mo,Tu,We,Th,Fr 16:00-20:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-razumed-leningradskaya",
+          "branchId": "demo-kedr-leningradskaya",
           "weekday": 1,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-razumed-leningradskaya",
+          "branchId": "demo-kedr-leningradskaya",
           "weekday": 2,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-razumed-leningradskaya",
+          "branchId": "demo-kedr-leningradskaya",
           "weekday": 3,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-razumed-leningradskaya",
+          "branchId": "demo-kedr-leningradskaya",
           "weekday": 4,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-razumed-leningradskaya",
+          "branchId": "demo-kedr-leningradskaya",
           "weekday": 5,
           "start": "16:00",
           "end": "20:00",
@@ -6093,7 +6109,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Разумед» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-yarullina-mariya",
@@ -6104,18 +6120,18 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-budzdorov-narimanova"
+        "demo-vitaris-narimanova"
       ],
       "serviceIds": [
         "consult.therapist.first",
         "consult.therapist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-budzdorov-narimanova": "Tu,We,Fr 14:00-17:30,18:00-21:00; Th 10:00-13:30,14:00-18:00"
+        "demo-vitaris-narimanova": "Tu,We,Fr 14:00-17:30,18:00-21:00; Th 10:00-13:30,14:00-18:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-budzdorov-narimanova",
+          "branchId": "demo-vitaris-narimanova",
           "weekday": 2,
           "start": "14:00",
           "end": "21:00",
@@ -6125,7 +6141,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-budzdorov-narimanova",
+          "branchId": "demo-vitaris-narimanova",
           "weekday": 3,
           "start": "14:00",
           "end": "21:00",
@@ -6135,7 +6151,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-budzdorov-narimanova",
+          "branchId": "demo-vitaris-narimanova",
           "weekday": 4,
           "start": "10:00",
           "end": "18:00",
@@ -6145,7 +6161,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-budzdorov-narimanova",
+          "branchId": "demo-vitaris-narimanova",
           "weekday": 5,
           "start": "14:00",
           "end": "21:00",
@@ -6160,7 +6176,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Будь здоров» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-gimadiev-lenar",
@@ -6171,18 +6187,18 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-budzdorov-narimanova"
+        "demo-vitaris-narimanova"
       ],
       "serviceIds": [
         "consult.lor.first",
         "consult.lor.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-budzdorov-narimanova": "Tu,We 14:00-17:30,18:00-21:00; Th 10:00-13:30,14:00-18:00"
+        "demo-vitaris-narimanova": "Tu,We 14:00-17:30,18:00-21:00; Th 10:00-13:30,14:00-18:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-budzdorov-narimanova",
+          "branchId": "demo-vitaris-narimanova",
           "weekday": 2,
           "start": "14:00",
           "end": "21:00",
@@ -6192,7 +6208,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-budzdorov-narimanova",
+          "branchId": "demo-vitaris-narimanova",
           "weekday": 3,
           "start": "14:00",
           "end": "21:00",
@@ -6202,7 +6218,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-budzdorov-narimanova",
+          "branchId": "demo-vitaris-narimanova",
           "weekday": 4,
           "start": "10:00",
           "end": "18:00",
@@ -6217,7 +6233,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Будь здоров» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-lukin-artem",
@@ -6228,32 +6244,32 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-budzdorov-narimanova"
+        "demo-vitaris-narimanova"
       ],
       "serviceIds": [
         "consult.cardiologist.first",
         "consult.cardiologist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-budzdorov-narimanova": "Tu,We,Fr 16:00-21:00; Th 10:00-13:30,14:00-18:00"
+        "demo-vitaris-narimanova": "Tu,We,Fr 16:00-21:00; Th 10:00-13:30,14:00-18:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-budzdorov-narimanova",
+          "branchId": "demo-vitaris-narimanova",
           "weekday": 2,
           "start": "16:00",
           "end": "21:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-budzdorov-narimanova",
+          "branchId": "demo-vitaris-narimanova",
           "weekday": 3,
           "start": "16:00",
           "end": "21:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-budzdorov-narimanova",
+          "branchId": "demo-vitaris-narimanova",
           "weekday": 4,
           "start": "10:00",
           "end": "18:00",
@@ -6263,7 +6279,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-budzdorov-narimanova",
+          "branchId": "demo-vitaris-narimanova",
           "weekday": 5,
           "start": "16:00",
           "end": "21:00",
@@ -6275,7 +6291,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Будь здоров» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-filippov-timur",
@@ -6286,32 +6302,32 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-budzdorov-narimanova"
+        "demo-vitaris-narimanova"
       ],
       "serviceIds": [
         "consult.dermatologist.first",
         "consult.dermatologist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-budzdorov-narimanova": "Mo,Tu,Th,Fr 16:00-21:00; We 14:00-17:30,18:00-21:00"
+        "demo-vitaris-narimanova": "Mo,Tu,Th,Fr 16:00-21:00; We 14:00-17:30,18:00-21:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-budzdorov-narimanova",
+          "branchId": "demo-vitaris-narimanova",
           "weekday": 1,
           "start": "16:00",
           "end": "21:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-budzdorov-narimanova",
+          "branchId": "demo-vitaris-narimanova",
           "weekday": 2,
           "start": "16:00",
           "end": "21:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-budzdorov-narimanova",
+          "branchId": "demo-vitaris-narimanova",
           "weekday": 3,
           "start": "14:00",
           "end": "21:00",
@@ -6321,14 +6337,14 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-budzdorov-narimanova",
+          "branchId": "demo-vitaris-narimanova",
           "weekday": 4,
           "start": "16:00",
           "end": "21:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-budzdorov-narimanova",
+          "branchId": "demo-vitaris-narimanova",
           "weekday": 5,
           "start": "16:00",
           "end": "21:00",
@@ -6340,7 +6356,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Будь здоров» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-komarova-liliya",
@@ -6351,7 +6367,7 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-budzdorov-narimanova"
+        "demo-vitaris-narimanova"
       ],
       "serviceIds": [
         "consult.gynecologist.first",
@@ -6359,11 +6375,11 @@ export const demoCatalog = {
         "proc.gynecologist.ultrasound"
       ],
       "hoursByBranch": {
-        "demo-real-budzdorov-narimanova": "Tu,Th 14:00-17:30,18:00-21:00; Fr 16:00-21:00"
+        "demo-vitaris-narimanova": "Tu,Th 14:00-17:30,18:00-21:00; Fr 16:00-21:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-budzdorov-narimanova",
+          "branchId": "demo-vitaris-narimanova",
           "weekday": 2,
           "start": "14:00",
           "end": "21:00",
@@ -6373,7 +6389,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-budzdorov-narimanova",
+          "branchId": "demo-vitaris-narimanova",
           "weekday": 4,
           "start": "14:00",
           "end": "21:00",
@@ -6383,7 +6399,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-budzdorov-narimanova",
+          "branchId": "demo-vitaris-narimanova",
           "weekday": 5,
           "start": "16:00",
           "end": "21:00",
@@ -6395,7 +6411,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Будь здоров» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-titova-nailya",
@@ -6406,7 +6422,7 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-budzdorov-narimanova"
+        "demo-vitaris-narimanova"
       ],
       "serviceIds": [
         "consult.ophthalmologist.first",
@@ -6414,39 +6430,39 @@ export const demoCatalog = {
         "proc.ophthalmologist.glasses"
       ],
       "hoursByBranch": {
-        "demo-real-budzdorov-narimanova": "Mo,Tu,We,Th,Fr 16:00-21:00"
+        "demo-vitaris-narimanova": "Mo,Tu,We,Th,Fr 16:00-21:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-budzdorov-narimanova",
+          "branchId": "demo-vitaris-narimanova",
           "weekday": 1,
           "start": "16:00",
           "end": "21:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-budzdorov-narimanova",
+          "branchId": "demo-vitaris-narimanova",
           "weekday": 2,
           "start": "16:00",
           "end": "21:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-budzdorov-narimanova",
+          "branchId": "demo-vitaris-narimanova",
           "weekday": 3,
           "start": "16:00",
           "end": "21:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-budzdorov-narimanova",
+          "branchId": "demo-vitaris-narimanova",
           "weekday": 4,
           "start": "16:00",
           "end": "21:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-budzdorov-narimanova",
+          "branchId": "demo-vitaris-narimanova",
           "weekday": 5,
           "start": "16:00",
           "end": "21:00",
@@ -6458,7 +6474,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Будь здоров» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-garipova-elena",
@@ -6469,18 +6485,18 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-aibolit-maksimova"
+        "demo-luchik-maksimova"
       ],
       "serviceIds": [
         "consult.therapist.first",
         "consult.therapist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-aibolit-maksimova": "Tu,We,Th 14:00-17:30,18:00-20:00"
+        "demo-luchik-maksimova": "Tu,We,Th 14:00-17:30,18:00-20:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-aibolit-maksimova",
+          "branchId": "demo-luchik-maksimova",
           "weekday": 2,
           "start": "14:00",
           "end": "20:00",
@@ -6490,7 +6506,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-aibolit-maksimova",
+          "branchId": "demo-luchik-maksimova",
           "weekday": 3,
           "start": "14:00",
           "end": "20:00",
@@ -6500,7 +6516,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-aibolit-maksimova",
+          "branchId": "demo-luchik-maksimova",
           "weekday": 4,
           "start": "14:00",
           "end": "20:00",
@@ -6515,7 +6531,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Айболит» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-denisova-mariya",
@@ -6526,18 +6542,18 @@ export const demoCatalog = {
         "child"
       ],
       "branchIds": [
-        "demo-real-aibolit-kurskaya"
+        "demo-luchik-kurskaya"
       ],
       "serviceIds": [
         "consult.pediatrician.first",
         "consult.pediatrician.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-aibolit-kurskaya": "Mo,We,Fr 14:00-17:30,18:00-20:00; Th 10:00-13:30,14:00-18:00"
+        "demo-luchik-kurskaya": "Mo,We,Fr 14:00-17:30,18:00-20:00; Th 10:00-13:30,14:00-18:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-aibolit-kurskaya",
+          "branchId": "demo-luchik-kurskaya",
           "weekday": 1,
           "start": "14:00",
           "end": "20:00",
@@ -6547,7 +6563,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-aibolit-kurskaya",
+          "branchId": "demo-luchik-kurskaya",
           "weekday": 3,
           "start": "14:00",
           "end": "20:00",
@@ -6557,7 +6573,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-aibolit-kurskaya",
+          "branchId": "demo-luchik-kurskaya",
           "weekday": 4,
           "start": "10:00",
           "end": "18:00",
@@ -6567,7 +6583,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-aibolit-kurskaya",
+          "branchId": "demo-luchik-kurskaya",
           "weekday": 5,
           "start": "14:00",
           "end": "20:00",
@@ -6582,7 +6598,7 @@ export const demoCatalog = {
       "features": {
         "children": true
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Айболит» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-minullina-irina",
@@ -6593,18 +6609,18 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-aibolit-maksimova"
+        "demo-luchik-maksimova"
       ],
       "serviceIds": [
         "consult.lor.first",
         "consult.lor.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-aibolit-maksimova": "Mo,Tu,We,Th 14:00-17:30,18:00-20:00"
+        "demo-luchik-maksimova": "Mo,Tu,We,Th 14:00-17:30,18:00-20:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-aibolit-maksimova",
+          "branchId": "demo-luchik-maksimova",
           "weekday": 1,
           "start": "14:00",
           "end": "20:00",
@@ -6614,7 +6630,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-aibolit-maksimova",
+          "branchId": "demo-luchik-maksimova",
           "weekday": 2,
           "start": "14:00",
           "end": "20:00",
@@ -6624,7 +6640,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-aibolit-maksimova",
+          "branchId": "demo-luchik-maksimova",
           "weekday": 3,
           "start": "14:00",
           "end": "20:00",
@@ -6634,7 +6650,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-aibolit-maksimova",
+          "branchId": "demo-luchik-maksimova",
           "weekday": 4,
           "start": "14:00",
           "end": "20:00",
@@ -6649,7 +6665,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Айболит» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-erofeeva-irina",
@@ -6661,18 +6677,18 @@ export const demoCatalog = {
         "child"
       ],
       "branchIds": [
-        "demo-real-aibolit-kurskaya"
+        "demo-luchik-kurskaya"
       ],
       "serviceIds": [
         "consult.neurologist.first",
         "consult.neurologist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-aibolit-kurskaya": "Tu,We,Fr 14:00-17:30,18:00-20:00"
+        "demo-luchik-kurskaya": "Tu,We,Fr 14:00-17:30,18:00-20:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-aibolit-kurskaya",
+          "branchId": "demo-luchik-kurskaya",
           "weekday": 2,
           "start": "14:00",
           "end": "20:00",
@@ -6682,7 +6698,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-aibolit-kurskaya",
+          "branchId": "demo-luchik-kurskaya",
           "weekday": 3,
           "start": "14:00",
           "end": "20:00",
@@ -6692,7 +6708,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-aibolit-kurskaya",
+          "branchId": "demo-luchik-kurskaya",
           "weekday": 5,
           "start": "14:00",
           "end": "20:00",
@@ -6707,7 +6723,7 @@ export const demoCatalog = {
       "features": {
         "children": true
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Айболит» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-chistyakov-rinat",
@@ -6718,7 +6734,7 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-aibolit-maksimova"
+        "demo-luchik-maksimova"
       ],
       "serviceIds": [
         "consult.ophthalmologist.first",
@@ -6726,39 +6742,39 @@ export const demoCatalog = {
         "proc.ophthalmologist.glasses"
       ],
       "hoursByBranch": {
-        "demo-real-aibolit-maksimova": "Mo,Tu,Th,Fr 16:00-20:00; We 08:00-14:00"
+        "demo-luchik-maksimova": "Mo,Tu,Th,Fr 16:00-20:00; We 08:00-14:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-aibolit-maksimova",
+          "branchId": "demo-luchik-maksimova",
           "weekday": 1,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-aibolit-maksimova",
+          "branchId": "demo-luchik-maksimova",
           "weekday": 2,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-aibolit-maksimova",
+          "branchId": "demo-luchik-maksimova",
           "weekday": 3,
           "start": "08:00",
           "end": "14:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-aibolit-maksimova",
+          "branchId": "demo-luchik-maksimova",
           "weekday": 4,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-aibolit-maksimova",
+          "branchId": "demo-luchik-maksimova",
           "weekday": 5,
           "start": "16:00",
           "end": "20:00",
@@ -6770,7 +6786,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Айболит» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-volkova-tatyana",
@@ -6781,18 +6797,18 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-aibolit-kurskaya"
+        "demo-luchik-kurskaya"
       ],
       "serviceIds": [
         "consult.dermatologist.first",
         "consult.dermatologist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-aibolit-kurskaya": "Mo,Tu,We,Fr 14:00-17:30,18:00-20:00"
+        "demo-luchik-kurskaya": "Mo,Tu,We,Fr 14:00-17:30,18:00-20:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-aibolit-kurskaya",
+          "branchId": "demo-luchik-kurskaya",
           "weekday": 1,
           "start": "14:00",
           "end": "20:00",
@@ -6802,7 +6818,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-aibolit-kurskaya",
+          "branchId": "demo-luchik-kurskaya",
           "weekday": 2,
           "start": "14:00",
           "end": "20:00",
@@ -6812,7 +6828,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-aibolit-kurskaya",
+          "branchId": "demo-luchik-kurskaya",
           "weekday": 3,
           "start": "14:00",
           "end": "20:00",
@@ -6822,7 +6838,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-aibolit-kurskaya",
+          "branchId": "demo-luchik-kurskaya",
           "weekday": 5,
           "start": "14:00",
           "end": "20:00",
@@ -6837,7 +6853,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Айболит» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-smirnova-elena",
@@ -6848,48 +6864,48 @@ export const demoCatalog = {
         "child"
       ],
       "branchIds": [
-        "demo-real-aibolit-maksimova",
-        "demo-real-aibolit-kurskaya"
+        "demo-luchik-maksimova",
+        "demo-luchik-kurskaya"
       ],
       "serviceIds": [
         "consult.pediatrician.first",
         "consult.pediatrician.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-aibolit-maksimova": "Mo,We,Fr 08:00-14:00",
-        "demo-real-aibolit-kurskaya": "Tu,Th 08:00-14:00"
+        "demo-luchik-maksimova": "Mo,We,Fr 08:00-14:00",
+        "demo-luchik-kurskaya": "Tu,Th 08:00-14:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-aibolit-maksimova",
+          "branchId": "demo-luchik-maksimova",
           "weekday": 1,
           "start": "08:00",
           "end": "14:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-aibolit-kurskaya",
+          "branchId": "demo-luchik-kurskaya",
           "weekday": 2,
           "start": "08:00",
           "end": "14:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-aibolit-maksimova",
+          "branchId": "demo-luchik-maksimova",
           "weekday": 3,
           "start": "08:00",
           "end": "14:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-aibolit-kurskaya",
+          "branchId": "demo-luchik-kurskaya",
           "weekday": 4,
           "start": "08:00",
           "end": "14:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-aibolit-maksimova",
+          "branchId": "demo-luchik-maksimova",
           "weekday": 5,
           "start": "08:00",
           "end": "14:00",
@@ -6901,7 +6917,7 @@ export const demoCatalog = {
       "features": {
         "children": true
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Айболит» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-zhuravlev-vadim",
@@ -6913,46 +6929,46 @@ export const demoCatalog = {
         "child"
       ],
       "branchIds": [
-        "demo-real-aibolit-kurskaya"
+        "demo-luchik-kurskaya"
       ],
       "serviceIds": [
         "consult.therapist.first",
         "consult.therapist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-aibolit-kurskaya": "Mo,Tu,We,Th,Fr 16:00-20:00"
+        "demo-luchik-kurskaya": "Mo,Tu,We,Th,Fr 16:00-20:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-aibolit-kurskaya",
+          "branchId": "demo-luchik-kurskaya",
           "weekday": 1,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-aibolit-kurskaya",
+          "branchId": "demo-luchik-kurskaya",
           "weekday": 2,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-aibolit-kurskaya",
+          "branchId": "demo-luchik-kurskaya",
           "weekday": 3,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-aibolit-kurskaya",
+          "branchId": "demo-luchik-kurskaya",
           "weekday": 4,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-aibolit-kurskaya",
+          "branchId": "demo-luchik-kurskaya",
           "weekday": 5,
           "start": "16:00",
           "end": "20:00",
@@ -6964,7 +6980,7 @@ export const demoCatalog = {
       "features": {
         "children": true
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Айболит» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-shamsutdinova-kamila",
@@ -6976,7 +6992,7 @@ export const demoCatalog = {
         "child"
       ],
       "branchIds": [
-        "demo-real-kuzlyar-kutuya"
+        "demo-okulyar-kutuya"
       ],
       "serviceIds": [
         "consult.ophthalmologist.first",
@@ -6984,32 +7000,32 @@ export const demoCatalog = {
         "proc.ophthalmologist.glasses"
       ],
       "hoursByBranch": {
-        "demo-real-kuzlyar-kutuya": "Tu,We,Fr 14:00-18:00; Th 08:30-14:00"
+        "demo-okulyar-kutuya": "Tu,We,Fr 14:00-18:00; Th 08:30-14:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-kuzlyar-kutuya",
+          "branchId": "demo-okulyar-kutuya",
           "weekday": 2,
           "start": "14:00",
           "end": "18:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-kuzlyar-kutuya",
+          "branchId": "demo-okulyar-kutuya",
           "weekday": 3,
           "start": "14:00",
           "end": "18:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-kuzlyar-kutuya",
+          "branchId": "demo-okulyar-kutuya",
           "weekday": 4,
           "start": "08:30",
           "end": "14:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-kuzlyar-kutuya",
+          "branchId": "demo-okulyar-kutuya",
           "weekday": 5,
           "start": "14:00",
           "end": "18:00",
@@ -7021,7 +7037,7 @@ export const demoCatalog = {
       "features": {
         "children": true
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Кузляр» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-zaytseva-elena",
@@ -7033,32 +7049,32 @@ export const demoCatalog = {
         "child"
       ],
       "branchIds": [
-        "demo-real-kuzlyar-lobachevskogo"
+        "demo-okulyar-lobachevskogo"
       ],
       "serviceIds": [
         "consult.ophthalmologist.first",
         "consult.ophthalmologist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-kuzlyar-lobachevskogo": "Mo,Tu,Fr 14:00-18:00; Th 10:00-13:30,14:00-18:00"
+        "demo-okulyar-lobachevskogo": "Mo,Tu,Fr 14:00-18:00; Th 10:00-13:30,14:00-18:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-kuzlyar-lobachevskogo",
+          "branchId": "demo-okulyar-lobachevskogo",
           "weekday": 1,
           "start": "14:00",
           "end": "18:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-kuzlyar-lobachevskogo",
+          "branchId": "demo-okulyar-lobachevskogo",
           "weekday": 2,
           "start": "14:00",
           "end": "18:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-kuzlyar-lobachevskogo",
+          "branchId": "demo-okulyar-lobachevskogo",
           "weekday": 4,
           "start": "10:00",
           "end": "18:00",
@@ -7068,7 +7084,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-kuzlyar-lobachevskogo",
+          "branchId": "demo-okulyar-lobachevskogo",
           "weekday": 5,
           "start": "14:00",
           "end": "18:00",
@@ -7080,7 +7096,7 @@ export const demoCatalog = {
       "features": {
         "children": true
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Кузляр» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-vlasov-farid",
@@ -7092,32 +7108,32 @@ export const demoCatalog = {
         "child"
       ],
       "branchIds": [
-        "demo-real-kuzlyar-kutuya"
+        "demo-okulyar-kutuya"
       ],
       "serviceIds": [
         "consult.ophthalmologist.first",
         "consult.ophthalmologist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-kuzlyar-kutuya": "Mo,Tu,Th,Fr 14:00-18:00; We 10:00-13:30,14:00-18:00"
+        "demo-okulyar-kutuya": "Mo,Tu,Th,Fr 14:00-18:00; We 10:00-13:30,14:00-18:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-kuzlyar-kutuya",
+          "branchId": "demo-okulyar-kutuya",
           "weekday": 1,
           "start": "14:00",
           "end": "18:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-kuzlyar-kutuya",
+          "branchId": "demo-okulyar-kutuya",
           "weekday": 2,
           "start": "14:00",
           "end": "18:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-kuzlyar-kutuya",
+          "branchId": "demo-okulyar-kutuya",
           "weekday": 3,
           "start": "10:00",
           "end": "18:00",
@@ -7127,14 +7143,14 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-kuzlyar-kutuya",
+          "branchId": "demo-okulyar-kutuya",
           "weekday": 4,
           "start": "14:00",
           "end": "18:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-kuzlyar-kutuya",
+          "branchId": "demo-okulyar-kutuya",
           "weekday": 5,
           "start": "14:00",
           "end": "18:00",
@@ -7146,7 +7162,7 @@ export const demoCatalog = {
       "features": {
         "children": true
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Кузляр» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-baranov-marat",
@@ -7157,18 +7173,18 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-citidoc-zelenaya"
+        "demo-meridian-zelenaya"
       ],
       "serviceIds": [
         "consult.therapist.first",
         "consult.therapist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-citidoc-zelenaya": "Mo,Tu,Th,Fr 14:00-17:30,18:00-20:00; We 08:00-14:00"
+        "demo-meridian-zelenaya": "Mo,Tu,Th,Fr 14:00-17:30,18:00-20:00; We 08:00-14:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-citidoc-zelenaya",
+          "branchId": "demo-meridian-zelenaya",
           "weekday": 1,
           "start": "14:00",
           "end": "20:00",
@@ -7178,7 +7194,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-citidoc-zelenaya",
+          "branchId": "demo-meridian-zelenaya",
           "weekday": 2,
           "start": "14:00",
           "end": "20:00",
@@ -7188,14 +7204,14 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-citidoc-zelenaya",
+          "branchId": "demo-meridian-zelenaya",
           "weekday": 3,
           "start": "08:00",
           "end": "14:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-citidoc-zelenaya",
+          "branchId": "demo-meridian-zelenaya",
           "weekday": 4,
           "start": "14:00",
           "end": "20:00",
@@ -7205,7 +7221,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-citidoc-zelenaya",
+          "branchId": "demo-meridian-zelenaya",
           "weekday": 5,
           "start": "14:00",
           "end": "20:00",
@@ -7220,7 +7236,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Ситидок» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-guseva-yuliya",
@@ -7231,32 +7247,32 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-citidoc-zelenaya"
+        "demo-meridian-zelenaya"
       ],
       "serviceIds": [
         "consult.lor.first",
         "consult.lor.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-citidoc-zelenaya": "Mo,Tu,Th 16:00-20:00; We 10:00-13:30,14:00-18:00"
+        "demo-meridian-zelenaya": "Mo,Tu,Th 16:00-20:00; We 10:00-13:30,14:00-18:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-citidoc-zelenaya",
+          "branchId": "demo-meridian-zelenaya",
           "weekday": 1,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-citidoc-zelenaya",
+          "branchId": "demo-meridian-zelenaya",
           "weekday": 2,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-citidoc-zelenaya",
+          "branchId": "demo-meridian-zelenaya",
           "weekday": 3,
           "start": "10:00",
           "end": "18:00",
@@ -7266,7 +7282,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-citidoc-zelenaya",
+          "branchId": "demo-meridian-zelenaya",
           "weekday": 4,
           "start": "16:00",
           "end": "20:00",
@@ -7278,7 +7294,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Ситидок» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-nazarov-nikita",
@@ -7289,32 +7305,32 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-citidoc-zelenaya"
+        "demo-meridian-zelenaya"
       ],
       "serviceIds": [
         "consult.neurologist.first",
         "consult.neurologist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-citidoc-zelenaya": "Mo,We,Th 08:00-14:00"
+        "demo-meridian-zelenaya": "Mo,We,Th 08:00-14:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-citidoc-zelenaya",
+          "branchId": "demo-meridian-zelenaya",
           "weekday": 1,
           "start": "08:00",
           "end": "14:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-citidoc-zelenaya",
+          "branchId": "demo-meridian-zelenaya",
           "weekday": 3,
           "start": "08:00",
           "end": "14:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-citidoc-zelenaya",
+          "branchId": "demo-meridian-zelenaya",
           "weekday": 4,
           "start": "08:00",
           "end": "14:00",
@@ -7326,7 +7342,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Ситидок» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-pavlova-zulfiya",
@@ -7337,7 +7353,7 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-citidoc-zelenaya"
+        "demo-meridian-zelenaya"
       ],
       "serviceIds": [
         "consult.cardiologist.first",
@@ -7345,11 +7361,11 @@ export const demoCatalog = {
         "diag.ecg"
       ],
       "hoursByBranch": {
-        "demo-real-citidoc-zelenaya": "Tu,We,Fr 14:00-17:30,18:00-20:00; Th 08:00-14:00"
+        "demo-meridian-zelenaya": "Tu,We,Fr 14:00-17:30,18:00-20:00; Th 08:00-14:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-citidoc-zelenaya",
+          "branchId": "demo-meridian-zelenaya",
           "weekday": 2,
           "start": "14:00",
           "end": "20:00",
@@ -7359,7 +7375,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-citidoc-zelenaya",
+          "branchId": "demo-meridian-zelenaya",
           "weekday": 3,
           "start": "14:00",
           "end": "20:00",
@@ -7369,14 +7385,14 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-citidoc-zelenaya",
+          "branchId": "demo-meridian-zelenaya",
           "weekday": 4,
           "start": "08:00",
           "end": "14:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-citidoc-zelenaya",
+          "branchId": "demo-meridian-zelenaya",
           "weekday": 5,
           "start": "14:00",
           "end": "20:00",
@@ -7391,7 +7407,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Ситидок» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-mironov-nikita",
@@ -7402,32 +7418,32 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-citidoc-zelenaya"
+        "demo-meridian-zelenaya"
       ],
       "serviceIds": [
         "consult.gastroenterologist.first",
         "consult.gastroenterologist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-citidoc-zelenaya": "Mo,We 16:00-20:00; Th 10:00-13:30,14:00-18:00"
+        "demo-meridian-zelenaya": "Mo,We 16:00-20:00; Th 10:00-13:30,14:00-18:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-citidoc-zelenaya",
+          "branchId": "demo-meridian-zelenaya",
           "weekday": 1,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-citidoc-zelenaya",
+          "branchId": "demo-meridian-zelenaya",
           "weekday": 3,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-citidoc-zelenaya",
+          "branchId": "demo-meridian-zelenaya",
           "weekday": 4,
           "start": "10:00",
           "end": "18:00",
@@ -7442,7 +7458,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Ситидок» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-ponomarev-rinat",
@@ -7454,7 +7470,7 @@ export const demoCatalog = {
         "child"
       ],
       "branchIds": [
-        "demo-real-mamadeti-daurskaya"
+        "demo-kolybel-daurskaya"
       ],
       "serviceIds": [
         "consult.gynecologist.first",
@@ -7462,32 +7478,32 @@ export const demoCatalog = {
         "proc.gynecologist.ultrasound"
       ],
       "hoursByBranch": {
-        "demo-real-mamadeti-daurskaya": "Mo,We,Fr 16:00-19:00; Th 08:00-14:00"
+        "demo-kolybel-daurskaya": "Mo,We,Fr 16:00-19:00; Th 08:00-14:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-mamadeti-daurskaya",
+          "branchId": "demo-kolybel-daurskaya",
           "weekday": 1,
           "start": "16:00",
           "end": "19:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-mamadeti-daurskaya",
+          "branchId": "demo-kolybel-daurskaya",
           "weekday": 3,
           "start": "16:00",
           "end": "19:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-mamadeti-daurskaya",
+          "branchId": "demo-kolybel-daurskaya",
           "weekday": 4,
           "start": "08:00",
           "end": "14:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-mamadeti-daurskaya",
+          "branchId": "demo-kolybel-daurskaya",
           "weekday": 5,
           "start": "16:00",
           "end": "19:00",
@@ -7499,7 +7515,7 @@ export const demoCatalog = {
       "features": {
         "children": true
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Мать и дитя» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-galimov-artem",
@@ -7510,32 +7526,32 @@ export const demoCatalog = {
         "child"
       ],
       "branchIds": [
-        "demo-real-mamadeti-daurskaya"
+        "demo-kolybel-daurskaya"
       ],
       "serviceIds": [
         "consult.pediatrician.first",
         "consult.pediatrician.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-mamadeti-daurskaya": "Mo,Tu,Fr 16:00-19:00; We 14:00-17:30,18:00-19:00"
+        "demo-kolybel-daurskaya": "Mo,Tu,Fr 16:00-19:00; We 14:00-17:30,18:00-19:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-mamadeti-daurskaya",
+          "branchId": "demo-kolybel-daurskaya",
           "weekday": 1,
           "start": "16:00",
           "end": "19:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-mamadeti-daurskaya",
+          "branchId": "demo-kolybel-daurskaya",
           "weekday": 2,
           "start": "16:00",
           "end": "19:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-mamadeti-daurskaya",
+          "branchId": "demo-kolybel-daurskaya",
           "weekday": 3,
           "start": "14:00",
           "end": "19:00",
@@ -7545,7 +7561,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-mamadeti-daurskaya",
+          "branchId": "demo-kolybel-daurskaya",
           "weekday": 5,
           "start": "16:00",
           "end": "19:00",
@@ -7557,7 +7573,7 @@ export const demoCatalog = {
       "features": {
         "children": true
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Мать и дитя» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-zueva-darya",
@@ -7569,18 +7585,18 @@ export const demoCatalog = {
         "child"
       ],
       "branchIds": [
-        "demo-real-mamadeti-daurskaya"
+        "demo-kolybel-daurskaya"
       ],
       "serviceIds": [
         "consult.endocrinologist.first",
         "consult.endocrinologist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-mamadeti-daurskaya": "Mo,Tu,We,Th,Fr 14:00-17:30,18:00-19:00"
+        "demo-kolybel-daurskaya": "Mo,Tu,We,Th,Fr 14:00-17:30,18:00-19:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-mamadeti-daurskaya",
+          "branchId": "demo-kolybel-daurskaya",
           "weekday": 1,
           "start": "14:00",
           "end": "19:00",
@@ -7590,7 +7606,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-mamadeti-daurskaya",
+          "branchId": "demo-kolybel-daurskaya",
           "weekday": 2,
           "start": "14:00",
           "end": "19:00",
@@ -7600,7 +7616,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-mamadeti-daurskaya",
+          "branchId": "demo-kolybel-daurskaya",
           "weekday": 3,
           "start": "14:00",
           "end": "19:00",
@@ -7610,7 +7626,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-mamadeti-daurskaya",
+          "branchId": "demo-kolybel-daurskaya",
           "weekday": 4,
           "start": "14:00",
           "end": "19:00",
@@ -7620,7 +7636,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-mamadeti-daurskaya",
+          "branchId": "demo-kolybel-daurskaya",
           "weekday": 5,
           "start": "14:00",
           "end": "19:00",
@@ -7635,7 +7651,7 @@ export const demoCatalog = {
       "features": {
         "children": true
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Мать и дитя» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-isaev-bulat",
@@ -7646,18 +7662,18 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-mamadeti-daurskaya"
+        "demo-kolybel-daurskaya"
       ],
       "serviceIds": [
         "consult.therapist.first",
         "consult.therapist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-mamadeti-daurskaya": "Mo,We 14:00-17:30,18:00-19:00; Th 08:00-14:00"
+        "demo-kolybel-daurskaya": "Mo,We 14:00-17:30,18:00-19:00; Th 08:00-14:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-mamadeti-daurskaya",
+          "branchId": "demo-kolybel-daurskaya",
           "weekday": 1,
           "start": "14:00",
           "end": "19:00",
@@ -7667,7 +7683,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-mamadeti-daurskaya",
+          "branchId": "demo-kolybel-daurskaya",
           "weekday": 3,
           "start": "14:00",
           "end": "19:00",
@@ -7677,7 +7693,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-mamadeti-daurskaya",
+          "branchId": "demo-kolybel-daurskaya",
           "weekday": 4,
           "start": "08:00",
           "end": "14:00",
@@ -7689,7 +7705,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Мать и дитя» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-kamalov-lenar",
@@ -7700,7 +7716,7 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-mamadeti-daurskaya"
+        "demo-kolybel-daurskaya"
       ],
       "serviceIds": [
         "consult.lor.first",
@@ -7708,25 +7724,25 @@ export const demoCatalog = {
         "proc.lor.tonsils"
       ],
       "hoursByBranch": {
-        "demo-real-mamadeti-daurskaya": "Mo,We 16:00-19:00; Fr 14:00-17:30,18:00-19:00"
+        "demo-kolybel-daurskaya": "Mo,We 16:00-19:00; Fr 14:00-17:30,18:00-19:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-mamadeti-daurskaya",
+          "branchId": "demo-kolybel-daurskaya",
           "weekday": 1,
           "start": "16:00",
           "end": "19:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-mamadeti-daurskaya",
+          "branchId": "demo-kolybel-daurskaya",
           "weekday": 3,
           "start": "16:00",
           "end": "19:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-mamadeti-daurskaya",
+          "branchId": "demo-kolybel-daurskaya",
           "weekday": 5,
           "start": "14:00",
           "end": "19:00",
@@ -7741,7 +7757,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Мать и дитя» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-tihonov-vadim",
@@ -7752,18 +7768,18 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-mamadeti-daurskaya"
+        "demo-kolybel-daurskaya"
       ],
       "serviceIds": [
         "consult.gynecologist.first",
         "consult.gynecologist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-mamadeti-daurskaya": "Mo,Tu 14:00-17:30,18:00-19:00; We 08:00-14:00"
+        "demo-kolybel-daurskaya": "Mo,Tu 14:00-17:30,18:00-19:00; We 08:00-14:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-mamadeti-daurskaya",
+          "branchId": "demo-kolybel-daurskaya",
           "weekday": 1,
           "start": "14:00",
           "end": "19:00",
@@ -7773,7 +7789,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-mamadeti-daurskaya",
+          "branchId": "demo-kolybel-daurskaya",
           "weekday": 2,
           "start": "14:00",
           "end": "19:00",
@@ -7783,7 +7799,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-mamadeti-daurskaya",
+          "branchId": "demo-kolybel-daurskaya",
           "weekday": 3,
           "start": "08:00",
           "end": "14:00",
@@ -7795,7 +7811,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Мать и дитя» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-lebedeva-darya",
@@ -7806,32 +7822,32 @@ export const demoCatalog = {
         "child"
       ],
       "branchIds": [
-        "demo-real-mamadeti-daurskaya"
+        "demo-kolybel-daurskaya"
       ],
       "serviceIds": [
         "consult.pediatrician.first",
         "consult.pediatrician.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-mamadeti-daurskaya": "Tu,We,Fr 16:00-19:00"
+        "demo-kolybel-daurskaya": "Tu,We,Fr 16:00-19:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-mamadeti-daurskaya",
+          "branchId": "demo-kolybel-daurskaya",
           "weekday": 2,
           "start": "16:00",
           "end": "19:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-mamadeti-daurskaya",
+          "branchId": "demo-kolybel-daurskaya",
           "weekday": 3,
           "start": "16:00",
           "end": "19:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-mamadeti-daurskaya",
+          "branchId": "demo-kolybel-daurskaya",
           "weekday": 5,
           "start": "16:00",
           "end": "19:00",
@@ -7843,7 +7859,7 @@ export const demoCatalog = {
       "features": {
         "children": true
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Мать и дитя» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-nizamova-liliya",
@@ -7854,7 +7870,7 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-nurievy-serova"
+        "demo-garmonia-serova"
       ],
       "serviceIds": [
         "consult.gynecologist.first",
@@ -7862,25 +7878,25 @@ export const demoCatalog = {
         "proc.gynecologist.ultrasound"
       ],
       "hoursByBranch": {
-        "demo-real-nurievy-serova": "Mo,Tu,Th 16:00-20:00; We 14:00-17:30,18:00-20:00"
+        "demo-garmonia-serova": "Mo,Tu,Th 16:00-20:00; We 14:00-17:30,18:00-20:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-nurievy-serova",
+          "branchId": "demo-garmonia-serova",
           "weekday": 1,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-nurievy-serova",
+          "branchId": "demo-garmonia-serova",
           "weekday": 2,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-nurievy-serova",
+          "branchId": "demo-garmonia-serova",
           "weekday": 3,
           "start": "14:00",
           "end": "20:00",
@@ -7890,7 +7906,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-nurievy-serova",
+          "branchId": "demo-garmonia-serova",
           "weekday": 4,
           "start": "16:00",
           "end": "20:00",
@@ -7902,7 +7918,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Клиника Нуриевых» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-afanasev-nikita",
@@ -7913,18 +7929,18 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-nurievy-zorge"
+        "demo-garmonia-zorge"
       ],
       "serviceIds": [
         "consult.urologist.first",
         "consult.urologist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-nurievy-zorge": "Mo,Tu,Th,Fr 14:00-17:30,18:00-20:00; We 10:00-13:30,14:00-18:00"
+        "demo-garmonia-zorge": "Mo,Tu,Th,Fr 14:00-17:30,18:00-20:00; We 10:00-13:30,14:00-18:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-nurievy-zorge",
+          "branchId": "demo-garmonia-zorge",
           "weekday": 1,
           "start": "14:00",
           "end": "20:00",
@@ -7934,7 +7950,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-nurievy-zorge",
+          "branchId": "demo-garmonia-zorge",
           "weekday": 2,
           "start": "14:00",
           "end": "20:00",
@@ -7944,7 +7960,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-nurievy-zorge",
+          "branchId": "demo-garmonia-zorge",
           "weekday": 3,
           "start": "10:00",
           "end": "18:00",
@@ -7954,7 +7970,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-nurievy-zorge",
+          "branchId": "demo-garmonia-zorge",
           "weekday": 4,
           "start": "14:00",
           "end": "20:00",
@@ -7964,7 +7980,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-nurievy-zorge",
+          "branchId": "demo-garmonia-zorge",
           "weekday": 5,
           "start": "14:00",
           "end": "20:00",
@@ -7979,7 +7995,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Клиника Нуриевых» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-bikmullina-zulfiya",
@@ -7990,18 +8006,18 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-nurievy-serova"
+        "demo-garmonia-serova"
       ],
       "serviceIds": [
         "consult.therapist.first",
         "consult.therapist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-nurievy-serova": "Tu,Th 14:00-17:30,18:00-20:00; Fr 08:00-14:00"
+        "demo-garmonia-serova": "Tu,Th 14:00-17:30,18:00-20:00; Fr 08:00-14:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-nurievy-serova",
+          "branchId": "demo-garmonia-serova",
           "weekday": 2,
           "start": "14:00",
           "end": "20:00",
@@ -8011,7 +8027,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-nurievy-serova",
+          "branchId": "demo-garmonia-serova",
           "weekday": 4,
           "start": "14:00",
           "end": "20:00",
@@ -8021,7 +8037,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-nurievy-serova",
+          "branchId": "demo-garmonia-serova",
           "weekday": 5,
           "start": "08:00",
           "end": "14:00",
@@ -8033,7 +8049,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Клиника Нуриевых» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-kiseleva-elena",
@@ -8044,18 +8060,18 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-nurievy-zorge"
+        "demo-garmonia-zorge"
       ],
       "serviceIds": [
         "consult.endocrinologist.first",
         "consult.endocrinologist.repeat"
       ],
       "hoursByBranch": {
-        "demo-real-nurievy-zorge": "Mo,Tu,We,Fr 14:00-17:30,18:00-20:00"
+        "demo-garmonia-zorge": "Mo,Tu,We,Fr 14:00-17:30,18:00-20:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-nurievy-zorge",
+          "branchId": "demo-garmonia-zorge",
           "weekday": 1,
           "start": "14:00",
           "end": "20:00",
@@ -8065,7 +8081,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-nurievy-zorge",
+          "branchId": "demo-garmonia-zorge",
           "weekday": 2,
           "start": "14:00",
           "end": "20:00",
@@ -8075,7 +8091,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-nurievy-zorge",
+          "branchId": "demo-garmonia-zorge",
           "weekday": 3,
           "start": "14:00",
           "end": "20:00",
@@ -8085,7 +8101,7 @@ export const demoCatalog = {
           ]
         },
         {
-          "branchId": "demo-real-nurievy-zorge",
+          "branchId": "demo-garmonia-zorge",
           "weekday": 5,
           "start": "14:00",
           "end": "20:00",
@@ -8100,7 +8116,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Клиника Нуриевых» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     },
     {
       "id": "demo-doc-borisova-guzel",
@@ -8111,7 +8127,7 @@ export const demoCatalog = {
         "adult"
       ],
       "branchIds": [
-        "demo-real-nurievy-serova"
+        "demo-garmonia-serova"
       ],
       "serviceIds": [
         "consult.gynecologist.first",
@@ -8119,39 +8135,39 @@ export const demoCatalog = {
         "proc.gynecologist.ultrasound"
       ],
       "hoursByBranch": {
-        "demo-real-nurievy-serova": "Mo,Tu,We,Th,Fr 16:00-20:00"
+        "demo-garmonia-serova": "Mo,Tu,We,Th,Fr 16:00-20:00"
       },
       "schedule": [
         {
-          "branchId": "demo-real-nurievy-serova",
+          "branchId": "demo-garmonia-serova",
           "weekday": 1,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-nurievy-serova",
+          "branchId": "demo-garmonia-serova",
           "weekday": 2,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-nurievy-serova",
+          "branchId": "demo-garmonia-serova",
           "weekday": 3,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-nurievy-serova",
+          "branchId": "demo-garmonia-serova",
           "weekday": 4,
           "start": "16:00",
           "end": "20:00",
           "breakAt": null
         },
         {
-          "branchId": "demo-real-nurievy-serova",
+          "branchId": "demo-garmonia-serova",
           "weekday": 5,
           "start": "16:00",
           "end": "20:00",
@@ -8163,7 +8179,7 @@ export const demoCatalog = {
       "features": {
         "children": false
       },
-      "description": "Демонстрационный врач: вымышленное лицо. Клиника «Клиника Нуриевых» реальная, но этот врач, его расписание и цены придуманы для показа записи."
+      "description": "Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи."
     }
   ],
   "prices": [
@@ -9133,607 +9149,607 @@ export const demoCatalog = {
       "price": 1550
     },
     {
-      "branchId": "demo-real-razumed-pushkina",
+      "branchId": "demo-kedr-pushkina",
       "serviceId": "consult.therapist.first",
       "price": 1900
     },
     {
-      "branchId": "demo-real-razumed-leningradskaya",
+      "branchId": "demo-kedr-leningradskaya",
       "serviceId": "consult.therapist.first",
       "price": 1900
     },
     {
-      "branchId": "demo-real-razumed-pushkina",
+      "branchId": "demo-kedr-pushkina",
       "serviceId": "consult.therapist.repeat",
       "price": 1600
     },
     {
-      "branchId": "demo-real-razumed-leningradskaya",
+      "branchId": "demo-kedr-leningradskaya",
       "serviceId": "consult.therapist.repeat",
       "price": 1600
     },
     {
-      "branchId": "demo-real-razumed-pushkina",
+      "branchId": "demo-kedr-pushkina",
       "serviceId": "consult.lor.first",
       "price": 2200
     },
     {
-      "branchId": "demo-real-razumed-leningradskaya",
+      "branchId": "demo-kedr-leningradskaya",
       "serviceId": "consult.lor.first",
       "price": 2200
     },
     {
-      "branchId": "demo-real-razumed-pushkina",
+      "branchId": "demo-kedr-pushkina",
       "serviceId": "consult.lor.repeat",
       "price": 1900
     },
     {
-      "branchId": "demo-real-razumed-leningradskaya",
+      "branchId": "demo-kedr-leningradskaya",
       "serviceId": "consult.lor.repeat",
       "price": 1900
     },
     {
-      "branchId": "demo-real-razumed-pushkina",
+      "branchId": "demo-kedr-pushkina",
       "serviceId": "consult.neurologist.first",
       "price": 2400
     },
     {
-      "branchId": "demo-real-razumed-leningradskaya",
+      "branchId": "demo-kedr-leningradskaya",
       "serviceId": "consult.neurologist.first",
       "price": 2400
     },
     {
-      "branchId": "demo-real-razumed-pushkina",
+      "branchId": "demo-kedr-pushkina",
       "serviceId": "consult.neurologist.repeat",
       "price": 2000
     },
     {
-      "branchId": "demo-real-razumed-leningradskaya",
+      "branchId": "demo-kedr-leningradskaya",
       "serviceId": "consult.neurologist.repeat",
       "price": 2000
     },
     {
-      "branchId": "demo-real-razumed-pushkina",
+      "branchId": "demo-kedr-pushkina",
       "serviceId": "consult.cardiologist.first",
       "price": 2500
     },
     {
-      "branchId": "demo-real-razumed-leningradskaya",
+      "branchId": "demo-kedr-leningradskaya",
       "serviceId": "consult.cardiologist.first",
       "price": 2500
     },
     {
-      "branchId": "demo-real-razumed-pushkina",
+      "branchId": "demo-kedr-pushkina",
       "serviceId": "consult.cardiologist.repeat",
       "price": 2100
     },
     {
-      "branchId": "demo-real-razumed-leningradskaya",
+      "branchId": "demo-kedr-leningradskaya",
       "serviceId": "consult.cardiologist.repeat",
       "price": 2100
     },
     {
-      "branchId": "demo-real-razumed-pushkina",
+      "branchId": "demo-kedr-pushkina",
       "serviceId": "consult.gynecologist.first",
       "price": 2300
     },
     {
-      "branchId": "demo-real-razumed-leningradskaya",
+      "branchId": "demo-kedr-leningradskaya",
       "serviceId": "consult.gynecologist.first",
       "price": 2300
     },
     {
-      "branchId": "demo-real-razumed-pushkina",
+      "branchId": "demo-kedr-pushkina",
       "serviceId": "consult.gynecologist.repeat",
       "price": 1900
     },
     {
-      "branchId": "demo-real-razumed-leningradskaya",
+      "branchId": "demo-kedr-leningradskaya",
       "serviceId": "consult.gynecologist.repeat",
       "price": 1900
     },
     {
-      "branchId": "demo-real-razumed-pushkina",
+      "branchId": "demo-kedr-pushkina",
       "serviceId": "proc.gynecologist.ultrasound",
       "price": 2200
     },
     {
-      "branchId": "demo-real-razumed-leningradskaya",
+      "branchId": "demo-kedr-leningradskaya",
       "serviceId": "proc.gynecologist.ultrasound",
       "price": 2200
     },
     {
-      "branchId": "demo-real-razumed-pushkina",
+      "branchId": "demo-kedr-pushkina",
       "serviceId": "consult.endocrinologist.first",
       "price": 2400
     },
     {
-      "branchId": "demo-real-razumed-leningradskaya",
+      "branchId": "demo-kedr-leningradskaya",
       "serviceId": "consult.endocrinologist.first",
       "price": 2400
     },
     {
-      "branchId": "demo-real-razumed-pushkina",
+      "branchId": "demo-kedr-pushkina",
       "serviceId": "consult.endocrinologist.repeat",
       "price": 2000
     },
     {
-      "branchId": "demo-real-razumed-leningradskaya",
+      "branchId": "demo-kedr-leningradskaya",
       "serviceId": "consult.endocrinologist.repeat",
       "price": 2000
     },
     {
-      "branchId": "demo-real-razumed-pushkina",
+      "branchId": "demo-kedr-pushkina",
       "serviceId": "consult.gastroenterologist.first",
       "price": 2400
     },
     {
-      "branchId": "demo-real-razumed-leningradskaya",
+      "branchId": "demo-kedr-leningradskaya",
       "serviceId": "consult.gastroenterologist.first",
       "price": 2400
     },
     {
-      "branchId": "demo-real-razumed-pushkina",
+      "branchId": "demo-kedr-pushkina",
       "serviceId": "consult.gastroenterologist.repeat",
       "price": 2000
     },
     {
-      "branchId": "demo-real-razumed-leningradskaya",
+      "branchId": "demo-kedr-leningradskaya",
       "serviceId": "consult.gastroenterologist.repeat",
       "price": 2000
     },
     {
-      "branchId": "demo-real-razumed-pushkina",
+      "branchId": "demo-kedr-pushkina",
       "serviceId": "consult.urologist.first",
       "price": 2300
     },
     {
-      "branchId": "demo-real-razumed-leningradskaya",
+      "branchId": "demo-kedr-leningradskaya",
       "serviceId": "consult.urologist.first",
       "price": 2300
     },
     {
-      "branchId": "demo-real-razumed-pushkina",
+      "branchId": "demo-kedr-pushkina",
       "serviceId": "consult.urologist.repeat",
       "price": 1900
     },
     {
-      "branchId": "demo-real-razumed-leningradskaya",
+      "branchId": "demo-kedr-leningradskaya",
       "serviceId": "consult.urologist.repeat",
       "price": 1900
     },
     {
-      "branchId": "demo-real-budzdorov-narimanova",
+      "branchId": "demo-vitaris-narimanova",
       "serviceId": "consult.therapist.first",
       "price": 2550
     },
     {
-      "branchId": "demo-real-budzdorov-narimanova",
+      "branchId": "demo-vitaris-narimanova",
       "serviceId": "consult.therapist.repeat",
       "price": 2150
     },
     {
-      "branchId": "demo-real-budzdorov-narimanova",
+      "branchId": "demo-vitaris-narimanova",
       "serviceId": "consult.lor.first",
       "price": 2950
     },
     {
-      "branchId": "demo-real-budzdorov-narimanova",
+      "branchId": "demo-vitaris-narimanova",
       "serviceId": "consult.lor.repeat",
       "price": 2550
     },
     {
-      "branchId": "demo-real-budzdorov-narimanova",
+      "branchId": "demo-vitaris-narimanova",
       "serviceId": "consult.cardiologist.first",
       "price": 3400
     },
     {
-      "branchId": "demo-real-budzdorov-narimanova",
+      "branchId": "demo-vitaris-narimanova",
       "serviceId": "consult.cardiologist.repeat",
       "price": 2850
     },
     {
-      "branchId": "demo-real-budzdorov-narimanova",
+      "branchId": "demo-vitaris-narimanova",
       "serviceId": "consult.dermatologist.first",
       "price": 3250
     },
     {
-      "branchId": "demo-real-budzdorov-narimanova",
+      "branchId": "demo-vitaris-narimanova",
       "serviceId": "consult.dermatologist.repeat",
       "price": 2700
     },
     {
-      "branchId": "demo-real-budzdorov-narimanova",
+      "branchId": "demo-vitaris-narimanova",
       "serviceId": "consult.gynecologist.first",
       "price": 3100
     },
     {
-      "branchId": "demo-real-budzdorov-narimanova",
+      "branchId": "demo-vitaris-narimanova",
       "serviceId": "consult.gynecologist.repeat",
       "price": 2550
     },
     {
-      "branchId": "demo-real-budzdorov-narimanova",
+      "branchId": "demo-vitaris-narimanova",
       "serviceId": "proc.gynecologist.ultrasound",
       "price": 2950
     },
     {
-      "branchId": "demo-real-budzdorov-narimanova",
+      "branchId": "demo-vitaris-narimanova",
       "serviceId": "consult.ophthalmologist.first",
       "price": 2850
     },
     {
-      "branchId": "demo-real-budzdorov-narimanova",
+      "branchId": "demo-vitaris-narimanova",
       "serviceId": "consult.ophthalmologist.repeat",
       "price": 2450
     },
     {
-      "branchId": "demo-real-budzdorov-narimanova",
+      "branchId": "demo-vitaris-narimanova",
       "serviceId": "proc.ophthalmologist.glasses",
       "price": 2150
     },
     {
-      "branchId": "demo-real-aibolit-maksimova",
+      "branchId": "demo-luchik-maksimova",
       "serviceId": "consult.therapist.first",
       "price": 1600
     },
     {
-      "branchId": "demo-real-aibolit-kurskaya",
+      "branchId": "demo-luchik-kurskaya",
       "serviceId": "consult.therapist.first",
       "price": 1600
     },
     {
-      "branchId": "demo-real-aibolit-maksimova",
+      "branchId": "demo-luchik-maksimova",
       "serviceId": "consult.therapist.repeat",
       "price": 1350
     },
     {
-      "branchId": "demo-real-aibolit-kurskaya",
+      "branchId": "demo-luchik-kurskaya",
       "serviceId": "consult.therapist.repeat",
       "price": 1350
     },
     {
-      "branchId": "demo-real-aibolit-maksimova",
+      "branchId": "demo-luchik-maksimova",
       "serviceId": "consult.pediatrician.first",
       "price": 1600
     },
     {
-      "branchId": "demo-real-aibolit-kurskaya",
+      "branchId": "demo-luchik-kurskaya",
       "serviceId": "consult.pediatrician.first",
       "price": 1600
     },
     {
-      "branchId": "demo-real-aibolit-maksimova",
+      "branchId": "demo-luchik-maksimova",
       "serviceId": "consult.pediatrician.repeat",
       "price": 1350
     },
     {
-      "branchId": "demo-real-aibolit-kurskaya",
+      "branchId": "demo-luchik-kurskaya",
       "serviceId": "consult.pediatrician.repeat",
       "price": 1350
     },
     {
-      "branchId": "demo-real-aibolit-maksimova",
+      "branchId": "demo-luchik-maksimova",
       "serviceId": "consult.lor.first",
       "price": 1850
     },
     {
-      "branchId": "demo-real-aibolit-kurskaya",
+      "branchId": "demo-luchik-kurskaya",
       "serviceId": "consult.lor.first",
       "price": 1850
     },
     {
-      "branchId": "demo-real-aibolit-maksimova",
+      "branchId": "demo-luchik-maksimova",
       "serviceId": "consult.lor.repeat",
       "price": 1600
     },
     {
-      "branchId": "demo-real-aibolit-kurskaya",
+      "branchId": "demo-luchik-kurskaya",
       "serviceId": "consult.lor.repeat",
       "price": 1600
     },
     {
-      "branchId": "demo-real-aibolit-maksimova",
+      "branchId": "demo-luchik-maksimova",
       "serviceId": "consult.neurologist.first",
       "price": 2050
     },
     {
-      "branchId": "demo-real-aibolit-kurskaya",
+      "branchId": "demo-luchik-kurskaya",
       "serviceId": "consult.neurologist.first",
       "price": 2050
     },
     {
-      "branchId": "demo-real-aibolit-maksimova",
+      "branchId": "demo-luchik-maksimova",
       "serviceId": "consult.neurologist.repeat",
       "price": 1700
     },
     {
-      "branchId": "demo-real-aibolit-kurskaya",
+      "branchId": "demo-luchik-kurskaya",
       "serviceId": "consult.neurologist.repeat",
       "price": 1700
     },
     {
-      "branchId": "demo-real-aibolit-maksimova",
+      "branchId": "demo-luchik-maksimova",
       "serviceId": "consult.ophthalmologist.first",
       "price": 1800
     },
     {
-      "branchId": "demo-real-aibolit-kurskaya",
+      "branchId": "demo-luchik-kurskaya",
       "serviceId": "consult.ophthalmologist.first",
       "price": 1800
     },
     {
-      "branchId": "demo-real-aibolit-maksimova",
+      "branchId": "demo-luchik-maksimova",
       "serviceId": "consult.ophthalmologist.repeat",
       "price": 1550
     },
     {
-      "branchId": "demo-real-aibolit-kurskaya",
+      "branchId": "demo-luchik-kurskaya",
       "serviceId": "consult.ophthalmologist.repeat",
       "price": 1550
     },
     {
-      "branchId": "demo-real-aibolit-maksimova",
+      "branchId": "demo-luchik-maksimova",
       "serviceId": "proc.ophthalmologist.glasses",
       "price": 1350
     },
     {
-      "branchId": "demo-real-aibolit-kurskaya",
+      "branchId": "demo-luchik-kurskaya",
       "serviceId": "proc.ophthalmologist.glasses",
       "price": 1350
     },
     {
-      "branchId": "demo-real-aibolit-maksimova",
+      "branchId": "demo-luchik-maksimova",
       "serviceId": "consult.dermatologist.first",
       "price": 2050
     },
     {
-      "branchId": "demo-real-aibolit-kurskaya",
+      "branchId": "demo-luchik-kurskaya",
       "serviceId": "consult.dermatologist.first",
       "price": 2050
     },
     {
-      "branchId": "demo-real-aibolit-maksimova",
+      "branchId": "demo-luchik-maksimova",
       "serviceId": "consult.dermatologist.repeat",
       "price": 1700
     },
     {
-      "branchId": "demo-real-aibolit-kurskaya",
+      "branchId": "demo-luchik-kurskaya",
       "serviceId": "consult.dermatologist.repeat",
       "price": 1700
     },
     {
-      "branchId": "demo-real-kuzlyar-kutuya",
+      "branchId": "demo-okulyar-kutuya",
       "serviceId": "consult.ophthalmologist.first",
       "price": 2100
     },
     {
-      "branchId": "demo-real-kuzlyar-lobachevskogo",
+      "branchId": "demo-okulyar-lobachevskogo",
       "serviceId": "consult.ophthalmologist.first",
       "price": 2100
     },
     {
-      "branchId": "demo-real-kuzlyar-kutuya",
+      "branchId": "demo-okulyar-kutuya",
       "serviceId": "consult.ophthalmologist.repeat",
       "price": 1800
     },
     {
-      "branchId": "demo-real-kuzlyar-lobachevskogo",
+      "branchId": "demo-okulyar-lobachevskogo",
       "serviceId": "consult.ophthalmologist.repeat",
       "price": 1800
     },
     {
-      "branchId": "demo-real-kuzlyar-kutuya",
+      "branchId": "demo-okulyar-kutuya",
       "serviceId": "proc.ophthalmologist.glasses",
       "price": 1600
     },
     {
-      "branchId": "demo-real-kuzlyar-lobachevskogo",
+      "branchId": "demo-okulyar-lobachevskogo",
       "serviceId": "proc.ophthalmologist.glasses",
       "price": 1600
     },
     {
-      "branchId": "demo-real-citidoc-zelenaya",
+      "branchId": "demo-meridian-zelenaya",
       "serviceId": "consult.therapist.first",
       "price": 1900
     },
     {
-      "branchId": "demo-real-citidoc-zelenaya",
+      "branchId": "demo-meridian-zelenaya",
       "serviceId": "consult.therapist.repeat",
       "price": 1600
     },
     {
-      "branchId": "demo-real-citidoc-zelenaya",
+      "branchId": "demo-meridian-zelenaya",
       "serviceId": "consult.lor.first",
       "price": 2200
     },
     {
-      "branchId": "demo-real-citidoc-zelenaya",
+      "branchId": "demo-meridian-zelenaya",
       "serviceId": "consult.lor.repeat",
       "price": 1900
     },
     {
-      "branchId": "demo-real-citidoc-zelenaya",
+      "branchId": "demo-meridian-zelenaya",
       "serviceId": "consult.neurologist.first",
       "price": 2400
     },
     {
-      "branchId": "demo-real-citidoc-zelenaya",
+      "branchId": "demo-meridian-zelenaya",
       "serviceId": "consult.neurologist.repeat",
       "price": 2000
     },
     {
-      "branchId": "demo-real-citidoc-zelenaya",
+      "branchId": "demo-meridian-zelenaya",
       "serviceId": "consult.cardiologist.first",
       "price": 2500
     },
     {
-      "branchId": "demo-real-citidoc-zelenaya",
+      "branchId": "demo-meridian-zelenaya",
       "serviceId": "consult.cardiologist.repeat",
       "price": 2100
     },
     {
-      "branchId": "demo-real-citidoc-zelenaya",
+      "branchId": "demo-meridian-zelenaya",
       "serviceId": "diag.ecg",
       "price": 900
     },
     {
-      "branchId": "demo-real-citidoc-zelenaya",
+      "branchId": "demo-meridian-zelenaya",
       "serviceId": "consult.gastroenterologist.first",
       "price": 2400
     },
     {
-      "branchId": "demo-real-citidoc-zelenaya",
+      "branchId": "demo-meridian-zelenaya",
       "serviceId": "consult.gastroenterologist.repeat",
       "price": 2000
     },
     {
-      "branchId": "demo-real-mamadeti-daurskaya",
+      "branchId": "demo-kolybel-daurskaya",
       "serviceId": "consult.gynecologist.first",
       "price": 3100
     },
     {
-      "branchId": "demo-real-mamadeti-daurskaya",
+      "branchId": "demo-kolybel-daurskaya",
       "serviceId": "consult.gynecologist.repeat",
       "price": 2550
     },
     {
-      "branchId": "demo-real-mamadeti-daurskaya",
+      "branchId": "demo-kolybel-daurskaya",
       "serviceId": "proc.gynecologist.ultrasound",
       "price": 2950
     },
     {
-      "branchId": "demo-real-mamadeti-daurskaya",
+      "branchId": "demo-kolybel-daurskaya",
       "serviceId": "consult.pediatrician.first",
       "price": 2550
     },
     {
-      "branchId": "demo-real-mamadeti-daurskaya",
+      "branchId": "demo-kolybel-daurskaya",
       "serviceId": "consult.pediatrician.repeat",
       "price": 2150
     },
     {
-      "branchId": "demo-real-mamadeti-daurskaya",
+      "branchId": "demo-kolybel-daurskaya",
       "serviceId": "consult.endocrinologist.first",
       "price": 3250
     },
     {
-      "branchId": "demo-real-mamadeti-daurskaya",
+      "branchId": "demo-kolybel-daurskaya",
       "serviceId": "consult.endocrinologist.repeat",
       "price": 2700
     },
     {
-      "branchId": "demo-real-mamadeti-daurskaya",
+      "branchId": "demo-kolybel-daurskaya",
       "serviceId": "consult.therapist.first",
       "price": 2550
     },
     {
-      "branchId": "demo-real-mamadeti-daurskaya",
+      "branchId": "demo-kolybel-daurskaya",
       "serviceId": "consult.therapist.repeat",
       "price": 2150
     },
     {
-      "branchId": "demo-real-mamadeti-daurskaya",
+      "branchId": "demo-kolybel-daurskaya",
       "serviceId": "consult.lor.first",
       "price": 2950
     },
     {
-      "branchId": "demo-real-mamadeti-daurskaya",
+      "branchId": "demo-kolybel-daurskaya",
       "serviceId": "consult.lor.repeat",
       "price": 2550
     },
     {
-      "branchId": "demo-real-mamadeti-daurskaya",
+      "branchId": "demo-kolybel-daurskaya",
       "serviceId": "proc.lor.tonsils",
       "price": 2050
     },
     {
-      "branchId": "demo-real-nurievy-serova",
+      "branchId": "demo-garmonia-serova",
       "serviceId": "consult.gynecologist.first",
       "price": 2300
     },
     {
-      "branchId": "demo-real-nurievy-zorge",
+      "branchId": "demo-garmonia-zorge",
       "serviceId": "consult.gynecologist.first",
       "price": 2300
     },
     {
-      "branchId": "demo-real-nurievy-serova",
+      "branchId": "demo-garmonia-serova",
       "serviceId": "consult.gynecologist.repeat",
       "price": 1900
     },
     {
-      "branchId": "demo-real-nurievy-zorge",
+      "branchId": "demo-garmonia-zorge",
       "serviceId": "consult.gynecologist.repeat",
       "price": 1900
     },
     {
-      "branchId": "demo-real-nurievy-serova",
+      "branchId": "demo-garmonia-serova",
       "serviceId": "proc.gynecologist.ultrasound",
       "price": 2200
     },
     {
-      "branchId": "demo-real-nurievy-zorge",
+      "branchId": "demo-garmonia-zorge",
       "serviceId": "proc.gynecologist.ultrasound",
       "price": 2200
     },
     {
-      "branchId": "demo-real-nurievy-serova",
+      "branchId": "demo-garmonia-serova",
       "serviceId": "consult.urologist.first",
       "price": 2300
     },
     {
-      "branchId": "demo-real-nurievy-zorge",
+      "branchId": "demo-garmonia-zorge",
       "serviceId": "consult.urologist.first",
       "price": 2300
     },
     {
-      "branchId": "demo-real-nurievy-serova",
+      "branchId": "demo-garmonia-serova",
       "serviceId": "consult.urologist.repeat",
       "price": 1900
     },
     {
-      "branchId": "demo-real-nurievy-zorge",
+      "branchId": "demo-garmonia-zorge",
       "serviceId": "consult.urologist.repeat",
       "price": 1900
     },
     {
-      "branchId": "demo-real-nurievy-serova",
+      "branchId": "demo-garmonia-serova",
       "serviceId": "consult.therapist.first",
       "price": 1900
     },
     {
-      "branchId": "demo-real-nurievy-zorge",
+      "branchId": "demo-garmonia-zorge",
       "serviceId": "consult.therapist.first",
       "price": 1900
     },
     {
-      "branchId": "demo-real-nurievy-serova",
+      "branchId": "demo-garmonia-serova",
       "serviceId": "consult.therapist.repeat",
       "price": 1600
     },
     {
-      "branchId": "demo-real-nurievy-zorge",
+      "branchId": "demo-garmonia-zorge",
       "serviceId": "consult.therapist.repeat",
       "price": 1600
     },
     {
-      "branchId": "demo-real-nurievy-serova",
+      "branchId": "demo-garmonia-serova",
       "serviceId": "consult.endocrinologist.first",
       "price": 2400
     },
     {
-      "branchId": "demo-real-nurievy-zorge",
+      "branchId": "demo-garmonia-zorge",
       "serviceId": "consult.endocrinologist.first",
       "price": 2400
     },
     {
-      "branchId": "demo-real-nurievy-serova",
+      "branchId": "demo-garmonia-serova",
       "serviceId": "consult.endocrinologist.repeat",
       "price": 2000
     },
     {
-      "branchId": "demo-real-nurievy-zorge",
+      "branchId": "demo-garmonia-zorge",
       "serviceId": "consult.endocrinologist.repeat",
       "price": 2000
     }
@@ -10121,20 +10137,6 @@ export const demoCatalog = {
       },
       {
         "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-maksimova",
-        "scope": "specialty",
-        "specialty": "therapist",
-        "access": "direct"
-      },
-      {
-        "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-kurskaya",
-        "scope": "specialty",
-        "specialty": "therapist",
-        "access": "direct"
-      },
-      {
-        "planId": "demo-basic",
         "branchId": "demo-beresta-azino",
         "scope": "specialty",
         "specialty": "lor",
@@ -10157,20 +10159,6 @@ export const demoCatalog = {
       {
         "planId": "demo-basic",
         "branchId": "demo-semya-moskovsky",
-        "scope": "specialty",
-        "specialty": "lor",
-        "access": "direct"
-      },
-      {
-        "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-maksimova",
-        "scope": "specialty",
-        "specialty": "lor",
-        "access": "direct"
-      },
-      {
-        "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-kurskaya",
         "scope": "specialty",
         "specialty": "lor",
         "access": "direct"
@@ -10205,20 +10193,6 @@ export const demoCatalog = {
       },
       {
         "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-maksimova",
-        "scope": "specialty",
-        "specialty": "ophthalmologist",
-        "access": "direct"
-      },
-      {
-        "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-kurskaya",
-        "scope": "specialty",
-        "specialty": "ophthalmologist",
-        "access": "direct"
-      },
-      {
-        "planId": "demo-basic",
         "branchId": "demo-beresta-azino",
         "scope": "specialty",
         "specialty": "gynecologist",
@@ -10241,20 +10215,6 @@ export const demoCatalog = {
       {
         "planId": "demo-basic",
         "branchId": "demo-semya-moskovsky",
-        "scope": "specialty",
-        "specialty": "gynecologist",
-        "access": "direct"
-      },
-      {
-        "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-maksimova",
-        "scope": "specialty",
-        "specialty": "gynecologist",
-        "access": "direct"
-      },
-      {
-        "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-kurskaya",
         "scope": "specialty",
         "specialty": "gynecologist",
         "access": "direct"
@@ -10289,20 +10249,6 @@ export const demoCatalog = {
       },
       {
         "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-maksimova",
-        "scope": "specialty",
-        "specialty": "surgeon",
-        "access": "direct"
-      },
-      {
-        "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-kurskaya",
-        "scope": "specialty",
-        "specialty": "surgeon",
-        "access": "direct"
-      },
-      {
-        "planId": "demo-basic",
         "branchId": "demo-beresta-azino",
         "scope": "specialty",
         "specialty": "traumatologist",
@@ -10325,20 +10271,6 @@ export const demoCatalog = {
       {
         "planId": "demo-basic",
         "branchId": "demo-semya-moskovsky",
-        "scope": "specialty",
-        "specialty": "traumatologist",
-        "access": "direct"
-      },
-      {
-        "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-maksimova",
-        "scope": "specialty",
-        "specialty": "traumatologist",
-        "access": "direct"
-      },
-      {
-        "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-kurskaya",
         "scope": "specialty",
         "specialty": "traumatologist",
         "access": "direct"
@@ -10370,22 +10302,6 @@ export const demoCatalog = {
       {
         "planId": "demo-basic",
         "branchId": "demo-semya-moskovsky",
-        "scope": "specialty",
-        "specialty": "neurologist",
-        "access": "referral_required",
-        "notes": "По направлению терапевта по программе."
-      },
-      {
-        "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-maksimova",
-        "scope": "specialty",
-        "specialty": "neurologist",
-        "access": "referral_required",
-        "notes": "По направлению терапевта по программе."
-      },
-      {
-        "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-kurskaya",
         "scope": "specialty",
         "specialty": "neurologist",
         "access": "referral_required",
@@ -10418,22 +10334,6 @@ export const demoCatalog = {
       {
         "planId": "demo-basic",
         "branchId": "demo-semya-moskovsky",
-        "scope": "specialty",
-        "specialty": "cardiologist",
-        "access": "referral_required",
-        "notes": "По направлению терапевта по программе."
-      },
-      {
-        "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-maksimova",
-        "scope": "specialty",
-        "specialty": "cardiologist",
-        "access": "referral_required",
-        "notes": "По направлению терапевта по программе."
-      },
-      {
-        "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-kurskaya",
         "scope": "specialty",
         "specialty": "cardiologist",
         "access": "referral_required",
@@ -10466,22 +10366,6 @@ export const demoCatalog = {
       {
         "planId": "demo-basic",
         "branchId": "demo-semya-moskovsky",
-        "scope": "specialty",
-        "specialty": "endocrinologist",
-        "access": "referral_required",
-        "notes": "По направлению терапевта по программе."
-      },
-      {
-        "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-maksimova",
-        "scope": "specialty",
-        "specialty": "endocrinologist",
-        "access": "referral_required",
-        "notes": "По направлению терапевта по программе."
-      },
-      {
-        "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-kurskaya",
         "scope": "specialty",
         "specialty": "endocrinologist",
         "access": "referral_required",
@@ -10514,22 +10398,6 @@ export const demoCatalog = {
       {
         "planId": "demo-basic",
         "branchId": "demo-semya-moskovsky",
-        "scope": "service",
-        "serviceId": "proc.lor.tonsils",
-        "access": "excluded",
-        "notes": "Процедуры не входят в Demo Basic."
-      },
-      {
-        "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-maksimova",
-        "scope": "service",
-        "serviceId": "proc.lor.tonsils",
-        "access": "excluded",
-        "notes": "Процедуры не входят в Demo Basic."
-      },
-      {
-        "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-kurskaya",
         "scope": "service",
         "serviceId": "proc.lor.tonsils",
         "access": "excluded",
@@ -10562,22 +10430,6 @@ export const demoCatalog = {
       {
         "planId": "demo-basic",
         "branchId": "demo-semya-moskovsky",
-        "scope": "service",
-        "serviceId": "proc.ophthalmologist.glasses",
-        "access": "excluded",
-        "notes": "Процедуры не входят в Demo Basic."
-      },
-      {
-        "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-maksimova",
-        "scope": "service",
-        "serviceId": "proc.ophthalmologist.glasses",
-        "access": "excluded",
-        "notes": "Процедуры не входят в Demo Basic."
-      },
-      {
-        "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-kurskaya",
         "scope": "service",
         "serviceId": "proc.ophthalmologist.glasses",
         "access": "excluded",
@@ -10610,22 +10462,6 @@ export const demoCatalog = {
       {
         "planId": "demo-basic",
         "branchId": "demo-semya-moskovsky",
-        "scope": "service",
-        "serviceId": "diag.ecg",
-        "access": "excluded",
-        "notes": "Процедуры не входят в Demo Basic."
-      },
-      {
-        "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-maksimova",
-        "scope": "service",
-        "serviceId": "diag.ecg",
-        "access": "excluded",
-        "notes": "Процедуры не входят в Demo Basic."
-      },
-      {
-        "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-kurskaya",
         "scope": "service",
         "serviceId": "diag.ecg",
         "access": "excluded",
@@ -10658,22 +10494,6 @@ export const demoCatalog = {
       {
         "planId": "demo-basic",
         "branchId": "demo-semya-moskovsky",
-        "scope": "service",
-        "serviceId": "proc.gynecologist.ultrasound",
-        "access": "excluded",
-        "notes": "Процедуры не входят в Demo Basic."
-      },
-      {
-        "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-maksimova",
-        "scope": "service",
-        "serviceId": "proc.gynecologist.ultrasound",
-        "access": "excluded",
-        "notes": "Процедуры не входят в Demo Basic."
-      },
-      {
-        "planId": "demo-basic",
-        "branchId": "demo-real-aibolit-kurskaya",
         "scope": "service",
         "serviceId": "proc.gynecologist.ultrasound",
         "access": "excluded",
@@ -10754,48 +10574,6 @@ export const demoCatalog = {
       {
         "planId": "demo-standard",
         "branchId": "demo-semya-moskovsky",
-        "scope": "all_outpatient",
-        "access": "direct"
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-razumed-pushkina",
-        "scope": "all_outpatient",
-        "access": "direct"
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-razumed-leningradskaya",
-        "scope": "all_outpatient",
-        "access": "direct"
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-aibolit-maksimova",
-        "scope": "all_outpatient",
-        "access": "direct"
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-aibolit-kurskaya",
-        "scope": "all_outpatient",
-        "access": "direct"
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-kuzlyar-kutuya",
-        "scope": "all_outpatient",
-        "access": "direct"
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-kuzlyar-lobachevskogo",
-        "scope": "all_outpatient",
-        "access": "direct"
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-citidoc-zelenaya",
         "scope": "all_outpatient",
         "access": "direct"
       },
@@ -10898,62 +10676,6 @@ export const demoCatalog = {
       {
         "planId": "demo-standard",
         "branchId": "demo-semya-moskovsky",
-        "scope": "service",
-        "serviceId": "proc.lor.tonsils",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-razumed-pushkina",
-        "scope": "service",
-        "serviceId": "proc.lor.tonsils",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-razumed-leningradskaya",
-        "scope": "service",
-        "serviceId": "proc.lor.tonsils",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-aibolit-maksimova",
-        "scope": "service",
-        "serviceId": "proc.lor.tonsils",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-aibolit-kurskaya",
-        "scope": "service",
-        "serviceId": "proc.lor.tonsils",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-kuzlyar-kutuya",
-        "scope": "service",
-        "serviceId": "proc.lor.tonsils",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-kuzlyar-lobachevskogo",
-        "scope": "service",
-        "serviceId": "proc.lor.tonsils",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-citidoc-zelenaya",
         "scope": "service",
         "serviceId": "proc.lor.tonsils",
         "access": "approval_required",
@@ -11065,62 +10787,6 @@ export const demoCatalog = {
       },
       {
         "planId": "demo-standard",
-        "branchId": "demo-real-razumed-pushkina",
-        "scope": "service",
-        "serviceId": "proc.ophthalmologist.glasses",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-razumed-leningradskaya",
-        "scope": "service",
-        "serviceId": "proc.ophthalmologist.glasses",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-aibolit-maksimova",
-        "scope": "service",
-        "serviceId": "proc.ophthalmologist.glasses",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-aibolit-kurskaya",
-        "scope": "service",
-        "serviceId": "proc.ophthalmologist.glasses",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-kuzlyar-kutuya",
-        "scope": "service",
-        "serviceId": "proc.ophthalmologist.glasses",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-kuzlyar-lobachevskogo",
-        "scope": "service",
-        "serviceId": "proc.ophthalmologist.glasses",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-citidoc-zelenaya",
-        "scope": "service",
-        "serviceId": "proc.ophthalmologist.glasses",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
         "branchId": "demo-yasen-centr",
         "scope": "service",
         "serviceId": "proc.dermatologist.dermatoscopy",
@@ -11218,62 +10884,6 @@ export const demoCatalog = {
       {
         "planId": "demo-standard",
         "branchId": "demo-semya-moskovsky",
-        "scope": "service",
-        "serviceId": "proc.dermatologist.dermatoscopy",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-razumed-pushkina",
-        "scope": "service",
-        "serviceId": "proc.dermatologist.dermatoscopy",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-razumed-leningradskaya",
-        "scope": "service",
-        "serviceId": "proc.dermatologist.dermatoscopy",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-aibolit-maksimova",
-        "scope": "service",
-        "serviceId": "proc.dermatologist.dermatoscopy",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-aibolit-kurskaya",
-        "scope": "service",
-        "serviceId": "proc.dermatologist.dermatoscopy",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-kuzlyar-kutuya",
-        "scope": "service",
-        "serviceId": "proc.dermatologist.dermatoscopy",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-kuzlyar-lobachevskogo",
-        "scope": "service",
-        "serviceId": "proc.dermatologist.dermatoscopy",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-citidoc-zelenaya",
         "scope": "service",
         "serviceId": "proc.dermatologist.dermatoscopy",
         "access": "approval_required",
@@ -11385,62 +10995,6 @@ export const demoCatalog = {
       },
       {
         "planId": "demo-standard",
-        "branchId": "demo-real-razumed-pushkina",
-        "scope": "service",
-        "serviceId": "proc.gynecologist.ultrasound",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-razumed-leningradskaya",
-        "scope": "service",
-        "serviceId": "proc.gynecologist.ultrasound",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-aibolit-maksimova",
-        "scope": "service",
-        "serviceId": "proc.gynecologist.ultrasound",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-aibolit-kurskaya",
-        "scope": "service",
-        "serviceId": "proc.gynecologist.ultrasound",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-kuzlyar-kutuya",
-        "scope": "service",
-        "serviceId": "proc.gynecologist.ultrasound",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-kuzlyar-lobachevskogo",
-        "scope": "service",
-        "serviceId": "proc.gynecologist.ultrasound",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-citidoc-zelenaya",
-        "scope": "service",
-        "serviceId": "proc.gynecologist.ultrasound",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
         "branchId": "demo-yasen-centr",
         "scope": "service",
         "serviceId": "diag.ecg",
@@ -11538,62 +11092,6 @@ export const demoCatalog = {
       {
         "planId": "demo-standard",
         "branchId": "demo-semya-moskovsky",
-        "scope": "service",
-        "serviceId": "diag.ecg",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-razumed-pushkina",
-        "scope": "service",
-        "serviceId": "diag.ecg",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-razumed-leningradskaya",
-        "scope": "service",
-        "serviceId": "diag.ecg",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-aibolit-maksimova",
-        "scope": "service",
-        "serviceId": "diag.ecg",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-aibolit-kurskaya",
-        "scope": "service",
-        "serviceId": "diag.ecg",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-kuzlyar-kutuya",
-        "scope": "service",
-        "serviceId": "diag.ecg",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-kuzlyar-lobachevskogo",
-        "scope": "service",
-        "serviceId": "diag.ecg",
-        "access": "approval_required",
-        "notes": "Процедура — после согласования со страховой."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-citidoc-zelenaya",
         "scope": "service",
         "serviceId": "diag.ecg",
         "access": "approval_required",
@@ -11714,62 +11212,6 @@ export const demoCatalog = {
       {
         "planId": "demo-standard",
         "branchId": "demo-semya-moskovsky",
-        "scope": "specialty",
-        "specialty": "psychiatrist",
-        "access": "excluded",
-        "notes": "Психиатрия не входит в Demo Standard."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-razumed-pushkina",
-        "scope": "specialty",
-        "specialty": "psychiatrist",
-        "access": "excluded",
-        "notes": "Психиатрия не входит в Demo Standard."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-razumed-leningradskaya",
-        "scope": "specialty",
-        "specialty": "psychiatrist",
-        "access": "excluded",
-        "notes": "Психиатрия не входит в Demo Standard."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-aibolit-maksimova",
-        "scope": "specialty",
-        "specialty": "psychiatrist",
-        "access": "excluded",
-        "notes": "Психиатрия не входит в Demo Standard."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-aibolit-kurskaya",
-        "scope": "specialty",
-        "specialty": "psychiatrist",
-        "access": "excluded",
-        "notes": "Психиатрия не входит в Demo Standard."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-kuzlyar-kutuya",
-        "scope": "specialty",
-        "specialty": "psychiatrist",
-        "access": "excluded",
-        "notes": "Психиатрия не входит в Demo Standard."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-kuzlyar-lobachevskogo",
-        "scope": "specialty",
-        "specialty": "psychiatrist",
-        "access": "excluded",
-        "notes": "Психиатрия не входит в Demo Standard."
-      },
-      {
-        "planId": "demo-standard",
-        "branchId": "demo-real-citidoc-zelenaya",
         "scope": "specialty",
         "specialty": "psychiatrist",
         "access": "excluded",
@@ -11873,67 +11315,67 @@ export const demoCatalog = {
       },
       {
         "planId": "demo-premium",
-        "branchId": "demo-real-razumed-pushkina",
+        "branchId": "demo-kedr-pushkina",
         "scope": "all_outpatient",
         "access": "direct"
       },
       {
         "planId": "demo-premium",
-        "branchId": "demo-real-razumed-leningradskaya",
+        "branchId": "demo-kedr-leningradskaya",
         "scope": "all_outpatient",
         "access": "direct"
       },
       {
         "planId": "demo-premium",
-        "branchId": "demo-real-budzdorov-narimanova",
+        "branchId": "demo-vitaris-narimanova",
         "scope": "all_outpatient",
         "access": "direct"
       },
       {
         "planId": "demo-premium",
-        "branchId": "demo-real-aibolit-maksimova",
+        "branchId": "demo-luchik-maksimova",
         "scope": "all_outpatient",
         "access": "direct"
       },
       {
         "planId": "demo-premium",
-        "branchId": "demo-real-aibolit-kurskaya",
+        "branchId": "demo-luchik-kurskaya",
         "scope": "all_outpatient",
         "access": "direct"
       },
       {
         "planId": "demo-premium",
-        "branchId": "demo-real-kuzlyar-kutuya",
+        "branchId": "demo-okulyar-kutuya",
         "scope": "all_outpatient",
         "access": "direct"
       },
       {
         "planId": "demo-premium",
-        "branchId": "demo-real-kuzlyar-lobachevskogo",
+        "branchId": "demo-okulyar-lobachevskogo",
         "scope": "all_outpatient",
         "access": "direct"
       },
       {
         "planId": "demo-premium",
-        "branchId": "demo-real-citidoc-zelenaya",
+        "branchId": "demo-meridian-zelenaya",
         "scope": "all_outpatient",
         "access": "direct"
       },
       {
         "planId": "demo-premium",
-        "branchId": "demo-real-mamadeti-daurskaya",
+        "branchId": "demo-kolybel-daurskaya",
         "scope": "all_outpatient",
         "access": "direct"
       },
       {
         "planId": "demo-premium",
-        "branchId": "demo-real-nurievy-serova",
+        "branchId": "demo-garmonia-serova",
         "scope": "all_outpatient",
         "access": "direct"
       },
       {
         "planId": "demo-premium",
-        "branchId": "demo-real-nurievy-zorge",
+        "branchId": "demo-garmonia-zorge",
         "scope": "all_outpatient",
         "access": "direct"
       },
