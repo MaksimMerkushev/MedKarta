@@ -66,7 +66,7 @@ erDiagram
 ### Справочник частных клиник — `data/private/catalog.json`
 
 Строится `npm run data:build` из принятых снимков сборщика
-([data-pipeline.md](data-pipeline.md)). Структура и правила проверки —
+(`internal-docs/data-pipeline.md`). Структура и правила проверки —
 `validatePrivateCatalog` в [shared/privateCatalog.js](../shared/privateCatalog.js):
 
 ```text
@@ -273,8 +273,8 @@ CREATE TABLE privacy_requests (                 -- схема 7: обращен�
 заявки, истёкшие больше 30 дней назад, — тоже; заодно — просроченные вызовы,
 счётчики подбора, доверенные устройства и записи об отправленных письмах, а также
 записи журнала согласий удалённых аккаунтов старше 3 лет и обращения, закрытые
-больше 3 лет назад. Подробности о ролях и безопасности — [accounts.md](accounts.md),
-о сроках хранения — [privacy/05-retention-and-destruction.md](privacy/05-retention-and-destruction.md).
+больше 3 лет назад. Подробности о ролях и безопасности — `internal-docs/accounts.md`,
+о сроках хранения — `internal-docs/privacy/05-retention-and-destruction.md`.
 
 Вне базы, рядом с ней: `erasures.jsonl` — строка `{userId, at}` на каждое
 удаление аккаунта (без email), чтобы повторить удаление после восстановления
@@ -349,7 +349,7 @@ CREATE INDEX bookings_account ON bookings(account_id, created_at) WHERE account_
 
 Типы событий: `search`, `result_open`, `contact_click`, `route_build`,
 `external_map_click`, `feedback`, `data_report`; поля каждого — в
-[analytics.md](analytics.md).
+`internal-docs/analytics.md`.
 
 ## Сборщик данных
 
@@ -359,7 +359,7 @@ CREATE INDEX bookings_account ON bookings(account_id, created_at) WHERE account_
 | `data/collected/<источник>.json` | принятые снимки | да (кроме `demo-*`) |
 | `data/review/pending.json` | очередь ручной проверки с сырым текстом страниц | нет |
 
-Подробно — [data-pipeline.md](data-pipeline.md).
+Подробно — `internal-docs/data-pipeline.md`.
 
 ## Состояние в браузере
 

@@ -23,7 +23,7 @@
 | `node scripts/e2e-register.mjs` | 13 из 13: отметка о соглашении снята по умолчанию, на форме ровно одна отметка, без неё форма не уходит, ссылки ведут на редакции; `/legal/privacy` на 375 px; «Мои данные»: история редакций, обращение (письмо без текста), выгрузка после подтверждения личности без секретов |
 | `node scripts/e2e-auth.mjs` | 25 из 25: приглашение пользователя — с отметкой; только клавиатурой — Tab до отметки, пробел, Tab до кнопки |
 | `node scripts/e2e-admin.mjs` | 20 из 20: шаг 22 — обращение в панели взято в работу и закрыто, запись в журнале действий; шаг 23 — ассистент: без пропуска `401`, пропуск `Path=/api/chat`, `HttpOnly`, `SameSite=Strict`, без id; жалоба «болит горло» — ответ «ЛОР», в журнале сервера её нет |
-| `npm run eval:privacy -- --split all` | `structured`: 0 утечек; 2296 примеров со сведениями о здоровье — 0 ушло модели. `hybrid`: 3 утечки известного вида («Жене нужен …»), сведения о здоровье — 0 ушло ([privacy-evaluation.md](privacy-evaluation.md)) |
+| `npm run eval:privacy -- --split all` | `structured`: 0 утечек; 2296 примеров со сведениями о здоровье — 0 ушло модели. `hybrid`: 3 утечки известного вида («Жене нужен …»), сведения о здоровье — 0 ушло (`internal-docs/privacy-evaluation.md`) |
 | ESLint | 284 файла, 0 ошибок, 0 предупреждений (ESLint 10.1.0, конфигурация проекта; из `eslint-plugin-react-hooks` — `rules-of-hooks` и `exhaustive-deps`) |
 | Сборка | фронтенд собран `esbuild` + Tailwind 4 из тех же исходников (54 файла в `dist/`); `vite build` в среде недоступна (нет реестра npm) |
 | `node docs/tools/check-docs.mjs`, `check-site.mjs` | ошибок нет |
@@ -89,7 +89,7 @@ Windows Hello, аппаратные ключи) не проверялись.
 и `DEMO_DATA=on`; пользователи синтетические (`qa.*@medkarta.test`), модель не
 подключена — ассистент работает локальным планировщиком (это его настоящий путь,
 когда модель недоступна). Найденное и исправленное —
-[18-known-limitations.md](18-known-limitations.md#qa-аудит-в-браузере-19102026).
+`internal-docs/18-known-limitations.md`.
 
 | Проверка | Результат |
 |---|---|
@@ -338,5 +338,5 @@ node --test tests/secure-auth-audit.test.js  # исправления аудит
 Синтаксис диаграмм проверялся рендером каждой диаграммы через
 `@mermaid-js/mermaid-cli` (Mermaid 11.14.0), разметка — `markdownlint-cli`
 с конфигурацией [docs/.markdownlint.jsonc](.markdownlint.jsonc). Результаты —
-в [18-known-limitations.md](18-known-limitations.md), раздел «Проверка
+в `internal-docs/18-known-limitations.md`, раздел «Проверка
 документации».

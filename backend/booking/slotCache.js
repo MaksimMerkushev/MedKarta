@@ -43,6 +43,7 @@ export const groupByPair = (slots, pairs) => {
 export const createLocalSlotSource = (connector) => Object.freeze({
   freeSlots: async (query) => groupByPair(await connector.listSlots(query), query.pairs),
   invalidateSlot: () => {},
+  invalidateAll: () => {},
   stats: () => null,
 });
 
@@ -50,6 +51,7 @@ export const createLocalSlotSource = (connector) => Object.freeze({
 const NO_SLOTS = Object.freeze({
   freeSlots: async () => new Map(),
   invalidateSlot: () => {},
+  invalidateAll: () => {},
   stats: () => null,
 });
 
@@ -145,13 +147,20 @@ export const createSlotCache = ({
     if (key) forget(key);
   };
 
+  /** Расписание изменилось в МИС (синхронизация, webhook) — всё перечитывается при следующем поиске. */
+  const invalidateAll = () => {
+    for (const key of [...entries.keys()]) forget(key);
+  };
+
   const stats = () => ({ pairs: entries.size, ...counters });
 
-  return Object.freeze({ freeSlots, invalidateSlot, stats });
+  return Object.freeze({ freeSlots, invalidateSlot, invalidateAll, stats });
 };
 
 /** Источник слотов для подбора — по возможностям коннектора. */
 export const createSlotSource = ({ connector, ...options }) => {
   if (!connector.can.slots) return NO_SLOTS;
+  // Маршрутизатор коннекторов (booking/mis/router.js) собирает свой источник: демо — напрямую, МИС — через кэш.
+  if (typeof connector.createSlotSource === 'function') return connector.createSlotSource(options);
   return connector.localSlots ? createLocalSlotSource(connector) : createSlotCache({ connector, ...options });
 };

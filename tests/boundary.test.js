@@ -70,11 +70,31 @@ describe('Граница доверия в исходниках', () => {
       // первые 5 символов SHA-1 (k-анонимность); пароль, email и данные пользователя не уходят
       // (проверяется в secure-auth.test.js).
       path.join('backend', 'accounts', 'breachedPasswords.js'),
+      // Запросы к МИС клиник: только хосты из конфигурации интеграции, https, без частных
+      // адресов (SSRF). Уходят данные записи в МИС клиники, а не текст разговора с ассистентом.
+      path.join('backend', 'booking', 'mis', 'httpClient.js'),
     ];
 
     for (const caller of callers) {
       assert.ok(allowed.includes(caller), `неожиданный исходящий вызов в ${caller}`);
     }
+  });
+
+  it('модель и МИС не связаны: слой МИС не знает о модели и шлюзе, ассистент — о МИС', async () => {
+    const files = await walk(BACKEND_DIR);
+    const offenders = [];
+    for (const file of files) {
+      const relative = path.relative(ROOT, file);
+      const source = await readFile(file, 'utf8');
+      const imports = [...source.matchAll(/from\s+['"]([^'"]+)['"]/g)].map((match) => path.join(path.dirname(relative), match[1]));
+      if (relative.startsWith(path.join('backend', 'booking', 'mis'))) {
+        for (const target of imports) if (/backend[\\/](planner|privacy|understanding)[\\/]|backend[\\/]pipeline\.js/.test(target)) offenders.push(`${relative} → ${target}`);
+      }
+      if (/^backend[\\/](planner|privacy|understanding)[\\/]|^backend[\\/]pipeline\.js$/.test(relative)) {
+        for (const target of imports) if (/backend[\\/]booking[\\/]mis[\\/]/.test(target)) offenders.push(`${relative} → ${target}`);
+      }
+    }
+    assert.deepEqual(offenders, []);
   });
 
   it('в api/ не осталось прямого console-логирования', async () => {

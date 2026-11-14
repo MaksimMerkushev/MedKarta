@@ -24,13 +24,16 @@ import privacyHandler, { LEGAL_PREFIX, PRIVACY_PREFIX } from './api/privacy.js';
 import chatHandler from './api/chat.js';
 import { withChatAccess } from './api/chatAccess.js';
 import configHandler from './api/config.js';
-import { healthHandler } from './api/health.js';
+import { healthHandler, readyHandler } from './api/health.js';
+import integrationsHandler, { INTEGRATIONS_PREFIX } from './api/integrations.js';
 import demoBookingHandler, { BOOKING_PATHS } from './api/demoBooking.js';
+import labsHandler, { LABS_PREFIX } from './api/labs.js';
 import eventsHandler from './api/events.js';
 import routeHandler from './api/route.js';
 import travelTimesHandler from './api/travelTimes.js';
 import { applySecurityHeaders, isTokenPage } from './http/securityHeaders.js';
 import { rateLimitKey, validateTrustProxy } from './http/rateLimit.js';
+import { allowedHostsFromEnv } from './http/request.js';
 import { getDefaultRoutingEngine } from './routing/engine.js';
 import { logger } from './observability/safeLogger.js';
 import { requestStats } from './observability/requestStats.js';
@@ -56,6 +59,16 @@ try {
 } catch (error) {
   logger.error('server.bad_config', error, { code: 'TRUST_PROXY' });
   process.exit(1);
+}
+
+/*
+ * Без ALLOWED_HOSTS API отвечает на запросы с любым заголовком Host (чужой
+ * домен, направленный на наш адрес). Запуск не прерывается — работающий сайт
+ * не должен упасть из-за пропущенной переменной, — но в журнале это видно, а
+ * в админ-панели («Система») компонент показан с ошибкой.
+ */
+if ((process.env.NODE_ENV === 'production' || process.env.APP_ENV === 'production') && allowedHostsFromEnv().length === 0) {
+  logger.warn('server.allowed_hosts_missing', { status: 'not_set' });
 }
 
 const PORT = Number(process.env.PORT) || 3001;
@@ -102,7 +115,7 @@ const resolveStaticPath = (requestUrl) => {
  * Без сжатия main.js уходит целиком (3,7 МБ против ~0,3 МБ), и одно ядро
  * упирается в отдачу статики раньше, чем в API. Сжатый вариант считается один
  * раз и живёт в памяти, пока файл не изменился. В продакшене статику отдаёт
- * nginx (gzip, см. docs/deployment.md); это запасной путь.
+ * nginx (gzip, см. internal-docs/deployment.md); это запасной путь.
  */
 const COMPRESSIBLE = new Set(['.html', '.js', '.css', '.json', '.svg', '.webmanifest']);
 const MAX_GZIP_SOURCE_BYTES = 8 * 1024 * 1024;
@@ -204,6 +217,7 @@ const API_HANDLERS = new Map([
   ['/api/events', eventsHandler],
   ['/api/config', configHandler],
   ['/api/health', healthHandler],
+  ['/api/health/ready', readyHandler],
   // Личный кабинет: вход, программа ДМС, избранное (backend/api/account.js).
   ...ACCOUNT_PATHS.map((apiPath) => [apiPath, accountHandler]),
   // Приглашения, активация аккаунта и ссылки для смены пароля (backend/api/activation.js).
@@ -226,6 +240,10 @@ const apiPathOf = (url) => {
 const PREFIX_HANDLERS = [
   [ADMIN_PREFIX, adminHandler],
   [ME_PREFIX, meHandler],
+  // Лаборатории: каталог, подбор корзины, расписание, демо-запись (backend/api/labs.js).
+  [LABS_PREFIX, labsHandler],
+  // Интеграции с МИС: webhook-события (backend/api/integrations.js; без MIS_INTEGRATIONS=on — 404).
+  [INTEGRATIONS_PREFIX, integrationsHandler],
   // Документы (публично) и права субъекта ПДн (api/privacy.js).
   [LEGAL_PREFIX, privacyHandler],
   [PRIVACY_PREFIX, privacyHandler],

@@ -2,7 +2,7 @@
  * © 2026 МедКарта Казань. Все права защищены.
  *
  * Корень приложения: /admin…, /profile, /login, /activate, /register…,
- * /email/confirm и /legal/… — отдельными чанками (карта их код не грузит), всё
+ * /email/confirm, /legal/… и /labs… — отдельными чанками (карта их код не грузит), всё
  * остальное — карта.
  */
 import { lazy, Suspense } from 'react'
@@ -16,6 +16,7 @@ const ActivationPage = lazy(() => import('./auth/ActivationPage.jsx'))
 const RegisterPage = lazy(() => import('./auth/RegisterPage.jsx'))
 const EmailConfirmPage = lazy(() => import('./auth/EmailConfirmPage.jsx'))
 const LegalPage = lazy(() => import('./legal/LegalPage.jsx'))
+const LabsPage = lazy(() => import('./labs/LabsPage.jsx'))
 
 const Fallback = () => <div className="h-full bg-slate-50 dark:bg-slate-950" />
 const AuthFallback = () => <div className="h-full bg-white dark:bg-slate-950" />
@@ -39,6 +40,9 @@ export default function Root() {
   }
   if (path === '/email/confirm') {
     return <Suspense fallback={<AuthFallback />}><EmailConfirmPage /></Suspense>
+  }
+  if (path === '/labs' || path.startsWith('/labs/')) {
+    return <Suspense fallback={<Fallback />}><LabsPage /></Suspense>
   }
   if (path === '/legal' || path.startsWith('/legal/')) {
     return <Suspense fallback={<AuthFallback />}><LegalPage /></Suspense>

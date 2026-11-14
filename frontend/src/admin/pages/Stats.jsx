@@ -439,7 +439,7 @@ function MailTab({ data, chart }) {
       </div>
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2 [&>*]:min-w-0">
         <ChartCard title="Письма" {...chart} series={[{ key: 'sent', label: 'Отправлено', values: mail.series.sent, color: '--viz-1' }, { key: 'failed', label: 'Не отправлено', values: mail.series.failed, color: '--viz-2' }]} emptyText="Писем за период не было" />
-        <ListCard title="Причины неотправки" description="Коды — в docs/mail-setup.md" items={bars(mail.errors)} empty="Сбоев за период не было" />
+        <ListCard title="Причины неотправки" description="Коды — в internal-docs/mail-setup.md" items={bars(mail.errors)} empty="Сбоев за период не было" />
       </div>
       <Card title="По видам" bodyClassName="p-0">
         {mail.byKind.length ? (

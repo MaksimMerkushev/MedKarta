@@ -9,7 +9,7 @@
  * `npm run accounts -- reapply-erasures` берёт id отсюда (файл лежит рядом
  * с базой, но не внутри неё, поэтому восстановление старой копии его не
  * откатывает). Файл стоит копировать вместе с копиями базы
- * (docs/privacy/05-retention-and-destruction.md).
+ * (internal-docs/privacy/05-retention-and-destruction.md).
  */
 
 import fs from 'node:fs';

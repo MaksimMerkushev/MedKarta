@@ -5,7 +5,7 @@
  * они не теряются при смене хостинга и проверяются тестом.
  *
  * Если HTML отдаёт nginx, а не этот сервер, те же заголовки для страницы
- * должен выставлять nginx (фрагмент — в docs/deployment.md): заголовки на
+ * должен выставлять nginx (фрагмент — в internal-docs/deployment.md): заголовки на
  * ответах API страницу не защищают.
  */
 
@@ -52,7 +52,7 @@ export const SECURITY_HEADERS = Object.freeze({
 /*
  * Страницы со ссылками-ключами в адресе (#token=…): Referer не уходит
  * никуда. Токен во фрагменте и так не попадает в Referer, это — вторая
- * линия защиты (и для nginx — тот же заголовок, docs/deployment.md).
+ * линия защиты (и для nginx — тот же заголовок, internal-docs/deployment.md).
  */
 export const TOKEN_PAGES = Object.freeze(['/activate', '/register/confirm', '/email/confirm']);
 export const isTokenPage = (pathname) => TOKEN_PAGES.includes(String(pathname || '').replace(/\/+$/, '') || '/');

@@ -26,8 +26,9 @@ export default function MyBookingsPanel({ bookings, inAccount = false, onChange,
         const fresh = Object.fromEntries(payload.bookings.map((item, index) => [bookings[index].number, item.found ? item.status : 'NOT_FOUND']));
         setStatuses(fresh);
         // Сохраняем то, что знает сервер (отмена в другой вкладке, сброс демо), — иначе значок считает устаревшее.
-        const stale = bookings.some((item) => item.status === 'CONFIRMED' && fresh[item.number] && fresh[item.number] !== 'CONFIRMED');
-        if (stale) onChange(bookings.map((item) => (item.status === 'CONFIRMED' && fresh[item.number] ? { ...item, status: fresh[item.number] } : item)));
+        // «Уточняется» тоже обновляется: запись через МИС подтверждается или не подтверждается позже.
+        const changing = (item) => (item.status === 'CONFIRMED' || item.status === 'PENDING') && fresh[item.number] && fresh[item.number] !== item.status;
+        if (bookings.some(changing)) onChange(bookings.map((item) => (changing(item) ? { ...item, status: fresh[item.number] } : item)));
       })
       .catch(() => {
         if (!controller.cancelled) setError('Не удалось проверить статусы — показаны сохранённые.');
@@ -74,7 +75,7 @@ export default function MyBookingsPanel({ bookings, inAccount = false, onChange,
               <div className="flex items-center justify-between gap-2">
                 <span className="font-mono font-semibold text-slate-800 dark:text-white">{item.number}</span>
                 <span className={`rounded-full px-2 py-0.5 text-[10.5px] font-semibold ${status === 'CONFIRMED' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200' : 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-300'}`}>
-                  {status === 'CONFIRMED' ? 'подтверждена' : status === 'CANCELLED' ? 'отменена' : 'не найдена (демо сброшено)'}
+                  {status === 'CONFIRMED' ? 'подтверждена' : status === 'CANCELLED' ? 'отменена' : status === 'PENDING' ? 'статус уточняется' : status === 'FAILED' ? 'не подтверждена' : 'не найдена (демо сброшено)'}
                 </span>
               </div>
               <p className="mt-1 text-slate-700 dark:text-slate-200">{item.doctorName}{item.specialty ? `, ${item.specialty}` : ''}</p>

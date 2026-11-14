@@ -22,7 +22,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { findTrigger, fixCommonTypos, isNegatedBefore, rewriteNegatedTimeBounds, ruStem } from './normalize.js';
-import { detectEntities, detectObfuscation, ENTITY_KIND, isKinshipWord } from './detectors.js';
+import { detectEntities, detectObfuscation, ENTITY_KIND, isKinshipWord, trailingWord } from './detectors.js';
 import { bookingView, expandCorrections } from '../understanding/turnRoles.js';
 import { deidentifyComplaint, hasSensitiveCondition } from './deidentify.js';
 import { classifySymptoms } from './symptoms.js';
@@ -279,7 +279,13 @@ export const extractIntentSignals = (text) => {
  * Родственник или «пациент» прямо перед фамилией (можно через имя) — это
  * человек, а не врач из справочника.
  */
-const KIN_BEFORE = /(\p{L}+)\s+(?:\p{Lu}\p{Ll}+\s+){0,2}$/u;
+/*
+ * «(?<!\p{L})» — начинать только с начала слова: без него выражение на длинном
+ * слове пробовало каждую букву как начало и шло до конца слова — квадратичное
+ * время (аудит 11.11.2026). Самое раннее совпадение и так начинается с начала
+ * слова, поэтому находит то же самое (tests/long-input.test.js).
+ */
+export const KIN_BEFORE = /(?<!\p{L})(\p{L}+)\s+(?:\p{Lu}\p{Ll}+\s+){0,2}$/u;
 
 /*
  * Пользователь представился фамилией врача: «меня зовут Ризида Маслова» — не
@@ -327,7 +333,7 @@ const crossTurnEntities = (contents) => {
  *   hybrid     — слова пользователя уходят, если все они из закрытого словаря,
  *                иначе то же описание. Модель видит формулировку, но словарь
  *                пропускает совпадения вроде «Жене» (жена / Женя).
- * Цифры обоих режимов на размеченном наборе — docs/privacy-evaluation.md.
+ * Цифры обоих режимов на размеченном наборе — internal-docs/privacy-evaluation.md.
  */
 export const OUTBOUND_MODES = Object.freeze(['structured', 'hybrid']);
 const outboundModeFromEnv = () => (OUTBOUND_MODES.includes(process.env.PRIVACY_OUTBOUND_MODE) ? process.env.PRIVACY_OUTBOUND_MODE : 'structured');
@@ -890,9 +896,9 @@ export const createPrivacyGateway = ({
     const splitAcrossTurns = messages.some((message, index) => {
       const next = messages[index + 1];
       if (!next) return false;
-      const tail = String(message.content).match(/(\p{L}{2,})\s*$/u);
+      const tail = trailingWord(message.content);
       const head = String(next.content).match(/^\s*(\p{Ll}{2,})/u);
-      return Boolean(tail && head) && looksLikeSurname(tail[1] + head[1]);
+      return Boolean(tail && head) && looksLikeSurname(tail + head[1]);
     });
 
     /*

@@ -7,6 +7,7 @@
  */
 
 import { normalizeSearchRequest } from './demoSearch.js';
+import { LAB_INTENTS, normalizeLabRequest } from './labSearch.js';
 
 export const LIMITS = {
   // Всего сообщений в истории (сервер отклоняет больше) и реплик пользователя, которые шлёт клиент.
@@ -150,6 +151,29 @@ const sanitizeBooking = (value) => {
   return { request, summary, route: value.route === true };
 };
 
+/*
+ * Подбор лаборатории под ответом ассистента (backend/labs/assistant.js): корзина —
+ * коды каталога, условия — тем же нормализатором, что и на сервере подбора.
+ */
+const sanitizeLabs = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const { request } = normalizeLabRequest(value.request);
+  const tests = Array.isArray(value.tests)
+    ? value.tests.filter((item) => item && /^[A-Z0-9_]{2,40}$/.test(item.code)).slice(0, 25)
+      .map((item) => ({ code: item.code, name: cleanText(item.name, 160) || item.code }))
+    : [];
+  const summary = Array.isArray(value.summary)
+    ? value.summary.map((item) => cleanText(item, LIMITS.MAX_FIELD_CHARS)).filter(Boolean).slice(0, 12)
+    : [];
+  const intents = Array.isArray(value.intents) ? [...new Set(value.intents.filter((item) => LAB_INTENTS.includes(item)))] : [];
+  const preparation = Array.isArray(value.preparation)
+    ? value.preparation.filter((item) => item && /^[A-Z0-9_]{2,40}$/.test(item.code)).slice(0, 10)
+      .map((item) => ({ code: item.code, name: cleanText(item.name, 160) || item.code, text: cleanMultilineText(item.text, 800) || '' }))
+    : [];
+  // search — показать подбор (корзина не пуста и уточнять нечего).
+  return { request, tests, summary, intents, preparation, search: value.search === true && tests.length > 0 };
+};
+
 export const DEFAULT_REPLY =
   'Готово! Посмотрите на карту — я применил подходящие фильтры.';
 
@@ -199,6 +223,7 @@ export const sanitizeAiAction = (raw) => {
       : null,
     dmsOnly: triState(source.dmsOnly) === true,
     booking: sanitizeBooking(source.booking),
+    labs: sanitizeLabs(source.labs),
     quickReplies: normalizeQuickReplies(source.quickReplies),
 
     replyText: cleanMultilineText(source.replyText, LIMITS.MAX_REPLY_CHARS) || DEFAULT_REPLY,

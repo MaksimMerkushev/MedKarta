@@ -124,7 +124,9 @@ export const newIdempotencyKey = () => {
 
 /* ------------------------- Мои записи в браузере ------------------------ */
 
-const NUMBER = /^DEMO-\d{6}-[A-Z0-9]{5}$/;
+// DEMO-… — демо-запись, MK-… — запись через МИС (журнал интеграций).
+const NUMBER = /^(?:DEMO|MK)-\d{6}-[A-Z0-9]{5}$/;
+const STATUSES = new Set(['CONFIRMED', 'CANCELLED', 'NOT_FOUND', 'PENDING', 'FAILED']);
 
 const sanitizeStored = (item) => {
   if (!item || typeof item !== 'object' || !NUMBER.test(item.number) || typeof item.cancelToken !== 'string') return null;
@@ -133,7 +135,8 @@ const sanitizeStored = (item) => {
     number: item.number,
     cancelToken: item.cancelToken.slice(0, 100),
     // NOT_FOUND — сервер такой записи не знает (демо-данные сброшены).
-    status: item.status === 'CANCELLED' || item.status === 'NOT_FOUND' ? item.status : 'CONFIRMED',
+    // Старые записи без статуса — подтверждённые демо; неизвестный статус — не «подтверждена», а «уточняется».
+    status: item.status === undefined ? 'CONFIRMED' : STATUSES.has(item.status) ? item.status : 'PENDING',
     doctorName: text(item.doctorName),
     specialty: text(item.specialty, 60),
     clinicName: text(item.clinicName),

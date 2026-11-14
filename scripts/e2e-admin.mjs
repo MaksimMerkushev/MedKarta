@@ -63,6 +63,7 @@ const env = {
   COOKIE_SECURE: 'off',
   ACCOUNTS_DB_PATH: path.join(WORK, 'accounts.sqlite'),
   DEMO_BOOKING_DB_PATH: path.join(WORK, 'booking.sqlite'),
+  LAB_DB_PATH: path.join(WORK, 'labs.sqlite'),
   ADMIN_BOOTSTRAP_EMAIL: ROOT_EMAIL,
   ADMIN_BOOTSTRAP_PASSWORD: ROOT_PASSWORD,
   // Адрес сайта для ссылок и ключей доступа; почта не настроена — ссылки передаются вручную.
@@ -537,6 +538,41 @@ try {
     expect(pass && pass.path === '/api/chat' && pass.httpOnly && pass.sameSite === 'Strict', `cookie пропуска: ${JSON.stringify(pass && { path: pass.path, httpOnly: pass.httpOnly, sameSite: pass.sameSite })}`);
     expect(!pass.value.includes(me.user.id), 'в пропуске id аккаунта');
     expect(!/горло|болит/.test(serverOutput), 'жалоба попала в журнал сервера');
+  });
+
+  await step('24. Лаборатории в админ-панели: список, цена в филиале, отмена демо-записи — и всё в журнале', async () => {
+    const booked = await admin.evaluate(async () => {
+      const slots = await fetch('/api/labs/slots?branchId=lab-probirka-ulyanova-lenina&days=3&tests=TSH').then((response) => response.json());
+      const slot = slots.slots.find((item) => item.bookable);
+      const response = await fetch('/api/labs/bookings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ branchId: 'lab-probirka-ulyanova-lenina', slotId: slot.id, tests: ['TSH'], idempotencyKey: 'e2e-admin-labs-000001', expectedTotal: slots.quote.total }),
+      });
+      return { status: response.status, body: await response.json() };
+    });
+    expect(booked.status === 201, `демо-запись: ${booked.status}`);
+    const { number } = booked.body.booking;
+    await goto(admin, '/admin/labs');
+    await admin.waitForSelector('[data-testid=admin-labs-list] >> text=Медиана');
+    await admin.getByRole('tab', { name: 'Цены' }).click();
+    await admin.getByLabel('Филиал').selectOption('lab-probirka-ulyanova-lenina');
+    const price = admin.getByLabel('Цена: Тиреотропный гормон (ТТГ)');
+    await price.waitFor();
+    await price.fill('555');
+    await admin.locator('tr', { has: price }).getByRole('button', { name: 'Сохранить' }).click();
+    await admin.waitForFunction(async () => {
+      const data = await fetch('/api/labs/branches/lab-probirka-ulyanova-lenina').then((response) => response.json());
+      return data.offerings.find((item) => item.testCode === 'TSH')?.price === 555;
+    }, null, { timeout: 10_000 });
+    await admin.getByRole('tab', { name: 'Записи' }).click();
+    const row = admin.locator('[data-testid=admin-lab-bookings] li', { hasText: number });
+    await row.waitFor();
+    await row.getByRole('button', { name: 'Отменить' }).click();
+    await admin.getByRole('button', { name: 'Отменить запись' }).click();
+    await admin.locator('[data-testid=admin-lab-bookings] li', { hasText: number }).getByText('отменена', { exact: false }).waitFor();
+    await shot(admin, '12-admin-labs');
+    const audit = await sqlite((db) => db.prepare("SELECT action FROM audit_log WHERE action IN ('labs.offering_put', 'labs.booking_cancel')").all().map((item) => item.action));
+    expect(audit.includes('labs.offering_put') && audit.includes('labs.booking_cancel'), `журнал: ${audit.join(',')}`);
   });
 
   await step('Ошибок JavaScript на страницах нет', async () => {

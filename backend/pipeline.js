@@ -37,6 +37,9 @@ import { publicClinicsHidden } from './demo/flags.js';
 import { logger as defaultLogger } from './observability/safeLogger.js';
 import { metrics as defaultMetrics } from './observability/metrics.js';
 import { isExplicitRequest } from './understanding/turnRoles.js';
+import { createLabAssistant } from './labs/assistant.js';
+import { getDefaultLabService } from './labs/service.js';
+import { createExternalLabParser } from './planner/labParser.js';
 
 /** Причины решения шлюза, которые сами говорят о здоровье: в журнал — как «policy». */
 const HEALTH_REASONS = new Set([FAIL_CLOSED_REASON.EMERGENCY, FAIL_CLOSED_REASON.MEDICAL_TEXT, FAIL_CLOSED_REASON.LOW_CLASSIFIER_CONFIDENCE]);
@@ -53,6 +56,33 @@ const DOCTOR_WORDS = /(?<!\p{L})(?:врач\p{L}*|доктор\p{L}*|специ�
  * @param {object} deps инъектируются, чтобы тесты подставляли фикстуру
  *   справочника и фальшивый планировщик без сети и реальной базы.
  */
+/*
+ * Объём разбора одного запроса. Разбор реплик синхронный: пока он идёт,
+ * Node не отвечает никому. Обычный диалог из 20 реплик — 1–2 тыс. символов,
+ * а 20 реплик по 1000 символов разбирались бы сотни миллисекунд. Поэтому в
+ * разбор идут последние реплики пользователя, пока их сумма не больше
+ * MAX_HISTORY_CHARS; самая свежая остаётся всегда (её длину и так ограничивает
+ * shared/contract.js). Реплики ассистента между оставленными сохраняются.
+ */
+export const MAX_HISTORY_CHARS = 6000;
+export const limitHistory = (messages, maxChars = MAX_HISTORY_CHARS) => {
+  if (!Array.isArray(messages)) return [];
+  let total = 0;
+  let start = messages.length;
+  let keptUser = 0;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === 'user') {
+      const length = String(message.content ?? '').length;
+      if (keptUser > 0 && total + length > maxChars) break;
+      total += length;
+      keptUser += 1;
+    }
+    start = index;
+  }
+  return start === 0 ? messages : messages.slice(start);
+};
+
 export const createPipeline = ({
   catalog,
   vault,
@@ -67,6 +97,11 @@ export const createPipeline = ({
    * классификатора (как при недоступной модели).
    */
   triage = null,
+  /*
+   * Лаборатории (labs/assistant.js): анализы, корзина, подбор лаборатории.
+   * null — ассистент о лабораториях не знает (как и было до модуля).
+   */
+  labs = null,
   /*
    * Демо-запись: ответ на «нужен ЛОР завтра после 18:00» несёт запрос
    * строгого подбора (action.booking), который интерфейс исполняет через
@@ -180,6 +215,7 @@ export const createPipeline = ({
       probe = null,
     }) {
       const started = Date.now();
+      messages = limitHistory(messages);
       /*
        * Оценка процессорного времени: только тяжёлые участки (разбор реплик,
        * исполнение плана), без ожидания модели и очереди. По ней chat.js
@@ -223,6 +259,30 @@ export const createPipeline = ({
           action: buildEmergencyAction(gate.context?.classification?.emergency?.id),
           diagnostics: { requestId: gate.requestId, decision: gate.decision, planSource: 'none', cpuMs: cpuMs() },
         };
+      }
+
+      /*
+       * Анализы и лаборатории: разбор на сервере, модель — только для неизвестных
+       * названий. Если в реплике нет просьбы о враче, ответ готов здесь; если есть —
+       * лабораторная часть добавится к ответу о записи к врачу.
+       */
+      let labAnswer = null;
+      if (labs) {
+        try {
+          labAnswer = await labs.handle({ messages, takeExternalBudget });
+        } catch (error) {
+          logger.error('labs.assistant_failed', error);
+          labAnswer = null;
+        }
+        if (probe) probe.labs = labAnswer;
+        if (labAnswer && !labAnswer.withDoctor) {
+          metrics.increment('labs.assistant', { kind: 'lab' });
+          logger.event('pipeline.done', { request_id: gate.requestId, action: 'FIND_LAB', plan_source: 'labs', latency_ms: Date.now() - started });
+          return {
+            action: labAnswer.action,
+            diagnostics: { requestId: gate.requestId, decision: gate.decision, reason: gate.reason, planSource: 'labs', stops: 0, cpuMs: cpuMs() },
+          };
+        }
       }
 
       /*
@@ -399,7 +459,7 @@ export const createPipeline = ({
           metrics.increment('pipeline.booking_request');
         } else if (execution.action === 'CLARIFY' && booking.publicHidden) {
           // Не нашли — возможно, искали государственную клинику, которую демо скрывает.
-          action.replyText = `${action.replyText} В демо-режиме показываются только частные клиники (вымышленные и реальные с вымышленными врачами) — государственные временно скрыты.`;
+          action.replyText = `${action.replyText} В демо-режиме показываются только демо-клиники (вымышленные названия и врачи по адресам реальных частных клиник) — государственные временно скрыты.`;
         }
       }
 
@@ -481,6 +541,13 @@ export const createPipeline = ({
         count: Array.isArray(execution.notes.missingSpecialties) ? execution.notes.missingSpecialties.length : 0,
         latency_ms: Date.now() - started,
       });
+
+      // «Нужен эндокринолог и анализ ТТГ»: к записи к врачу — подбор лаборатории.
+      if (labAnswer?.withDoctor && labAnswer.action.labs) {
+        action.labs = labAnswer.action.labs;
+        action.replyText = `${action.replyText}\n\n${labAnswer.action.replyText}`;
+        metrics.increment('labs.assistant', { kind: 'with_doctor' });
+      }
 
       return {
         action,
@@ -720,6 +787,13 @@ const buildDefaultPipeline = async () => {
   const planner = createExternalPlanner(upstream);
   // Тот же провайдер и ключ; модель для жалоб можно задать отдельно (AI_TRIAGE_MODEL).
   const triage = createExternalTriage({ ...upstream, model: process.env.AI_TRIAGE_MODEL || upstream.model });
+  // Лаборатории: каталог и подбор — на сервере; модель — только для неизвестных названий анализов.
+  const labs = createLabAssistant({
+    getService: getDefaultLabService,
+    parser: createExternalLabParser({ ...upstream, model: process.env.AI_LAB_MODEL || process.env.AI_TRIAGE_MODEL || upstream.model }),
+    logger: defaultLogger,
+    metrics: defaultMetrics,
+  });
 
   return createPipeline({
     catalog,
@@ -728,6 +802,7 @@ const buildDefaultPipeline = async () => {
     triage,
     routing: await createRoutingProviderFromEnv(),
     booking: { enabled: bookingModeFromEnv(), publicHidden: publicClinicsHidden(), now: () => demoNow() },
+    labs,
   });
 };
 

@@ -10,7 +10,7 @@
 собственный сервер этот файл перестал применяться, и в продакшене не было ни
 защиты от кликджекинга, ни CSP, ни HSTS — по коду это было незаметно
 (заголовочный комментарий [securityHeaders.js](../../backend/http/securityHeaders.js);
-прежняя конфигурация — [legacy/README.md](../legacy/README.md)).
+прежняя конфигурация — legacy/README.md (`internal-docs/legacy/README.md`)).
 
 ## Решение
 
@@ -19,13 +19,13 @@
 - Ограничения частоты, бюджеты процессорного времени, потолки тела и
   таймауты — тоже в коде ([rateLimit.js](../../backend/http/rateLimit.js)).
 - nginx дублирует заголовки страницы, если статику отдаёт он
-  ([deployment.md](../deployment.md)).
+  (`internal-docs/deployment.md`).
 
 ## Последствия
 
 - Настройки переживают смену хостинга и проверяются тестом.
 - Лимиты живут в памяти процесса — при нескольких экземплярах нужен внешний
-  стор ([18-known-limitations.md](../18-known-limitations.md), R1).
+  стор (`internal-docs/18-known-limitations.md`, R1).
 
 ## Как проверяется
 

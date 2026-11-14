@@ -19,7 +19,7 @@
  *     при проверке (verify). Тот, у кого есть доступ к файлу базы на
  *     сервере, может переписать цепочку целиком — поэтому «отпечаток»
  *     журнала (anchor) стоит периодически сохранять вне сервера
- *     (docs/privacy/09-security-measures.md).
+ *     (internal-docs/privacy/09-security-measures.md).
  */
 
 import { createHash, randomBytes } from 'node:crypto';
@@ -150,7 +150,7 @@ export const createConsentRegistry = ({ store, documents, purposes = CONSENT_PUR
     /**
      * Что аккаунту «Пользователь» нужно принять: соглашение и политика в
      * действующей редакции. Сотрудники работают по внутренним документам
-     * оператора (docs/privacy/02-legal-bases.md) — им пусто.
+     * оператора (internal-docs/privacy/02-legal-bases.md) — им пусто.
      */
     pendingFor(user) {
       if (!user || user.role !== 'user' || user.demoTemplate) return [];

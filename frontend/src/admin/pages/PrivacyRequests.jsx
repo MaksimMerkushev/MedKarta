@@ -6,7 +6,7 @@
  * причиной, которую увидит заявитель), выполнить или отказать (ответ
  * обязателен). Само обращение данные не меняет: исправление, удаление
  * аккаунта и т. п. — штатными средствами, здесь фиксируется итог.
- * Порядок — docs/privacy/06-subject-requests.md.
+ * Порядок — internal-docs/privacy/06-subject-requests.md.
  */
 import { useId, useState } from 'react';
 import { AlertTriangle, Inbox } from 'lucide-react';

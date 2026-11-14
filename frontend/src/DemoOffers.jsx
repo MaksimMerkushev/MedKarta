@@ -71,11 +71,6 @@ const OptionCard = ({ option, index, today, onBook, onFocus, onRoute, compact })
           <p className="text-[11.5px] leading-4 text-slate-500 dark:text-slate-400">
             {option.doctor.specialty}{option.doctor.experienceYears ? ` · стаж ${option.doctor.experienceYears} ${yearsWord(option.doctor.experienceYears)}` : ''} · {option.clinic.name}, {option.clinic.branchName}
           </p>
-          {option.clinic.real && (
-            <p className="mt-0.5 text-[10.5px] leading-4 text-sky-700 dark:text-sky-300" data-testid="demo-offer-real">
-              Клиника реальная (OSM), врач и расписание — демонстрационные
-            </p>
-          )}
           <ul className="mt-1.5 flex flex-wrap gap-1">
             <li className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">
               <Wallet size={11} aria-hidden="true" /> {formatPrice(option.price)}

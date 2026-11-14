@@ -28,12 +28,15 @@
  * как /api/route, и не пишет её никуда.
  */
 
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { defineConnector, requireCapability } from '../booking/connectors/contract.js';
 import { createDemoConnector } from '../booking/connectors/demo.js';
 import { BookingError } from '../booking/errors.js';
+import { getDefaultMisRuntime } from '../booking/mis/default.js';
+import { createConnectorRouter } from '../booking/mis/router.js';
 import { createSlotSource } from '../booking/slotCache.js';
 import { createBookingStore, loadSqlite } from '../demo/bookingStore.js';
 import { getDemoCatalog } from '../demo/catalog.js';
@@ -81,6 +84,10 @@ const ERROR_STATUS = Object.freeze({
   slot_conflict: 409,
   idempotency_conflict: 409,
   not_supported: 409,
+  booking_pending: 409,
+  // Запись через МИС: клиника недоступна или ответила непонятно — без подробностей МИС.
+  integration_unavailable: 503,
+  integration_error: 502,
 });
 
 const pathOf = (url) => {
@@ -162,7 +169,8 @@ export const createDemoBookingService = ({ index, store, connector = createDemoC
       : null;
     return {
       ...view,
-      demo: true,
+      // Запись через МИС — настоящая, если это не симулятор; демо-запись — всегда демо.
+      demo: view.source === 'mis' ? Boolean(view.simulator) : true,
       doctor: { id: doctor.id, name: doctor.name, specialty: doctor.specialty },
       clinic: { id: clinic.id, name: clinic.name, branchId: branch.id, branchName: branch.name, address: branch.address, lat: branch.lat, lng: branch.lng, phone: branch.phone || null, real: Boolean(clinic.real) },
       service: { id: service.id, name: service.name, durationMinutes: service.durationMinutes },
@@ -202,7 +210,15 @@ export const getDefaultDemoBookingService = () => {
         }
       };
       logger.event('demo.booking_ready', { status: 'enabled', count: index.catalog.doctors.length });
-      return createDemoBookingService({ index, store, getEngine, now });
+      // Интеграции с МИС (MIS_INTEGRATIONS=on): клиники с подключённой МИС — через её коннектор, остальные — демо.
+      const mis = await getDefaultMisRuntime();
+      const misConnectors = mis ? mis.runtime.connectors() : [];
+      if (!misConnectors.length) return createDemoBookingService({ index, store, getEngine, now });
+      const connector = createConnectorRouter({ demo: createDemoConnector({ store }), mis: misConnectors, logger });
+      const service = createDemoBookingService({ index, store, connector, getEngine, now });
+      mis.runtime.setScheduleListener(() => service.slots.invalidateAll?.());
+      mis.runtime.startLoop();
+      return service;
     })().catch((error) => {
       logger.error('demo.booking_failed', error);
       defaultService = undefined;
@@ -334,10 +350,13 @@ export const createDemoBookingHandler = ({
         case 'book': {
           const planId = typeof body.planId === 'string' && service.index.plans.has(body.planId) ? body.planId : null;
           const owner = await accountUser();
-          const booking = await service.book({ slotId: body.slotId, holdToken: body.holdToken || null, idempotencyKey: body.idempotencyKey, planId, accountId: owner?.id || null, at });
-          logger.event('demo.booking', { status: booking.repeated ? 'repeated' : 'created' });
+          // В МИС уходит только непрозрачная ссылка на пациента; ФИО и телефон для настоящей МИС — отдельное решение (согласие, договор).
+          const patient = owner ? { ref: createHash('sha256').update(`patient:${owner.id}`).digest('hex').slice(0, 24) } : null;
+          const booking = await service.book({ slotId: body.slotId, holdToken: body.holdToken || null, idempotencyKey: body.idempotencyKey, planId, accountId: owner?.id || null, at, patient });
+          logger.event('demo.booking', { status: booking.repeated ? 'repeated' : booking.status === 'PENDING' ? 'pending' : 'created' });
           // owned — запись привязана к кабинету; иначе номер и код отмены хранит браузер.
-          respondJson(res, booking.repeated ? 200 : 201, { booking: service.describe(booking) });
+          // 202 — запись через МИС с неизвестным пока исходом («статус уточняется»), не «создана».
+          respondJson(res, booking.status === 'PENDING' ? 202 : booking.repeated ? 200 : 201, { booking: service.describe(booking) });
           return;
         }
         case 'cancel': {

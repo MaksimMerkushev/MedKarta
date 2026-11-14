@@ -85,7 +85,7 @@ describe('«Только демо»', () => {
       for (const specialty of ['therapist', 'lor', 'dentist', 'cardiologist']) {
         const found = await search.search({ specialty, date: { kind: 'tomorrow' } });
         assert.equal(found.status, 'ok', `${specialty}: ${found.message}`);
-        assert.ok(found.options.every((option) => !option.clinic.real && !option.clinic.branchId.startsWith('demo-real-')), specialty);
+        assert.ok(found.options.every((option) => !option.clinic.real), specialty);
       }
     } finally {
       store.close();

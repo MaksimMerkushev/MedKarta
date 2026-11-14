@@ -71,16 +71,21 @@ export const readBody = (req, maxBytes = LIMITS.MAX_BODY_BYTES) =>
  * Origin, так что от прямых вызовов API это не защищает, а отсекает
  * встраивание виджета на чужой сайт за наш счёт.
  */
+/** Имена сайта из ALLOWED_HOSTS (через запятую), в нижнем регистре. Пусто — ограничения нет. */
+export const allowedHostsFromEnv = (env = process.env) => String(env.ALLOWED_HOSTS || '')
+  .split(',')
+  .map((value) => value.trim().toLowerCase())
+  .filter(Boolean);
+
 export const verifyOrigin = (req) => {
   /*
    * DNS rebinding: чужая страница, чей домен указывает на наш адрес, шлёт
    * запросы с Host и Origin своего домена — они совпадают, и проверка ниже
    * их пропускает. ALLOWED_HOSTS (через запятую) ограничивает имена хоста.
+   * Без него проверки нет: сервер при запуске в production пишет об этом в
+   * журнал, а раздел «Система» админ-панели показывает ошибку (systemInfo.js).
    */
-  const allowedHosts = (process.env.ALLOWED_HOSTS || '')
-    .split(',')
-    .map((value) => value.trim().toLowerCase())
-    .filter(Boolean);
+  const allowedHosts = allowedHostsFromEnv();
   if (allowedHosts.length > 0 && !allowedHosts.includes(String(req.headers.host || '').toLowerCase())) {
     return false;
   }

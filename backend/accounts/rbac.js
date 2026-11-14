@@ -44,6 +44,11 @@ export const PERMISSIONS = Object.freeze([
   { key: 'roles.manage', group: 'Роли', label: 'Изменение матрицы разрешений', danger: true, superadminOnly: true },
   { key: 'audit.view', group: 'Журналы', label: 'Журнал административных действий' },
   { key: 'privacy.requests', group: 'Персональные данные', label: 'Обращения субъектов ПДн и журнал согласий', requires: ['users.view'], danger: true },
+  { key: 'labs.view', group: 'Лаборатории', label: 'Просмотр лабораторий, филиалов, исследований и цен' },
+  { key: 'labs.manage', group: 'Лаборатории', label: 'Изменение лабораторий, филиалов, расписаний, исследований и цен', requires: ['labs.view'] },
+  { key: 'labs.bookings', group: 'Лаборатории', label: 'Демо-записи в лаборатории: просмотр и отмена', requires: ['labs.view'] },
+  { key: 'integrations.view', group: 'Интеграции с МИС', label: 'Просмотр интеграций с МИС: состояние, синхронизация, технический журнал' },
+  { key: 'integrations.manage', group: 'Интеграции с МИС', label: 'Проверка подключения и запуск синхронизации с МИС', requires: ['integrations.view'] },
   { key: 'system.view', group: 'Система', label: 'Мониторинг и состояние' },
   { key: 'settings.view', group: 'Система', label: 'Просмотр настроек' },
   { key: 'settings.edit', group: 'Система', label: 'Изменение настроек', requires: ['settings.view'], danger: true, superadminOnly: true },
@@ -57,8 +62,10 @@ export const DEFAULT_ROLE_PERMISSIONS = Object.freeze({
   admin: Object.freeze([
     'admin.access', 'dashboard.view', 'users.view', 'users.create', 'users.edit', 'users.block', 'users.password',
     'users.sessions', 'users.archive', 'users.export', 'roles.assign', 'audit.view', 'system.view', 'settings.view',
+    'labs.view', 'labs.manage', 'labs.bookings',
+    'integrations.view',
   ]),
-  moderator: Object.freeze(['admin.access', 'users.view', 'users.block']),
+  moderator: Object.freeze(['admin.access', 'users.view', 'users.block', 'labs.view']),
   user: Object.freeze([]),
 });
 

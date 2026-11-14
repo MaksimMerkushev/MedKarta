@@ -429,9 +429,7 @@ export const bookingReplyText = ({ request, booking, today = null, routeToOption
   if (booking?.medicalText && request.specialty) {
     parts.push('Профиль врача подобран по описанию — это не диагноз.');
   }
-  parts.push(request.branchIds.some((id) => id.startsWith('demo-real-'))
-    ? 'Запись демонстрационная: клиника реальная, но врачи и расписание вымышлены — в клинику ничего не уходит.'
-    : 'Запись демонстрационная: врачи и расписание вымышлены.');
+  parts.push('Запись демонстрационная: клиника, врачи и расписание вымышлены — в клинику по этому адресу ничего не уходит.');
   return parts.join(' ');
 };
 

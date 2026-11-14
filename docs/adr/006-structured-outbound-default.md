@@ -1,6 +1,6 @@
 # ADR 006. Режим `structured` по умолчанию
 
-- **Статус:** принято (реконструировано по коду и [privacy-architecture.md](../privacy-architecture.md))
+- **Статус:** принято (реконструировано по коду и `internal-docs/privacy-architecture.md`)
 - **Дата:** не зафиксирована; решение действует в версии политики
   `2026-10-05.1` (`POLICY_VERSION` в [policies.js](../../backend/privacy/policies.js))
 
@@ -10,8 +10,8 @@
 только если каждое из них входило в закрытый словарь. Измерение на
 размеченном наборе показало, что словарь пропускает имена, совпадающие с
 обычными словами («Жене нужен терапевт»: «жене» — слово словаря)
-([privacy-architecture.md](../privacy-architecture.md), раздел 9;
-[privacy-evaluation.md](../privacy-evaluation.md)).
+(`internal-docs/privacy-architecture.md`, раздел 9;
+`internal-docs/privacy-evaluation.md`).
 
 ## Решение
 
@@ -26,7 +26,7 @@
 | Вариант | Итог |
 |---|---|
 | `hybrid` по умолчанию | точнее формулировка, но известны утечки имён-слов: при аудите — 3 на 14 622 примерах ([07-privacy.md](../07-privacy.md)) |
-| Расширять детекторы | «у подхода „ищем известные виды данных“ нет дна» ([privacy-architecture.md](../privacy-architecture.md)) |
+| Расширять детекторы | «у подхода „ищем известные виды данных“ нет дна» (`internal-docs/privacy-architecture.md`) |
 
 ## Последствия
 

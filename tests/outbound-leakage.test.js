@@ -105,7 +105,7 @@ describe('14. Идентификаторы базы не уходят наруж
 describe('15. Медицинский текст не покидает контур', () => {
   it('описание жалоб обрабатывается только локально: наружу не уходит ничего, даже профиль', async () => {
     // Профиль, выведенный из жалобы, — тоже сведения о здоровье (152-ФЗ, ст. 10):
-    // внешний планировщик его не получает (docs/privacy/04-health-data.md).
+    // внешний планировщик его не получает (internal-docs/privacy/04-health-data.md).
     const { pipeline, sent } = makeTestPipeline({ respond: CLARIFY });
     const result = await pipeline.handle({
       messages: [{ role: 'user', content: 'Меня зовут Иван, неделю болит живот и тошнит' }],

@@ -9,6 +9,7 @@ import { analyzeSymptoms } from './services/ai';
 import { LIMITS } from '@shared/contract.js';
 import TopPicks from './TopPicks';
 import DemoOffers from './DemoOffers';
+import LabOffers from './labs/LabOffers';
 
 /*
  * Движение отвечает на действия: окно вырастает из кнопки ассистента (снизу
@@ -92,7 +93,7 @@ const friendlyError = (error) => {
 /**
  * Что происходит с запросом (152-ФЗ): не сохраняется и не связывается с
  * аккаунтом; жалоба уходит внешней модели без ФИО, телефонов и адресов —
- * только чтобы подобрать врача (docs/privacy/04-health-data.md).
+ * только чтобы подобрать врача (internal-docs/privacy/04-health-data.md).
  */
 function PrivacyNote({ className = '' }) {
   return (
@@ -115,6 +116,7 @@ export default function AIAssistant({
   onRoutePick,
   onShowAllPicks,
   bookings = null,
+  labs = null,
   bookingOrigin = null,
   bookingPlanId = null,
   bookingsRefresh = 0,
@@ -298,6 +300,14 @@ export default function AIAssistant({
               onRoute={onRouteOption}
               onRequestOrigin={onRequestOrigin}
               onAnswer={isLoading ? null : sendText}
+            />
+          )}
+          {msg.role === 'assistant' && labs?.[msg.id] && (
+            <LabOffers
+              labs={labs[msg.id]}
+              origin={bookingOrigin}
+              compact={!isMobile}
+              autoScroll={msg.id === messages[messages.length - 1]?.id}
             />
           )}
           {msg.role === 'assistant' && !bookings?.[msg.id] && picks?.[msg.id] && (

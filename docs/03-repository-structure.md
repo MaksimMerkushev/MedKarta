@@ -15,6 +15,7 @@
 ├── scripts/            CLI-скрипты npm run …
 ├── tests/              тесты node:test и фикстуры
 ├── docs/               эта документация
+├── internal-docs/      внутренние документы: 152-ФЗ, эксплуатация, модель угроз; на сайт не публикуются
 ├── package.json        скрипты npm, зависимости, engines
 ├── vite.config.js      сборка, dev-сервер с обработчиками API
 ├── eslint.config.js    правила линтера, включая границу доверия
@@ -25,7 +26,7 @@
 
 `TECHNICAL_PASSPORT.md` описывает раннюю версию проекта (Vercel, прежняя
 структура каталогов) и не соответствует текущему коду — см.
-[18-known-limitations.md](18-known-limitations.md).
+`internal-docs/18-known-limitations.md`.
 
 ## backend/ — сервер
 

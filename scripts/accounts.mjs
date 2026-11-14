@@ -42,7 +42,7 @@
  *       и можно ли открывать регистрацию.
  *   npm run accounts -- consents-verify [--as-of ISO-время]
  *       проверка журнала согласий: хэши записей и цепочек; «отпечаток»
- *       журнала — сохраняйте его вне сервера (docs/privacy/09-security-measures.md).
+ *       журнала — сохраняйте его вне сервера (internal-docs/privacy/09-security-measures.md).
  *   npm run accounts -- privacy-requests
  *       открытые обращения субъектов ПДн и сроки ответа.
  *   npm run accounts -- reapply-erasures [--yes]
@@ -389,7 +389,7 @@ switch (command) {
     break;
   }
   default:
-    console.log('Команды: bootstrap, seed-test-users, access-link, reset-password, restore-admin, mfa-reset, unlock, list-staff, status, backup, decrypt-backup, legal-status, consents-verify, privacy-requests, reapply-erasures. Подробности — docs/accounts.md и docs/privacy/.');
+    console.log('Команды: bootstrap, seed-test-users, access-link, reset-password, restore-admin, mfa-reset, unlock, list-staff, status, backup, decrypt-backup, legal-status, consents-verify, privacy-requests, reapply-erasures. Подробности — internal-docs/accounts.md и internal-docs/privacy/.');
     if (command) process.exitCode = 1;
 }
 

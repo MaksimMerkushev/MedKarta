@@ -1,5 +1,6 @@
 /*
- * Проверка документации в docs/ (и корневого README.md):
+ * Проверка документации в docs/, внутренних документов в internal-docs/
+ * (на сайт не публикуются) и корневого README.md:
  *
  *   1. относительные ссылки ведут на существующие файлы, якоря — на
  *      существующие заголовки (слаги по правилам GitHub);
@@ -21,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const DOCS = path.join(ROOT, 'docs');
+const INTERNAL = path.join(ROOT, 'internal-docs');
 const args = process.argv.slice(2);
 const mermaidOut = args.includes('--mermaid-out') ? args[args.indexOf('--mermaid-out') + 1] : null;
 
@@ -30,7 +32,7 @@ const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((entr
   return entry.name.endsWith('.md') ? [full] : [];
 });
 
-const files = [...walk(DOCS), path.join(ROOT, 'README.md')];
+const files = [...walk(DOCS), ...(fs.existsSync(INTERNAL) ? walk(INTERNAL) : []), path.join(ROOT, 'README.md')];
 const rootMarkdown = fs.readdirSync(ROOT).filter((name) => name.endsWith('.md') && name !== 'README.md').map((name) => path.join(ROOT, name));
 
 /* Слаг заголовка по правилам GitHub: нижний регистр, без пунктуации, пробелы → дефисы. */

@@ -40,6 +40,7 @@ const env = {
   CHAT_REQUIRES_ACCOUNT: 'off',
   ACCOUNTS_DB_PATH: path.join(WORK, 'accounts.sqlite'),
   DEMO_BOOKING_DB_PATH: path.join(WORK, 'booking.sqlite'),
+  LAB_DB_PATH: path.join(WORK, 'labs.sqlite'),
   ADMIN_BOOTSTRAP_PASSWORD: '',
   TRUST_PROXY: '1',
   TRUSTED_PROXIES: '',
