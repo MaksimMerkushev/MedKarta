@@ -2,32 +2,19 @@
  * © 2026 МедКарта Казань. Все права защищены.
  *
  * Демо-режим: вымышленные частные клиники, цены и программы ДМС.
- * По умолчанию следует серверу (/api/config), чтобы карта совпадала с тем, что
- * знает ассистент; ?demo=1 / ?demo=0 переключает вручную и запоминается в браузере.
+ * Только по серверу (/api/config): карта всегда совпадает с тем, что знает
+ * ассистент. Выключить демо в браузере нельзя — ни кнопкой, ни ?demo=0.
  */
 
-const STORAGE_KEY = 'medkarta.demo';
-
-/** true / false — выбор пользователя; null — следовать серверу. */
-export const readDemoPreference = () => {
+/*
+ * Раньше выбор «без демо» запоминался в браузере (ключ medkarta.demo). Он больше
+ * не действует; старое значение стирается, чтобы не путать при отладке.
+ */
+export const forgetLegacyDemoPreference = () => {
   try {
-    const param = new URLSearchParams(window.location.search).get('demo');
-    if (param === '1' || param === '0') {
-      localStorage.setItem(STORAGE_KEY, param);
-      return param === '1';
-    }
-    const stored = localStorage.getItem(STORAGE_KEY);
-    return stored === '1' ? true : stored === '0' ? false : null;
+    localStorage.removeItem('medkarta.demo');
   } catch {
-    return null;
-  }
-};
-
-export const setDemoPreference = (enabled) => {
-  try {
-    localStorage.setItem(STORAGE_KEY, enabled ? '1' : '0');
-  } catch {
-    // Без хранилища выбор живёт до перезагрузки — это не ошибка.
+    // Без хранилища стирать нечего.
   }
 };
 

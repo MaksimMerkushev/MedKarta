@@ -117,7 +117,6 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
 | `med-navigator-favorites` | localStorage | id избранных врачей и учреждений | [App.jsx](../frontend/src/App.jsx) |
 | `med-navigator-dark-mode` | localStorage | тема | [App.jsx](../frontend/src/App.jsx), [theme-init.js](../frontend/public/theme-init.js) |
 | `medkarta.dms.plan` | localStorage | **только id** программы ДМС | [App.jsx](../frontend/src/App.jsx) |
-| `medkarta.demo` | localStorage | ручной выбор демо-режима | [demoMode.js](../frontend/src/demoMode.js) |
 | `medkarta.demo-bookings` | localStorage | номера и токены отмены демо-записей гостя (записи кабинета хранит сервер) | [services/demoBooking.js](../frontend/src/services/demoBooking.js) |
 | `medkarta.account-owned`, `medkarta.guest-stash` | localStorage | разделение избранного гостя и аккаунта | [App.jsx](../frontend/src/App.jsx) |
 | `medkarta.ai.session` | sessionStorage | случайный id диалога ассистента; сбрасывается при входе и выходе | [services/ai.js](../frontend/src/services/ai.js) |
@@ -208,9 +207,10 @@ SPA на React 19, собирается Vite 8 из каталога `frontend/`
 
 - По умолчанию интерфейс следует серверу: `GET /api/config` возвращает
   `demo`, `booking`, `publicClinics` ([api/config.js](../backend/api/config.js)).
-- `?demo=1` / `?demo=0` переключает режим вручную и запоминает выбор.
-- Демо-карточки помечены «Демо»; карточки реальных частных клиник —
-  «Реальная клиника» + «Демо»; при `publicClinics: false` государственные
+- Выключить демо-режим из браузера нельзя: ни кнопки в плашке, ни `?demo=0`.
+  Прежний сохранённый выбор (`medkarta.demo` в localStorage) стирается при загрузке.
+- Демо-карточки помечены «Демо»: названия клиник и лабораторий вымышлены, адреса —
+  зданий реальных частных клиник (OSM); при `publicClinics: false` государственные
   учреждения скрыты из выдачи.
 
 ## Продуктовая аналитика

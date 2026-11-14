@@ -69,7 +69,7 @@ import SearchFilters from './SearchFilters';
 import PlaceDoctorList from './PlaceDoctorList';
 import { DataReportButton, SearchFeedbackPrompt } from './FeedbackWidgets';
 import DmsPanel from './DmsPanel';
-import { fetchServerConfig, loadDemoData, readDemoPreference, setDemoPreference } from './demoMode';
+import { fetchServerConfig, forgetLegacyDemoPreference, loadDemoData } from './demoMode';
 import { labItemsFrom } from './labs/labPlaces';
 import MyBookingsPanel from './MyBookingsPanel';
 import PlaceDetailsModal from './PlaceDetailsModal';
@@ -2087,11 +2087,11 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const preference = readDemoPreference();
+      forgetLegacyDemoPreference();
       const config = await fetchServerConfig();
       if (!cancelled) setSiteSettings(config.settings);
-      // «Только демо» на сервере: выбор «без демо» из браузера не действует.
-      const enabled = config.demoOnly || (preference ?? config.demo);
+      // Демо-режим включает только сервер (DEMO_DATA); выключить его из браузера нельзя.
+      const enabled = config.demoOnly || config.demo;
       if (!enabled || cancelled) return;
       try {
         const data = await loadDemoData({ fictionalOnly: config.demoOnly });
@@ -2154,14 +2154,6 @@ export default function App() {
     }, 0);
     return () => clearTimeout(timerId);
   }, [dmsPromptPending, insurance, dmsPlan, showToast]);
-
-  const disableDemo = useCallback(() => {
-    setDemoPreference(false);
-    setDemoState(EMPTY_DEMO);
-    setDmsOnly(false);
-    setIsDmsPanelOpen(false);
-    setIsMyBookingsOpen(false);
-  }, []);
 
   useEffect(() => {
     bookingEnabledRef.current = demoState.booking;
@@ -4270,8 +4262,7 @@ export default function App() {
                     <p>
                       <b>Демо-режим.</b> Клиники и лаборатории с пометкой «Демо»: названия, врачи, расписание, цены и ДМС вымышлены, адреса — реальных частных клиник (OSM).
                       {demoState.booking && ' Запись демонстрационная — в клиники ничего не уходит.'}
-                      {!demoState.publicClinics && ' Госклиники временно скрыты.'}{' '}
-                      <button type="button" onClick={disableDemo} className="font-semibold underline underline-offset-2">Выключить</button>
+                      {!demoState.publicClinics && ' Госклиники временно скрыты.'}
                     </p>
                   )}
                 </div>
