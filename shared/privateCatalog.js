@@ -155,11 +155,12 @@ export const flattenPrivateCatalog = (catalog) => {
     verifiedAt: branch.verifiedAt || clinic.verifiedAt || meta.verifiedAt || null,
     demo: meta.source === 'demo',
     /*
-     * Реальная клиника в демо-наборе: настоящие название, адрес, точка и
-     * часы (OSM), вымышленные врачи и запись. osmId — чтобы не показывать
-     * ту же клинику второй раз карточкой из OSM.
+     * Демо-клиника в здании реальной частной клиники: osmId — объект OSM, чтобы
+     * не показывать это здание второй раз его карточкой из OSM. realClinic — у
+     * здания ещё и часы работы по OSM (название при этом вымышленное).
      */
-    ...(clinic.real ? { realClinic: true, osmId: branch.osmId || null } : {}),
+    ...(branch.osmId ? { osmId: branch.osmId } : {}),
+    ...(clinic.real ? { realClinic: true } : {}),
   });
 
   const items = [];

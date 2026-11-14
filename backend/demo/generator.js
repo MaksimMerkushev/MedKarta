@@ -5,18 +5,16 @@
  *
  * Набор показывает сценарий «запрос → строгий подбор → свободное окно →
  * запись» на согласованных данных. Ни одна запись не выдаёт себя за реальную:
- *   — в названиях вымышленных клиник есть «Демо», id начинаются с «demo-»;
- *   — их адреса условные («демо-адрес»): улица, без номера дома; точка —
- *     дом с аптекой на первом этаже по OSM (см. BRANCH_POINTS);
+ *   — в названиях всех клиник есть «Демо», id начинаются с «demo-»;
+ *   — клиники стоят в зданиях реальных частных клиник по OSM (адрес и точка —
+ *     объекта OSM, см. BRANCH_POINTS); настоящие названия не показываются;
  *   — телефоны с несуществующим кодом 000, сайты — в зоне .example;
  *   — страховщик «Демо-Страхование» и программы Demo Basic / Standard /
  *     Premium не связаны ни с одной реальной страховой компанией.
  *
- * Кроме вымышленных, в наборе есть реальные частные клиники
- * (data/demo/realClinics.js): название, адрес, точка, сайт и часы — из
- * OpenStreetMap. Врачи, цены, расписание и покрытие ДМС в них вымышлены;
- * клиника помечена real: true, телефон не выдаётся, смены врачей не выходят
- * за часы работы клиники по OSM.
+ * Часть клиник (real: true, data/demo/realClinics.js) берёт у реального здания
+ * ещё и часы работы по OSM: телефон у них не выдаётся, смены врачей не выходят
+ * за эти часы. Название у них тоже вымышленное, сайт не показывается.
  *
  * Всё выводится из seed (DEMO_SEED). Статичная часть (клиники, врачи,
  * услуги, цены, графики, ДМС) записывается в data/demo/generated.js
@@ -71,30 +69,32 @@ const roundPrice = (value) => Math.round(value / 50) * 50;
 /* ---------- Клиники ---------- */
 
 /*
- * Точки филиалов — дома с аптекой на первом этаже по OpenStreetMap (osmId —
- * аптека в OSM): на карте вымышленная клиника стоит там, где в городе обычно
- * и бывают частные клиники, — в доме на улице, а не во дворе, на заводе или в
- * частном секторе. Район проверен по OSM. Точки не ближе 60 м к учреждениям из
- * data/facilities.js, которые тоже есть на карте, и не ближе 300 м друг к
- * другу. Адрес условный: улица без номера дома и «демо-адрес».
+ * Где стоят филиалы вымышленных сетей: в зданиях реальных частных клиник по
+ * OpenStreetMap (ODbL). Стоматологии — в реальных стоматологиях (amenity=dentist),
+ * остальные — в частных клиниках из data/facilities.js. Адрес и точка — объекта
+ * OSM; название, врачи, цены и расписание — вымышленные. Карточка этого объекта
+ * из OSM на карте заменяется демо-карточкой (osmId), а не дублируется.
+ * Район определён по координатам (Nominatim). Одна демо-клиника — одно здание;
+ * до филиалов лабораторий, реальных клиник набора и друг до друга — не меньше 200 м.
+ * Государственные учреждения и больничные территории не используются.
  */
 const BRANCH_POINTS = Object.freeze({
-  centr1: { district: 'Вахитовский', street: 'Университетская улица', lat: 55.78839, lng: 49.121438, osmId: 'osm-node-12254613477' },
-  centr2: { district: 'Вахитовский', street: 'улица Туфана Миннуллина', lat: 55.781144, lng: 49.136257, osmId: 'osm-node-8503027620' },
-  centr3: { district: 'Вахитовский', street: 'Кремлёвская улица', lat: 55.793165, lng: 49.117258, osmId: 'osm-node-8939207618' },
-  sever1: { district: 'Ново-Савиновский', street: 'улица Четаева', lat: 55.823904, lng: 49.12135, osmId: 'osm-node-10966069695' },
-  sever2: { district: 'Ново-Савиновский', street: 'улица Фатыха Амирхана', lat: 55.825973, lng: 49.134814, osmId: 'osm-node-13033534833' },
-  azino: { district: 'Советский', street: 'проспект Победы', lat: 55.77117, lng: 49.220751, osmId: 'osm-node-12525871821' },
-  ametyevo: { district: 'Советский', street: 'Аметьевская магистраль', lat: 55.766473, lng: 49.17074, osmId: 'osm-node-11840784973' },
-  derbyshki: { district: 'Советский', street: 'улица Солидарности', lat: 55.861211, lng: 49.226905, osmId: 'osm-node-12573660466' },
-  gorki: { district: 'Приволжский', street: 'проспект Универсиады', lat: 55.765176, lng: 49.159071, osmId: 'osm-node-9953584237' },
-  dubravnaya: { district: 'Приволжский', street: 'Малая Кабанная улица', lat: 55.738537, lng: 49.152944, osmId: 'osm-node-13915250650' },
-  avia: { district: 'Авиастроительный', street: 'улица Побежимова', lat: 55.858391, lng: 49.087131, osmId: 'osm-node-10230933072' },
-  moskovsky1: { district: 'Московский', street: 'улица Декабристов', lat: 55.822766, lng: 49.086755, osmId: 'osm-node-1363733570' },
-  moskovsky2: { district: 'Московский', street: 'улица Галимджана Баруди', lat: 55.824798, lng: 49.068999, osmId: 'osm-node-13737948611' },
-  kirov: { district: 'Кировский', street: 'улица Клары Цеткин', lat: 55.798916, lng: 49.061883, osmId: 'osm-node-9626802953' },
-  privolzh: { district: 'Приволжский', street: 'Авангардная улица', lat: 55.745517, lng: 49.143489, osmId: 'osm-node-10967692504' },
-  savinovo: { district: 'Ново-Савиновский', street: 'улица Маршала Чуйкова', lat: 55.835544, lng: 49.122063, osmId: 'osm-node-13175485221' },
+  'yasen-centr': { district: 'Вахитовский', address: 'улица Карла Маркса, 46', lat: 55.7957753, lng: 49.1285114, osmId: 'osm-node-2870373256' },
+  'yasen-sever': { district: 'Ново-Савиновский', address: 'улица Адоратского, 4', lat: 55.8238444, lng: 49.1480044, osmId: 'osm-node-4370958405' },
+  'beresta-azino': { district: 'Советский', address: 'проспект Победы, 158 к1', lat: 55.7835625, lng: 49.2210088, osmId: 'osm-node-12152154836' },
+  'beresta-pobedy': { district: 'Приволжский', address: 'проспект Победы, 45А', lat: 55.75549, lng: 49.2165063, osmId: 'osm-node-7119218488' },
+  'kama-centr': { district: 'Вахитовский', address: 'Астрономическая улица, 8/21', lat: 55.7887178, lng: 49.1154689, osmId: 'osm-node-8154400428' },
+  'detstvo-zapad': { district: 'Московский', address: '2-я Юго-Западная улица, 36', lat: 55.8227829, lng: 49.0820727, osmId: 'osm-node-8850204717' },
+  'detstvo-vostok': { district: 'Советский', address: 'улица Александра Курынова, 4 к3', lat: 55.8002429, lng: 49.2421488, osmId: 'osm-node-12173297471' },
+  'pediatr-avia': { district: 'Авиастроительный', address: 'улица Максимова, 40', lat: 55.8629234, lng: 49.0838749, osmId: 'osm-node-11891391361' },
+  'dent-korolenko': { district: 'Ново-Савиновский', address: 'улица Короленко, 89', lat: 55.8392689, lng: 49.1007186, osmId: 'osm-node-8693099095' },
+  'dent-gorsovetskaya': { district: 'Кировский', address: 'Горсоветская улица, 33', lat: 55.8162931, lng: 49.0855722, osmId: 'osm-node-10969591065' },
+  'ulybka-centr': { district: 'Вахитовский', address: 'улица Николая Ершова, 8', lat: 55.7920424, lng: 49.1535423, osmId: 'osm-node-4785740608' },
+  'zhenskoe': { district: 'Кировский', address: 'Шоссейная улица, 57', lat: 55.8074808, lng: 49.0913268, osmId: 'osm-node-11862401450' },
+  'travma': { district: 'Ново-Савиновский', address: 'проспект Ибрагимова, 45', lat: 55.8300716, lng: 49.0926819, osmId: 'osm-node-11878846902' },
+  'derma': { district: 'Вахитовский', address: 'Профсоюзная улица, 6', lat: 55.793602, lng: 49.1105352, osmId: 'osm-node-9814971411' },
+  'neuro': { district: 'Советский', address: 'улица Зур Урам, 7', lat: 55.8060463, lng: 49.1976051, osmId: 'osm-node-7114178585' },
+  'semya': { district: 'Советский', address: 'Гвардейская улица, 1/24', lat: 55.793153, lng: 49.172136, osmId: 'osm-node-1210539939' },
 });
 
 /** Часы работы филиала по уровню клиники. */
@@ -111,33 +111,35 @@ const KIDS = ['pediatrician', 'lor', 'neurologist', 'ophthalmologist', 'surgeon'
  * extra — специальности, по которым врачей два.
  */
 const CLINICS = Object.freeze([
-  { id: 'demo-yasen', name: 'Демо-клиника «Ясень»', type: 'Медцентр', tier: 'standard', hours: 'weekdaysSat', branches: [['centr', 'центр', 'centr1'], ['sever', 'Ново-Савиновский', 'sever1']], specialties: MULTI, extra: ['therapist', 'lor'], age: 'adult' },
-  { id: 'demo-beresta', name: 'Демо-медцентр «Береста»', type: 'Медцентр', tier: 'economy', hours: 'weekdaysSat', branches: [['azino', 'Азино', 'azino'], ['gorki', 'Горки', 'gorki']], specialties: MULTI, extra: ['therapist', 'gynecologist'], age: 'adult' },
-  { id: 'demo-kama', name: 'Демо-клиника «Кама Премиум»', type: 'Медцентр', tier: 'premium', hours: 'allWeek', branches: [['centr', 'центр', 'centr2']], specialties: [...MULTI, 'surgeon'], extra: [], age: 'adult' },
-  { id: 'demo-detstvo', name: 'Детская демо-клиника «Детство»', type: 'Клиника', tier: 'standard', hours: 'allWeek', branches: [['gorki', 'Горки', 'gorki'], ['derbyshki', 'Дербышки', 'derbyshki']], specialties: KIDS, extra: ['pediatrician', 'lor'], age: 'child' },
-  { id: 'demo-pediatr-plus', name: 'Демо-клиника «Педиатр Плюс»', type: 'Клиника', tier: 'economy', hours: 'weekdaysSat', branches: [['avia', 'Авиастроительный', 'avia']], specialties: ['pediatrician', 'lor', 'ophthalmologist'], extra: ['pediatrician'], age: 'child' },
-  { id: 'demo-dent', name: 'Демо-стоматология «Дент»', type: 'Стоматология', tier: 'standard', hours: 'weekdaysSat', branches: [['avia', 'Авиастроительный', 'avia'], ['moskovsky', 'Московский', 'moskovsky1']], specialties: ['dentist'], extra: ['dentist', 'dentist'], age: 'adult' },
-  { id: 'demo-ulybka', name: 'Демо-стоматология «Улыбка Премиум»', type: 'Стоматология', tier: 'premium', hours: 'allWeek', branches: [['centr', 'центр', 'centr3']], specialties: ['dentist'], extra: ['dentist', 'dentist'], age: 'both' },
-  { id: 'demo-zhenskoe', name: 'Демо-центр «Женское здоровье»', type: 'Клиника', tier: 'standard', hours: 'weekdaysSat', branches: [['kirov', 'Кировский', 'kirov']], specialties: ['gynecologist', 'endocrinologist'], extra: ['gynecologist', 'gynecologist'], age: 'adult' },
-  { id: 'demo-travma', name: 'Демо-травмоцентр «Опора»', type: 'Медцентр', tier: 'standard', hours: 'allWeek', branches: [['sever', 'Ново-Савиновский', 'sever2']], specialties: ['traumatologist', 'orthopedist', 'surgeon'], extra: ['traumatologist'], age: 'adult' },
-  { id: 'demo-derma', name: 'Демо-клиника «Дерма»', type: 'Клиника', tier: 'standard', hours: 'weekdaysSat', branches: [['dubravnaya', 'Дубравная', 'dubravnaya']], specialties: ['dermatologist'], extra: ['dermatologist', 'dermatologist'], age: 'both' },
-  { id: 'demo-neuro', name: 'Демо-центр «Нейро»', type: 'Медцентр', tier: 'premium', hours: 'weekdaysSat', branches: [['ametyevo', 'Аметьево', 'ametyevo']], specialties: ['neurologist', 'psychiatrist'], extra: ['neurologist', 'psychiatrist'], age: 'adult' },
-  { id: 'demo-semya', name: 'Демо-клиника «Семейный доктор»', type: 'Клиника', tier: 'economy', hours: 'weekdaysSat', branches: [['moskovsky', 'Московский', 'moskovsky2']], specialties: ['therapist', 'pediatrician', 'lor', 'ophthalmologist'], extra: ['therapist'], age: 'both' },
+  { id: 'demo-yasen', name: 'Демо-клиника «Ясень»', type: 'Медцентр', tier: 'standard', hours: 'weekdaysSat', branches: [['centr', 'ул. Карла Маркса', 'yasen-centr'], ['sever', 'ул. Адоратского', 'yasen-sever']], specialties: MULTI, extra: ['therapist', 'lor'], age: 'adult' },
+  { id: 'demo-beresta', name: 'Демо-медцентр «Береста»', type: 'Медцентр', tier: 'economy', hours: 'weekdaysSat', branches: [['azino', 'пр. Победы, Азино', 'beresta-azino'], ['gorki', 'пр. Победы, Горки', 'beresta-pobedy']], specialties: MULTI, extra: ['therapist', 'gynecologist'], age: 'adult' },
+  { id: 'demo-kama', name: 'Демо-клиника «Кама Премиум»', type: 'Медцентр', tier: 'premium', hours: 'allWeek', branches: [['centr', 'Астрономическая ул.', 'kama-centr']], specialties: [...MULTI, 'surgeon'], extra: [], age: 'adult' },
+  { id: 'demo-detstvo', name: 'Детская демо-клиника «Детство»', type: 'Клиника', tier: 'standard', hours: 'allWeek', branches: [['gorki', '2-я Юго-Западная ул.', 'detstvo-zapad'], ['derbyshki', 'ул. Курынова', 'detstvo-vostok']], specialties: KIDS, extra: ['pediatrician', 'lor'], age: 'child' },
+  { id: 'demo-pediatr-plus', name: 'Демо-клиника «Педиатр Плюс»', type: 'Клиника', tier: 'economy', hours: 'weekdaysSat', branches: [['avia', 'ул. Максимова', 'pediatr-avia']], specialties: ['pediatrician', 'lor', 'ophthalmologist'], extra: ['pediatrician'], age: 'child' },
+  { id: 'demo-dent', name: 'Демо-стоматология «Дент»', type: 'Стоматология', tier: 'standard', hours: 'weekdaysSat', branches: [['avia', 'ул. Короленко', 'dent-korolenko'], ['moskovsky', 'Горсоветская ул.', 'dent-gorsovetskaya']], specialties: ['dentist'], extra: ['dentist', 'dentist'], age: 'adult' },
+  { id: 'demo-ulybka', name: 'Демо-стоматология «Улыбка Премиум»', type: 'Стоматология', tier: 'premium', hours: 'allWeek', branches: [['centr', 'ул. Николая Ершова', 'ulybka-centr']], specialties: ['dentist'], extra: ['dentist', 'dentist'], age: 'both' },
+  { id: 'demo-zhenskoe', name: 'Демо-центр «Женское здоровье»', type: 'Клиника', tier: 'standard', hours: 'weekdaysSat', branches: [['kirov', 'Шоссейная ул.', 'zhenskoe']], specialties: ['gynecologist', 'endocrinologist'], extra: ['gynecologist', 'gynecologist'], age: 'adult' },
+  { id: 'demo-travma', name: 'Демо-травмоцентр «Опора»', type: 'Медцентр', tier: 'standard', hours: 'allWeek', branches: [['sever', 'пр. Ибрагимова', 'travma']], specialties: ['traumatologist', 'orthopedist', 'surgeon'], extra: ['traumatologist'], age: 'adult' },
+  { id: 'demo-derma', name: 'Демо-клиника «Дерма»', type: 'Клиника', tier: 'standard', hours: 'weekdaysSat', branches: [['dubravnaya', 'Профсоюзная ул.', 'derma']], specialties: ['dermatologist'], extra: ['dermatologist', 'dermatologist'], age: 'both' },
+  { id: 'demo-neuro', name: 'Демо-центр «Нейро»', type: 'Медцентр', tier: 'premium', hours: 'weekdaysSat', branches: [['ametyevo', 'ул. Зур Урам', 'neuro']], specialties: ['neurologist', 'psychiatrist'], extra: ['neurologist', 'psychiatrist'], age: 'adult' },
+  { id: 'demo-semya', name: 'Демо-клиника «Семейный доктор»', type: 'Клиника', tier: 'economy', hours: 'weekdaysSat', branches: [['moskovsky', 'Гвардейская ул.', 'semya']], specialties: ['therapist', 'pediatrician', 'lor', 'ophthalmologist'], extra: ['therapist'], age: 'both' },
 ]);
 
 /*
- * Реальные частные клиники: точки — по osm-id из data/demo/realClinics.js.
- * Профили врачей — правдоподобные для клиники (глазная — офтальмологи,
- * «Мать и дитя» — женское и детское здоровье), но сами врачи вымышлены.
+ * Демо-клиники в зданиях реальных частных клиник со своими часами работы:
+ * точка, адрес и часы — по osm-id из data/demo/realClinics.js (OSM). Название
+ * вымышленное: настоящий бренд с вымышленными врачами и ценами не показывается.
+ * Профили врачей правдоподобны для здания (глазная клиника — офтальмологи,
+ * центр матери и ребёнка — женское и детское здоровье), сами врачи вымышлены.
  */
 const REAL_CLINICS = Object.freeze([
-  { id: 'demo-real-razumed', name: 'Разумед', type: 'Клиника', tier: 'standard', branches: [['pushkina', 'ул. Пушкина', 'osm-node-12863010208'], ['leningradskaya', 'Ленинградская ул.', 'osm-node-4277729442']], specialties: ['therapist', 'lor', 'neurologist', 'cardiologist', 'gynecologist', 'endocrinologist', 'gastroenterologist', 'urologist'], extra: ['therapist', 'neurologist'], age: 'adult' },
-  { id: 'demo-real-budzdorov', name: 'Будь здоров', type: 'Клиника', tier: 'premium', branches: [['narimanova', 'ул. Нариманова', 'osm-node-10837307213']], specialties: ['therapist', 'lor', 'cardiologist', 'dermatologist', 'gynecologist', 'ophthalmologist'], extra: [], age: 'adult' },
-  { id: 'demo-real-aibolit', name: 'Айболит', type: 'Медцентр', tier: 'economy', branches: [['maksimova', 'ул. Максимова', 'osm-node-11403915602'], ['kurskaya', 'Курская ул.', 'osm-node-7309478748']], specialties: ['therapist', 'pediatrician', 'lor', 'neurologist', 'ophthalmologist', 'dermatologist'], extra: ['pediatrician', 'therapist'], age: 'both' },
-  { id: 'demo-real-kuzlyar', name: 'Кузляр', type: 'Клиника', tier: 'standard', branches: [['kutuya', 'ул. Аделя Кутуя', 'osm-node-8370818131'], ['lobachevskogo', 'ул. Лобачевского', 'osm-node-9984003800']], specialties: ['ophthalmologist'], extra: ['ophthalmologist', 'ophthalmologist'], age: 'both' },
-  { id: 'demo-real-citidoc', name: 'Ситидок', type: 'Клиника', tier: 'standard', branches: [['zelenaya', 'Зелёная ул.', 'osm-node-5214562721']], specialties: ['therapist', 'lor', 'neurologist', 'cardiologist', 'gastroenterologist'], extra: [], age: 'adult' },
-  { id: 'demo-real-mamadeti', name: 'Мать и дитя', type: 'Клиника', tier: 'premium', branches: [['daurskaya', 'Даурская ул.', 'osm-node-8521190137']], specialties: ['gynecologist', 'pediatrician', 'endocrinologist', 'therapist', 'lor'], extra: ['gynecologist', 'pediatrician'], age: 'both' },
-  { id: 'demo-real-nurievy', name: 'Клиника Нуриевых', type: 'Клиника', tier: 'standard', branches: [['serova', 'ул. Серова', 'osm-node-9937772987'], ['zorge', 'ул. Рихарда Зорге', 'osm-node-12136502789']], specialties: ['gynecologist', 'urologist', 'therapist', 'endocrinologist'], extra: ['gynecologist'], age: 'adult' },
+  { id: 'demo-kedr', seedKey: 'demo-real-razumed', name: 'Демо-клиника «Кедр»', type: 'Клиника', tier: 'standard', branches: [['pushkina', 'ул. Пушкина', 'osm-node-12863010208'], ['leningradskaya', 'Ленинградская ул.', 'osm-node-4277729442']], specialties: ['therapist', 'lor', 'neurologist', 'cardiologist', 'gynecologist', 'endocrinologist', 'gastroenterologist', 'urologist'], extra: ['therapist', 'neurologist'], age: 'adult' },
+  { id: 'demo-vitaris', seedKey: 'demo-real-budzdorov', name: 'Демо-клиника «Витарис»', type: 'Клиника', tier: 'premium', branches: [['narimanova', 'ул. Нариманова', 'osm-node-10837307213']], specialties: ['therapist', 'lor', 'cardiologist', 'dermatologist', 'gynecologist', 'ophthalmologist'], extra: [], age: 'adult' },
+  { id: 'demo-luchik', seedKey: 'demo-real-aibolit', name: 'Демо-медцентр «Лучик»', type: 'Медцентр', tier: 'economy', branches: [['maksimova', 'ул. Максимова', 'osm-node-11403915602'], ['kurskaya', 'Курская ул.', 'osm-node-7309478748']], specialties: ['therapist', 'pediatrician', 'lor', 'neurologist', 'ophthalmologist', 'dermatologist'], extra: ['pediatrician', 'therapist'], age: 'both' },
+  { id: 'demo-okulyar', seedKey: 'demo-real-kuzlyar', name: 'Демо-центр зрения «Окуляр»', type: 'Клиника', tier: 'standard', branches: [['kutuya', 'ул. Аделя Кутуя', 'osm-node-8370818131'], ['lobachevskogo', 'ул. Лобачевского', 'osm-node-9984003800']], specialties: ['ophthalmologist'], extra: ['ophthalmologist', 'ophthalmologist'], age: 'both' },
+  { id: 'demo-meridian', seedKey: 'demo-real-citidoc', name: 'Демо-клиника «Меридиан»', type: 'Клиника', tier: 'standard', branches: [['zelenaya', 'Зелёная ул.', 'osm-node-5214562721']], specialties: ['therapist', 'lor', 'neurologist', 'cardiologist', 'gastroenterologist'], extra: [], age: 'adult' },
+  { id: 'demo-kolybel', seedKey: 'demo-real-mamadeti', name: 'Демо-клиника «Колыбель»', type: 'Клиника', tier: 'premium', branches: [['daurskaya', 'Даурская ул.', 'osm-node-8521190137']], specialties: ['gynecologist', 'pediatrician', 'endocrinologist', 'therapist', 'lor'], extra: ['gynecologist', 'pediatrician'], age: 'both' },
+  { id: 'demo-garmonia', seedKey: 'demo-real-nurievy', name: 'Демо-клиника «Гармония»', type: 'Клиника', tier: 'standard', branches: [['serova', 'ул. Серова', 'osm-node-9937772987'], ['zorge', 'ул. Рихарда Зорге', 'osm-node-12136502789']], specialties: ['gynecologist', 'urologist', 'therapist', 'endocrinologist'], extra: ['gynecologist'], age: 'adult' },
 ]);
 
 const REAL_POINTS = new Map(REAL_PRIVATE_CLINIC_POINTS.map((point) => [point.osmId, point]));
@@ -304,9 +306,10 @@ export const generateDemoCatalog = ({ seed = DEMO_SEED } = {}) => {
         id,
         name: label,
         district: point.district,
-        address: `Казань, ${point.street}, демо-адрес (номер дома не указан)`,
+        address: `${point.address}, Казань`,
         lat: point.lat,
         lng: point.lng,
+        osmId: point.osmId,
         phone: `+7 (843) 000-${String(10 + pointPhone).padStart(2, '0')}-00`,
         hours: branchHoursText(BRANCH_HOURS[spec.hours]),
         features: { wheelchair: random.chance(0.7), parking: random.chance(0.6), onlineBooking: true },
@@ -320,7 +323,7 @@ export const generateDemoCatalog = ({ seed = DEMO_SEED } = {}) => {
       ownership: 'Частная',
       facilityType: spec.type,
       website: `https://${spec.id}.example`,
-      description: 'Демонстрационная клиника МедКарты: вымышленная, для показа подбора и записи.',
+      description: 'Демонстрационная клиника МедКарты: название, врачи, цены и расписание вымышлены; стоит по адресу реальной частной клиники (OpenStreetMap).',
       tier: spec.tier,
       branches,
     });
@@ -357,8 +360,9 @@ export const generateDemoCatalog = ({ seed = DEMO_SEED } = {}) => {
       name: spec.name,
       ownership: 'Частная',
       facilityType: spec.type,
-      website: points.find((point) => point.website)?.website || null,
-      description: 'Реальная частная клиника: название, адрес, точка и часы работы — из OpenStreetMap. Врачи, цены, расписание и запись здесь вымышленные, демонстрационные — клиника о них не знает.',
+      // Сайт настоящей клиники не показывается: название демо-клиники вымышленное.
+      website: null,
+      description: 'Демонстрационная клиника: название, врачи, цены, расписание и запись вымышлены. Адрес, точка и часы работы — реальной частной клиники (OpenStreetMap); она о демо-данных не знает.',
       real: true,
       source: 'OSM',
       tier: spec.tier,
@@ -400,7 +404,8 @@ export const generateDemoCatalog = ({ seed = DEMO_SEED } = {}) => {
     const counts = new Map();
     for (const [order, specialty] of roster.entries()) {
       counts.set(specialty, (counts.get(specialty) || 0) + 1);
-      const key = `${spec.id}|${specialty}|${counts.get(specialty)}`;
+      // seedKey — прежний id клиники: врачи сохраняют имена и графики после переименования клиники.
+      const key = `${spec.seedKey || spec.id}|${specialty}|${counts.get(specialty)}`;
       const { full: name, gender } = nameFor(key, spec.real ? SURNAMES_EXTRA : SURNAMES);
       const rnd = createRandom(seed, `doctor|${key}`);
 
@@ -491,7 +496,7 @@ export const generateDemoCatalog = ({ seed = DEMO_SEED } = {}) => {
         gender,
         features: { children: ageGroups.includes('child') },
         description: spec.real
-          ? `Демонстрационный врач: вымышленное лицо. Клиника «${spec.name}» реальная, но этот врач, его расписание и цены придуманы для показа записи.`
+          ? 'Демонстрационный врач: вымышленное лицо. Клиника — демонстрационная, по адресу реальной частной клиники; врач, его расписание и цены придуманы для показа записи.'
           : 'Демонстрационный врач: вымышленное лицо для показа записи.',
       });
 
@@ -526,7 +531,7 @@ export const generateDemoCatalog = ({ seed = DEMO_SEED } = {}) => {
       version: DEMO_VERSION,
       seed,
       verifiedAt: '2026-10-09',
-      disclaimer: 'Демонстрационные данные: врачи, цены, расписание и программы ДМС вымышлены и не являются предложениями реальных организаций. Клиники с «Демо» в названии вымышлены; у реальных частных клиник настоящие только название, адрес, точка и часы работы (OpenStreetMap).',
+      disclaimer: 'Демонстрационные данные: врачи, цены, расписание и программы ДМС вымышлены и не являются предложениями реальных организаций. Названия клиник вымышлены; клиники стоят по адресам реальных частных клиник (OpenStreetMap), часы работы у части — тоже по OSM.',
     },
     clinics,
     doctors,

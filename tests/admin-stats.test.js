@@ -496,7 +496,7 @@ describe('Статистика: письма и запись', () => {
 
   it('запись: созданные и отменённые в период, разрезы по справочнику', () => {
     const start = msk('2026-11-05T18:30:00');
-    const row = (extra) => ({ status: 'CONFIRMED', createdAt: at, cancelledAt: null, startAt: start, withPlan: false, withAccount: false, specialty: 'ЛОР', doctor: 'Иванова', clinic: 'Будь здоров', district: 'Вахитовский', service: 'Приём', ...extra });
+    const row = (extra) => ({ status: 'CONFIRMED', createdAt: at, cancelledAt: null, startAt: start, withPlan: false, withAccount: false, specialty: 'ЛОР', doctor: 'Иванова', clinic: 'Витарис', district: 'Вахитовский', service: 'Приём', ...extra });
     const section = buildBookingSection({
       period,
       now: NOW,
