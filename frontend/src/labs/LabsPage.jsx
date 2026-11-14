@@ -57,11 +57,36 @@ const readInitialRequest = (search) => {
   }
 };
 
-const branchIcon = (label, active) => L.divIcon({
-  className: '',
-  html: `<div style="transform:translate(-50%,-100%);white-space:nowrap;padding:3px 7px;border-radius:10px;font:600 12px system-ui;color:${active ? '#fff' : '#334155'};background:${active ? '#7c3aed' : '#fff'};border:1px solid ${active ? '#6d28d9' : '#cbd5e1'};box-shadow:0 1px 3px rgba(0,0,0,.25)">${label}</div>`,
-  iconSize: [0, 0],
-});
+/*
+ * Значки филиалов. У divIcon нулевой размер (точка — сам филиал), поэтому содержимое
+ * позиционируется абсолютно от этой точки и получает ширину по тексту (max-content):
+ * иначе блок сжимается до нуля, фон — только поля, а цена вылезает наружу.
+ *   price — филиал подходит под корзину: пузырь с ценой и хвостиком к точке
+ *           (best — самая низкая цена, зелёный, как «Дешевле всего» в списке);
+ *   idle  — корзина пуста: фиолетовая точка;
+ *   muted — не подходит под корзину: серая точка поменьше.
+ */
+const FONT = "700 12px/1.25 system-ui,-apple-system,'Segoe UI',sans-serif";
+const branchIcon = (kind, label = '') => {
+  if (kind === 'price' || kind === 'best') {
+    const fill = kind === 'best' ? '#059669' : '#7c3aed';
+    return L.divIcon({
+      className: '',
+      iconSize: [0, 0],
+      html: `<div style="position:absolute;left:0;bottom:0;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center">`
+        + `<div style="width:max-content;padding:4px 9px;border-radius:999px;font:${FONT};color:#fff;background:${fill};border:2px solid #fff;box-shadow:0 2px 6px rgba(15,23,42,.35);white-space:nowrap">${label}</div>`
+        + `<div style="width:9px;height:9px;margin-top:-6px;background:${fill};border-right:2px solid #fff;border-bottom:2px solid #fff;transform:rotate(45deg)"></div>`
+        + '</div>',
+    });
+  }
+  const size = kind === 'muted' ? 10 : 14;
+  const color = kind === 'muted' ? '#94a3b8' : '#7c3aed';
+  return L.divIcon({
+    className: '',
+    iconSize: [0, 0],
+    html: `<div style="position:absolute;left:0;top:0;width:${size}px;height:${size}px;transform:translate(-50%,-50%);border-radius:50%;background:${color};border:2px solid #fff;box-shadow:0 1px 4px rgba(15,23,42,.4)"></div>`,
+  });
+};
 
 function FlyTo({ point }) {
   const map = useMap();
@@ -73,6 +98,7 @@ function FlyTo({ point }) {
 
 function BranchMap({ branches, options = [], focus = null, onSelect }) {
   const byBranch = new Map(options.map((option) => [option.branch.id, option]));
+  const cheapest = options.length > 0 ? Math.min(...options.map((option) => option.total)) : null;
   return (
     <MapContainer center={CENTER} zoom={12} className="h-full w-full" attributionControl={false} scrollWheelZoom>
       <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' />
@@ -81,7 +107,15 @@ function BranchMap({ branches, options = [], focus = null, onSelect }) {
       {branches.map((branch) => {
         const option = byBranch.get(branch.id);
         return (
-          <Marker key={branch.id} position={[branch.lat, branch.lng]} icon={branchIcon(option ? formatRub(option.total) : '●', Boolean(option))} eventHandlers={{ click: () => onSelect?.(branch.id) }}>
+          <Marker
+            key={branch.id}
+            position={[branch.lat, branch.lng]}
+            icon={option ? branchIcon(option.total === cheapest ? 'best' : 'price', formatRub(option.total)) : branchIcon(options.length > 0 ? 'muted' : 'idle')}
+            // Цены — поверх точек, самые дешёвые — поверх остальных цен.
+            zIndexOffset={option ? (option.total === cheapest ? 2000 : 1000) : 0}
+            title={option ? `${branch.name}: ${formatRub(option.total)}` : branch.name}
+            eventHandlers={{ click: () => onSelect?.(branch.id) }}
+          >
             <Popup>
               <strong>{branch.name}</strong><br />{branch.address}{option ? <><br />Итого: {formatRub(option.total)}</> : null}
             </Popup>
@@ -106,7 +140,7 @@ function Shell({ children, title, back = null, onMyBookings }) {
         </button>
       </header>
       <p className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-[12.5px] text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
-        <Info size={13} className="mr-1 inline" aria-hidden="true" />Демо-режим: лаборатории, цены, сроки и время вымышлены, запись никуда не уходит. Филиалы стоят там, где в Казани действительно есть пункты сдачи анализов (OpenStreetMap), но сами лаборатории вымышлены; адрес — без номера дома.
+        <Info size={13} className="mr-1 inline" aria-hidden="true" />Демо-режим: лаборатории, цены, сроки и время вымышлены, запись никуда не уходит. Филиалы стоят по адресам, где в Казани действительно есть пункты сдачи анализов (OpenStreetMap), но сами лаборатории вымышлены.
       </p>
       <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
     </div>
