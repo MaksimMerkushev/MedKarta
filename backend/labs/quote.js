@@ -15,34 +15,19 @@
  * «дешевле всего среди демо-филиалов МедКарты», а не по городу.
  */
 
-import { normalizeLabRequest } from '../../shared/labSearch.js';
+import { describeTurnaround, normalizeLabRequest } from '../../shared/labSearch.js';
 import { distanceMeters } from '../routing/graph.js';
 import { resolveDays } from '../demo/search.js';
 import { addDays, moscowDay, moscowParts } from '../demo/time.js';
 import { LAB_WINDOW_DAYS, normalizeLabText } from './store.js';
 import { PREPARATION_NOTE } from './catalog.js';
 
-export { LAB_SORTS, LAB_TIMES_OF_DAY, normalizeLabRequest } from '../../shared/labSearch.js';
+export { describeTurnaround, LAB_SORTS, LAB_TIMES_OF_DAY, normalizeLabRequest } from '../../shared/labSearch.js';
 const FASTING_UNTIL = '12:00';
 const SHOW_SLOTS = 4;
 const MAX_OPTIONS = 10;
 export const LAB_DISCLAIMER = 'Демонстрационные данные: лаборатории, цены, сроки и время вымышлены, запись в лабораторию не уходит.';
 
-/*
- * Готовность для человека: «в день сдачи», «через 1 день», «через 5 дней».
- * Срок — в календарных днях от дня сдачи. Считаем, что сдали около 9:00, а
- * результаты выдают до 20:00: 30 часов — это завтра днём («через 1 день»), а не
- * «через 2 дня», как дало бы деление с округлением вверх.
- */
-export const describeTurnaround = (hours) => {
-  if (!Number.isFinite(hours) || hours <= 0) return null;
-  const ready = 9 + hours;
-  const days = Math.floor(ready / 24) + (ready % 24 > 20 ? 1 : 0);
-  if (days === 0) return 'в день сдачи';
-  const tail = days % 100;
-  const word = tail >= 11 && tail <= 14 ? 'дней' : days % 10 === 1 ? 'день' : days % 10 >= 2 && days % 10 <= 4 ? 'дня' : 'дней';
-  return `через ${days} ${word}`;
-};
 
 /**
  * Пересечения состава в корзине: исследование, которое уже входит в другое

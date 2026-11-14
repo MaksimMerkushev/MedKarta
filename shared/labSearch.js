@@ -20,6 +20,23 @@ const CODE = /^[A-Z0-9_]{2,40}$/;
 const ID = /^[a-z0-9][a-z0-9-]{1,79}$/;
 export const MAX_LAB_TESTS = 25;
 
+/*
+ * Готовность для человека: «в день сдачи», «через 1 день», «через 5 дней». Общая
+ * для подбора, карточки и диалога записи — чтобы они не расходились.
+ * Срок — в календарных днях от дня сдачи. Считаем, что сдали около 9:00, а
+ * результаты выдают до 20:00: 30 часов — это завтра днём («через 1 день»), а не
+ * «через 2 дня», как дало бы деление с округлением вверх.
+ */
+export const describeTurnaround = (hours) => {
+  if (!Number.isFinite(hours) || hours <= 0) return null;
+  const ready = 9 + hours;
+  const days = Math.floor(ready / 24) + (ready % 24 > 20 ? 1 : 0);
+  if (days === 0) return 'в день сдачи';
+  const tail = days % 100;
+  const word = tail >= 11 && tail <= 14 ? 'дней' : days % 10 === 1 ? 'день' : days % 10 >= 2 && days % 10 <= 4 ? 'дня' : 'дней';
+  return `через ${days} ${word}`;
+};
+
 const uniqueList = (list, valid, max) => (Array.isArray(list) ? [...new Set(list.filter((item) => typeof item === 'string' && valid(item)))].slice(0, max) : []);
 
 /** Запрос подбора лаборатории; ошибки — список кодов, неизвестное отбрасывается. */
